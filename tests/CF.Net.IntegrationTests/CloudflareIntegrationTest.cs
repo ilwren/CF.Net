@@ -238,6 +238,15 @@ public abstract class CloudflareIntegrationTest : IDisposable
             // into the options instance the container hands out.
             CloudflareClientOptions.FromEnvironment(_environment).CopyMissingInto(options);
 
+            // Then fill any remaining hole from the values this fixture resolved, because those are
+            // not always what the environment says: a replay invents a token and recovers the account
+            // and zone ids from the recording. Anything a test set deliberately still wins.
+            options.ApiToken ??= ApiToken;
+            options.GlobalApiKey ??= GlobalApiKey;
+            options.ApiEmail ??= ApiEmail;
+            options.AccountId ??= AccountId;
+            options.ZoneId ??= ZoneId;
+
             // Keep retries modest: the integration run should fail fast, not wait out an outage.
             options.MaxRetries = 1;
             options.RetryBaseDelay = TimeSpan.FromMilliseconds(250);

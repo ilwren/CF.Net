@@ -142,7 +142,10 @@ jobs:
           if [ -z "$PY" ]; then echo "no python; skipping the replay smoke test"; exit 0; fi
 
           cassette=tests/cassettes/_replay-smoke.json
-          trap 'rm -f "$cassette"' EXIT
+          # The report exercises the same plumbing the Integration workflow depends on: one line per
+          # Cloudflare call, plus any test that ended early. Print it on the way out either way.
+          export CLOUDFLARE_IT_REPORT="$RUNNER_TEMP/replay-smoke-report.tsv"
+          trap 'rm -f "$cassette"; echo "--- run report ---"; cat "$CLOUDFLARE_IT_REPORT" 2>/dev/null || echo "(nothing was reported)"' EXIT
 
           "$PY" - "$cassette" <<'PY'
           import json, sys

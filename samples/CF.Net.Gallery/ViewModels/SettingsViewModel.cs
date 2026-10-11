@@ -1,4 +1,5 @@
 using CFNet.Configuration;
+using CFNet.Exceptions;
 using CFNet.Gallery.Infrastructure;
 
 namespace CFNet.Gallery.ViewModels;

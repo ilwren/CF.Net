@@ -119,11 +119,11 @@ public sealed class PurgeCacheRequest
 
     /// <summary>Creates a request that purges specific URLs.</summary>
     /// <param name="files">Absolute URLs to purge.</param>
-    public static PurgeCacheRequest Files(IEnumerable<string> files) => new() { Files = files?.ToList() };
+    public static PurgeCacheRequest ForFiles(IEnumerable<string> files) => new() { Files = files?.ToList() };
 
     /// <summary>Creates a request that purges by cache tags.</summary>
     /// <param name="tags">Cache tags to purge.</param>
-    public static PurgeCacheRequest Tags(IEnumerable<string> tags) => new() { Tags = tags?.ToList() };
+    public static PurgeCacheRequest ForTags(IEnumerable<string> tags) => new() { Tags = tags?.ToList() };
 
     /// <summary>Purge every cached resource. Enterprise only for the targeted variants.</summary>
     [JsonPropertyName("purge_everything")]

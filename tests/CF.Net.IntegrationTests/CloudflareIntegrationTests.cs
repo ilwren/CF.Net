@@ -553,7 +553,7 @@ public class WriteIntegrationTests : CloudflareIntegrationTest
             databaseId = created.Uuid!;
             Log($"database {databaseId} ({created.Name})");
 
-            await Client.D1.ExecuteAsync(databaseId, D1QueryRequest.Batch(new[]
+            await Client.D1.ExecuteAsync(databaseId, D1QueryRequest.BatchOf(new[]
             {
                 new D1Query("CREATE TABLE items (id INTEGER PRIMARY KEY, label TEXT)"),
                 new D1Query("INSERT INTO items (label) VALUES (?), (?)", new object?[] { "alpha", "beta" }),
@@ -669,7 +669,7 @@ public class WriteIntegrationTests : CloudflareIntegrationTest
         Assert.NotNull(zone);
 
         var result = await Client.Zones.PurgeCacheAsync(
-            PurgeCacheRequest.Files(new[] { $"https://{zone!.Name}/cf-net-integration-probe" }));
+            PurgeCacheRequest.ForFiles(new[] { $"https://{zone!.Name}/cf-net-integration-probe" }));
 
         Log($"purge_time={result.PurgeTime}");
     }

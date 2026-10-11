@@ -270,7 +270,7 @@ public class ZonesServiceTests
         harness.RespondWithResult("{\"purge_time\":4}");
 
         var result = await harness.Client.Zones.PurgeCacheAsync(
-            PurgeCacheRequest.Files(new[] { "https://a.test/x.css", "https://a.test/y.css" }));
+            PurgeCacheRequest.ForFiles(new[] { "https://a.test/x.css", "https://a.test/y.css" }));
 
         Assert.Equal(4, result.PurgeTime);
         Assert.Equal($"/client/v4/zones/{CloudflareHarness.TestZoneId}/purge_cache", harness.LastRequest.Path);
@@ -297,7 +297,7 @@ public class ZonesServiceTests
             () => new PurgeCacheRequest { PurgeEverything = true, Files = new List<string> { "https://a.test" } }.EnsureValid());
 
         PurgeCacheRequest.Everything().EnsureValid();
-        PurgeCacheRequest.Tags(new[] { "t" }).EnsureValid();
+        PurgeCacheRequest.ForTags(new[] { "t" }).EnsureValid();
         new PurgeCacheRequest { Hosts = new List<string> { "a.test" } }.EnsureValid();
         new PurgeCacheRequest { Prefixes = new List<string> { "a.test/" } }.EnsureValid();
         new PurgeCacheRequest { IgnoreTags = new List<string> { "keep" }, Tags = new List<string> { "drop" } }.EnsureValid();

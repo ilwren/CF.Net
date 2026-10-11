@@ -615,7 +615,7 @@ public class CloudflareJsonTests
         Assert.Contains("\"params\":[7]", singleJson, StringComparison.Ordinal);
         Assert.DoesNotContain("batch", singleJson, StringComparison.Ordinal);
 
-        var batch = D1QueryRequest.Batch(new[]
+        var batch = D1QueryRequest.BatchOf(new[]
         {
             new D1Query("INSERT INTO t VALUES (1)"),
             new D1Query("INSERT INTO t VALUES (?)", new object?[] { 2 }),
@@ -641,7 +641,7 @@ public class CloudflareJsonTests
         Assert.ThrowsAny<Exception>(empty.Validate);
 
         D1QueryRequest.Single("SELECT 1").Validate();
-        D1QueryRequest.Batch(new[] { new D1Query("SELECT 1") }).Validate();
+        D1QueryRequest.BatchOf(new[] { new D1Query("SELECT 1") }).Validate();
     }
 
     private sealed class Row

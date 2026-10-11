@@ -1,6 +1,7 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using CFNet.Http;
+using CFNet.Models.Common;
 
 namespace CFNet.Models.Workers;
 

@@ -142,7 +142,7 @@ public sealed class D1Query
 /// <summary>Request body of <c>POST .../d1/database/{database_id}/query</c>.</summary>
 /// <remarks>
 /// Cloudflare accepts exactly one of two shapes: a single query (<c>{ sql, params }</c>) or a batch
-/// (<c>{ batch: [ { sql, params }, ... ] }</c>). <see cref="Single"/> and <see cref="Batch"/> build the
+/// (<c>{ batch: [ { sql, params }, ... ] }</c>). <see cref="Single"/> and <see cref="BatchOf"/> build the
 /// right one; setting both is rejected by <see cref="Validate"/>.
 /// </remarks>
 public sealed class D1QueryRequest
@@ -155,7 +155,7 @@ public sealed class D1QueryRequest
 
     /// <summary>Creates a batch request.</summary>
     /// <param name="queries">The statements to run, in order.</param>
-    public static D1QueryRequest Batch(IEnumerable<D1Query> queries) =>
+    public static D1QueryRequest BatchOf(IEnumerable<D1Query> queries) =>
         new() { Batch = queries?.ToList() ?? throw new ArgumentNullException(nameof(queries)) };
 
     /// <summary>The SQL statement, for the single query shape.</summary>

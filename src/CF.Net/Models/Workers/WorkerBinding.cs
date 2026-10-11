@@ -151,7 +151,7 @@ public sealed class WorkerBinding
     /// <param name="name">Binding name.</param>
     /// <param name="service">Target Worker name.</param>
     /// <param name="environment">Optional target environment.</param>
-    public static WorkerBinding Service(string name, string service, string? environment = null) =>
+    public static WorkerBinding ToService(string name, string service, string? environment = null) =>
         new() { Type = WorkerBindingTypes.Service, Name = name, Service = service, Environment = environment };
 
     /// <summary>Creates a <c>queue</c> producer binding.</summary>

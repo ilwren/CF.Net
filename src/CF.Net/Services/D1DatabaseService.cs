@@ -293,7 +293,7 @@ public sealed class D1DatabaseService : CloudflareService, ID1DatabaseService
             }
         }
 
-        return ExecuteAsync(databaseId, D1QueryRequest.Batch(list), accountId, cancellationToken);
+        return ExecuteAsync(databaseId, D1QueryRequest.BatchOf(list), accountId, cancellationToken);
     }
 
     /// <inheritdoc />

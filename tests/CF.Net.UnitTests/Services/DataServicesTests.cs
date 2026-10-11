@@ -617,7 +617,7 @@ public class KvServiceTests
                 Base64 = true,
                 ExpirationTtl = 300,
             },
-            KvBulkWriteOperation.Delete("c"),
+            KvBulkWriteOperation.Remove("c"),
         });
 
         Assert.Equal(HttpMethod.Put, harness.LastRequest.Method);

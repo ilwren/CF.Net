@@ -3,6 +3,7 @@ using System.Text;
 using CFNet.Configuration;
 using CFNet.Exceptions;
 using CFNet.Http;
+using CFNet.Serialization;
 
 namespace CFNet.Gallery.Infrastructure;
 

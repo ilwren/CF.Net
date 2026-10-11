@@ -289,7 +289,7 @@ public sealed class KvBulkWriteOperation
 
     /// <summary>Creates a delete.</summary>
     /// <param name="key">The key to remove.</param>
-    public static KvBulkWriteOperation Delete(string key) => new() { Key = key, Delete = true };
+    public static KvBulkWriteOperation Remove(string key) => new() { Key = key, Delete = true };
 
     /// <summary>The key. At most 512 bytes.</summary>
     [JsonPropertyName("key")]

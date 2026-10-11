@@ -212,7 +212,7 @@ public class WorkersScriptsServiceTests
                 WorkerBinding.R2Bucket("BUCKET", "bucket-name"),
                 WorkerBinding.PlainText("ENV", "production"),
                 WorkerBinding.SecretText("SECRET", "s3cret"),
-                WorkerBinding.Service("UPSTREAM", "other-worker"),
+                WorkerBinding.ToService("UPSTREAM", "other-worker"),
             },
             KeepBindings = new List<string> { WorkerBindingTypes.KvNamespace },
             Tags = new List<string> { "team:core" },
@@ -509,8 +509,8 @@ public class WorkersScriptsServiceTests
         Assert.Equal("bk", WorkerBinding.R2Bucket("B", "bk").BucketName);
         Assert.Equal(WorkerBindingTypes.PlainText, WorkerBinding.PlainText("T", "v").Type);
         Assert.Equal(WorkerBindingTypes.SecretText, WorkerBinding.SecretText("S", "v").Type);
-        Assert.Equal(WorkerBindingTypes.Service, WorkerBinding.Service("U", "svc").Type);
-        Assert.Equal("svc", WorkerBinding.Service("U", "svc").Service);
+        Assert.Equal(WorkerBindingTypes.Service, WorkerBinding.ToService("U", "svc").Type);
+        Assert.Equal("svc", WorkerBinding.ToService("U", "svc").Service);
         Assert.Equal(WorkerBindingTypes.DoNamespace, WorkerBinding.DurableObject("O", "Class").Type);
         Assert.Equal("Class", WorkerBinding.DurableObject("O", "Class").ClassName);
         Assert.Equal(WorkerBindingTypes.Queue, WorkerBinding.Queue("Q", "queue").Type);

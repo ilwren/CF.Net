@@ -19,7 +19,7 @@ public interface IPagesProjectsService
         CancellationToken cancellationToken = default);
 
     /// <summary>Enumerates every Pages project, following page-number pagination automatically.</summary>
-    /// <param name="parameters">Optional filters; <see cref="PagesProjectListParameters.Page"/> is ignored.</param>
+    /// <param name="parameters">Optional filters; <c>Page</c> is ignored.</param>
     /// <param name="accountId">Account id; falls back to the configured default when null.</param>
     /// <param name="cancellationToken">Cancellation token.</param>
     IAsyncEnumerable<PagesProject> ListAllAsync(

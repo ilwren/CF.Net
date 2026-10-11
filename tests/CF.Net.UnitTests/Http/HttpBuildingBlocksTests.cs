@@ -393,6 +393,38 @@ public class CloudflareRequestBodyTests
     {
         Assert.Empty(new MultipartRequestBody(null!).Parts);
     }
+
+    [Fact]
+    public async Task AddField_writes_a_form_field_with_no_filename()
+    {
+        // The DNS import endpoint takes ordinary form fields next to the uploaded zone file.
+        var body = new MultipartRequestBody()
+            .AddFile("file", "a.test. 300 IN A 198.51.100.1"u8.ToArray(), "text/plain", "zone.txt")
+            .AddField("proxied", "false");
+
+        using var content = body.CreateContent(CloudflareJson.Default);
+        var text = await content.ReadAsStringAsync();
+
+        Assert.Contains("name=file; filename=zone.txt", text, StringComparison.Ordinal);
+        Assert.Contains("name=proxied", text, StringComparison.Ordinal);
+        Assert.Contains("false", text, StringComparison.Ordinal);
+
+        // Exactly one filename in the whole body: the plain field must not carry one.
+        Assert.Equal(1, CountOccurrences(text, "filename="));
+    }
+
+    private static int CountOccurrences(string haystack, string needle)
+    {
+        var count = 0;
+        var index = haystack.IndexOf(needle, StringComparison.Ordinal);
+        while (index >= 0)
+        {
+            count++;
+            index = haystack.IndexOf(needle, index + needle.Length, StringComparison.Ordinal);
+        }
+
+        return count;
+    }
 }
 
 public class CloudflarePageTests

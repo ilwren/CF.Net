@@ -81,6 +81,7 @@ public static class CloudflareResponseExtensions
     /// Wraps a response whose <c>result</c> is an object containing a named array property
     /// (R2 returns <c>{ "buckets": [...] }</c>) into a page.
     /// </summary>
+    /// <typeparam name="TWrapper">Type of the object <c>result</c> deserialises into.</typeparam>
     /// <typeparam name="T">Item type.</typeparam>
     /// <param name="response">The response.</param>
     /// <param name="selector">Extractor picking the array out of the result object.</param>

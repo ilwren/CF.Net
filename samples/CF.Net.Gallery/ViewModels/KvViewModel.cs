@@ -128,16 +128,16 @@ public sealed class KvViewModel : ModuleViewModelBase
         }));
 
     private Task GetNamespaceByTitleAsync() => RunAsync("Find KV namespace", async () =>
-        await Client.Kv.GetNamespaceByTitleAsync(Title()));
+        await Client.Kv.GetNamespaceByTitleAsync(RequireTitle()));
 
     private Task GetNamespaceAsync() => RunAsync("Get KV namespace", async () =>
         await Client.Kv.GetNamespaceAsync(Namespace()));
 
     private Task CreateNamespaceAsync() => RunAsync("Create KV namespace", async () =>
-        await Client.Kv.CreateNamespaceAsync(Title()));
+        await Client.Kv.CreateNamespaceAsync(RequireTitle()));
 
     private Task RenameNamespaceAsync() => RunAsync("Rename KV namespace", async () =>
-        await Client.Kv.RenameNamespaceAsync(Namespace(), Title()));
+        await Client.Kv.RenameNamespaceAsync(Namespace(), RequireTitle()));
 
     private Task DeleteNamespaceAsync() => RunVoidAsync("Delete KV namespace", () =>
         Client.Kv.DeleteNamespaceAsync(Namespace()));
@@ -199,7 +199,7 @@ public sealed class KvViewModel : ModuleViewModelBase
     private string Namespace() =>
         Blank(NamespaceId) ?? throw new ArgumentException("Enter a namespace id - list the namespaces first.");
 
-    private string Title() =>
+    private string RequireTitle() =>
         Blank(NamespaceTitle) ?? throw new ArgumentException("Enter a namespace title.");
 
     private string KeyName() =>

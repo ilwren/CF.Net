@@ -20,7 +20,7 @@ public interface IWorkersScriptsService
         CancellationToken cancellationToken = default);
 
     /// <summary>Enumerates every Worker script, following cursor pagination automatically.</summary>
-    /// <param name="parameters">Optional filters; <see cref="WorkerScriptListParameters.Cursor"/> is ignored.</param>
+    /// <param name="parameters">Optional filters; <c>Cursor</c> is ignored.</param>
     /// <param name="accountId">Account id; falls back to the configured default when null.</param>
     /// <param name="cancellationToken">Cancellation token.</param>
     IAsyncEnumerable<WorkerScript> ListAllAsync(

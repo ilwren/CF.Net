@@ -26,7 +26,7 @@ public interface IKvService
         CancellationToken cancellationToken = default);
 
     /// <summary>Enumerates every namespace, following page-number pagination automatically.</summary>
-    /// <param name="parameters">Optional filters; <see cref="KvNamespaceListParameters.Page"/> is ignored.</param>
+    /// <param name="parameters">Optional filters; <c>Page</c> is ignored.</param>
     /// <param name="accountId">Account id; falls back to the configured default when null.</param>
     /// <param name="cancellationToken">Cancellation token.</param>
     IAsyncEnumerable<KvNamespace> ListAllNamespacesAsync(
@@ -547,29 +547,5 @@ public sealed class KvService : CloudflareService, IKvService
             // A malformed metadata header must not fail the whole read.
             return null;
         }
-    }
-}
-
-/// <summary>Small fluent helpers for building KV write requests.</summary>
-public static class KvPutValueRequestExtensions
-{
-    /// <summary>Sets a relative expiry in seconds.</summary>
-    /// <param name="request">The request to modify.</param>
-    /// <param name="expirationTtl">Seconds until the key expires; <c>null</c> leaves it unset.</param>
-    public static KvPutValueRequest WithTtl(this KvPutValueRequest request, int? expirationTtl)
-    {
-        ArgumentNullException.ThrowIfNull(request);
-        request.ExpirationTtl = expirationTtl;
-        return request;
-    }
-
-    /// <summary>Sets an absolute expiry.</summary>
-    /// <param name="request">The request to modify.</param>
-    /// <param name="expiration">The moment the key expires.</param>
-    public static KvPutValueRequest WithExpiration(this KvPutValueRequest request, DateTimeOffset expiration)
-    {
-        ArgumentNullException.ThrowIfNull(request);
-        request.Expiration = expiration.ToUnixTimeSeconds();
-        return request;
     }
 }

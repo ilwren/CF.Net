@@ -11,7 +11,7 @@ namespace CFNet.Http;
 /// <list type="number">
 ///   <item>
 ///     <description>
-///       Path segments must be escaped with <see cref="Uri.EscapeDataString"/> so a KV key such as
+///       Path segments must be escaped with <see cref="Uri.EscapeDataString(string)"/> so a KV key such as
 ///       <c>users/42/profile</c> travels as <c>users%2F42%2Fprofile</c>. Cloudflare treats an encoded
 ///       slash as data and a literal slash as a path separator, so the difference changes which key is
 ///       addressed.

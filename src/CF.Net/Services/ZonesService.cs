@@ -19,7 +19,7 @@ public interface IZonesService
     /// Enumerates every zone the credentials can see, following the page-number pagination
     /// automatically. Use this instead of looping over <see cref="ListAsync"/>.
     /// </summary>
-    /// <param name="parameters">Optional filters; <see cref="ZoneListParameters.Page"/> is ignored.</param>
+    /// <param name="parameters">Optional filters; <c>Page</c> is ignored.</param>
     /// <param name="cancellationToken">Cancellation token.</param>
     IAsyncEnumerable<Zone> ListAllAsync(ZoneListParameters? parameters = null, CancellationToken cancellationToken = default);
 

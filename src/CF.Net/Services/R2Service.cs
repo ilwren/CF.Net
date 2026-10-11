@@ -34,7 +34,7 @@ public interface IR2Service
         CancellationToken cancellationToken = default);
 
     /// <summary>Enumerates every bucket, following cursor pagination automatically.</summary>
-    /// <param name="parameters">Optional filters and jurisdiction; <see cref="R2BucketListParameters.Cursor"/> is ignored.</param>
+    /// <param name="parameters">Optional filters and jurisdiction; <c>Cursor</c> is ignored.</param>
     /// <param name="accountId">Account id; falls back to the configured default when null.</param>
     /// <param name="cancellationToken">Cancellation token.</param>
     IAsyncEnumerable<R2Bucket> ListAllBucketsAsync(

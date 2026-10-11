@@ -17,7 +17,7 @@ public static class CloudflareDefaults
     /// <summary>Name of the configuration section used by <c>AddCloudflare(IConfiguration)</c>.</summary>
     public const string ConfigurationSectionName = "Cloudflare";
 
-    /// <summary>Environment variables consumed by <see cref="CloudflareClientOptions.FromEnvironment"/> and the tests.</summary>
+    /// <summary>Environment variables consumed by <see cref="Configuration.CloudflareClientOptions.FromEnvironment()"/> and the tests.</summary>
     public static class EnvironmentVariables
     {
         public const string ApiToken = "CLOUDFLARE_API_TOKEN";

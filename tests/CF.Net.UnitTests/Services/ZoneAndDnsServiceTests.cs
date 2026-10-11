@@ -695,4 +695,79 @@ public class DnsRecordsServiceTests
         Assert.False(exception.IsTransient);
         Assert.Contains("DNS Validation Error", exception.Message, StringComparison.Ordinal);
     }
+
+    [Fact]
+    public async Task ExportAsync_returns_the_bind_file_verbatim()
+    {
+        using var harness = CloudflareHarness.Create();
+
+        // The export endpoint answers with the zone file itself, not a JSON envelope.
+        const string zoneFile = ";; a.test zone file\na.test.\t300\tIN\tA\t198.51.100.1\n";
+        harness.Respond(zoneFile);
+
+        var exported = await harness.Client.DnsRecords.ExportAsync();
+
+        Assert.Equal(zoneFile, exported);
+        Assert.Equal("GET", harness.LastRequest.Method.Method);
+        Assert.Equal($"/client/v4/zones/{CloudflareHarness.TestZoneId}/dns_records/export", harness.LastRequest.Path);
+    }
+
+    [Fact]
+    public async Task ExportAsync_honours_an_explicit_zone()
+    {
+        using var harness = CloudflareHarness.Create();
+        harness.Respond("");
+
+        await harness.Client.DnsRecords.ExportAsync("z-other");
+
+        Assert.Equal("/client/v4/zones/z-other/dns_records/export", harness.LastRequest.Path);
+    }
+
+    [Fact]
+    public async Task ImportAsync_uploads_the_zone_file_as_multipart_with_the_proxied_field()
+    {
+        using var harness = CloudflareHarness.Create();
+        harness.RespondWithResult("{\"recs_added\":3,\"total_records_parsed\":4}");
+
+        var result = await harness.Client.DnsRecords.ImportAsync(
+            "a.test.\t300\tIN\tA\t198.51.100.1\nwww.a.test.\t300\tIN\tCNAME\ta.test.\n",
+            proxied: true);
+
+        Assert.Equal(3, result!.RecordsAdded);
+        Assert.Equal(4, result.TotalRecordsParsed);
+
+        Assert.Equal("POST", harness.LastRequest.Method.Method);
+        Assert.Equal($"/client/v4/zones/{CloudflareHarness.TestZoneId}/dns_records/import", harness.LastRequest.Path);
+        Assert.Equal("multipart/form-data", harness.LastRequest.ContentType!.Split(';')[0].Trim());
+
+        // The BIND config goes in the "file" part, and "proxied" is a plain field carrying the
+        // strings the API documents, not a JSON boolean.
+        Assert.Contains("name=file", harness.LastRequest.Body, StringComparison.Ordinal);
+        Assert.Contains("filename=zone.txt", harness.LastRequest.Body, StringComparison.Ordinal);
+        Assert.Contains("name=proxied", harness.LastRequest.Body, StringComparison.Ordinal);
+        Assert.Contains("true", harness.LastRequest.Body, StringComparison.Ordinal);
+        Assert.Contains("198.51.100.1", harness.LastRequest.Body, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task ImportAsync_omits_proxied_when_the_caller_did_not_choose()
+    {
+        using var harness = CloudflareHarness.Create();
+        harness.RespondWithResult("{\"recs_added\":1,\"total_records_parsed\":1}");
+
+        await harness.Client.DnsRecords.ImportAsync("a.test.\t300\tIN\tA\t198.51.100.1");
+
+        Assert.Contains("name=file", harness.LastRequest.Body, StringComparison.Ordinal);
+        Assert.DoesNotContain("proxied", harness.LastRequest.Body, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task ImportAsync_rejects_an_empty_zone_file_before_calling()
+    {
+        using var harness = CloudflareHarness.Create();
+
+        await Assert.ThrowsAsync<ArgumentException>(() => harness.Client.DnsRecords.ImportAsync(string.Empty));
+
+        Assert.Equal(0, harness.RequestCount);
+    }
 }

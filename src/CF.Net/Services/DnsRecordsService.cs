@@ -19,7 +19,7 @@ public interface IDnsRecordsService
         CancellationToken cancellationToken = default);
 
     /// <summary>Enumerates every record in a zone, following page-number pagination automatically.</summary>
-    /// <param name="parameters">Optional filters; <see cref="DnsRecordListParameters.Page"/> is ignored.</param>
+    /// <param name="parameters">Optional filters; <c>Page</c> is ignored.</param>
     /// <param name="zoneId">Zone id; falls back to the configured default when null.</param>
     /// <param name="cancellationToken">Cancellation token.</param>
     IAsyncEnumerable<DnsRecord> ListAllAsync(
@@ -127,6 +127,34 @@ public interface IDnsRecordsService
     /// <param name="zoneId">Zone id; falls back to the configured default when null.</param>
     /// <param name="cancellationToken">Cancellation token.</param>
     Task DeleteAsync(string recordId, string? zoneId = null, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Exports every record in a zone as a BIND config file.
+    /// </summary>
+    /// <remarks>
+    /// <c>GET /zones/{zone_id}/dns_records/export</c> answers with the zone file itself rather than a
+    /// JSON envelope, so this returns the text verbatim - empty when the zone has no records.
+    /// </remarks>
+    /// <param name="zoneId">Zone id; falls back to the configured default when null.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    Task<string> ExportAsync(string? zoneId = null, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Imports records from a BIND config file.
+    /// </summary>
+    /// <param name="bindContents">The zone file text, as <see cref="ExportAsync"/> produces.</param>
+    /// <param name="proxied">
+    /// Whether proxiable records should be imported as proxied. <c>null</c> lets Cloudflare decide,
+    /// which keeps whatever each record's own comment says.
+    /// </param>
+    /// <param name="zoneId">Zone id; falls back to the configured default when null.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>How many records were parsed and added, or <c>null</c> when Cloudflare returned none.</returns>
+    Task<DnsRecordsImportResult?> ImportAsync(
+        string bindContents,
+        bool? proxied = null,
+        string? zoneId = null,
+        CancellationToken cancellationToken = default);
 }
 
 /// <inheritdoc />
@@ -409,6 +437,45 @@ public sealed class DnsRecordsService : CloudflareService, IDnsRecordsService
         {
             throw new Exceptions.CloudflareConfigurationException(problems);
         }
+    }
+
+    /// <inheritdoc />
+    public async Task<string> ExportAsync(string? zoneId = null, CancellationToken cancellationToken = default)
+    {
+        var request = CloudflareRequest.Get($"{ZonePath(ResolveZoneId(zoneId))}/dns_records/export");
+        request.OperationName = "Export DNS Records";
+
+        // Not an envelope: the endpoint streams the BIND file back as text/plain.
+        var raw = await Transport.SendRawAsync(request, cancellationToken).ConfigureAwait(false);
+        return raw.Body;
+    }
+
+    /// <inheritdoc />
+    public async Task<DnsRecordsImportResult?> ImportAsync(
+        string bindContents,
+        bool? proxied = null,
+        string? zoneId = null,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(bindContents);
+
+        var multipart = new MultipartRequestBody()
+            .AddFile("file", System.Text.Encoding.UTF8.GetBytes(bindContents), "text/plain", "zone.txt");
+
+        if (proxied.HasValue)
+        {
+            // The API documents this as the strings "true"/"false", not a JSON boolean.
+            multipart.AddField("proxied", proxied.Value ? "true" : "false");
+        }
+
+        var request = new CloudflareRequest(HttpMethod.Post, $"{ZonePath(ResolveZoneId(zoneId))}/dns_records/import")
+        {
+            Body = multipart,
+            OperationName = "Import DNS Records",
+        };
+
+        var response = await Transport.SendAsync<DnsRecordsImportResult>(request, cancellationToken).ConfigureAwait(false);
+        return response.Result;
     }
 
     private async Task<DnsRecord> SendForRecordAsync(CloudflareRequest request, CancellationToken cancellationToken)

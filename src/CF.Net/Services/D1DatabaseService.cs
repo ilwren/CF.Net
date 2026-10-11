@@ -19,7 +19,7 @@ public interface ID1DatabaseService
         CancellationToken cancellationToken = default);
 
     /// <summary>Enumerates every D1 database, following page-number pagination automatically.</summary>
-    /// <param name="parameters">Optional filters; <see cref="D1DatabaseListParameters.Page"/> is ignored.</param>
+    /// <param name="parameters">Optional filters; <c>Page</c> is ignored.</param>
     /// <param name="accountId">Account id; falls back to the configured default when null.</param>
     /// <param name="cancellationToken">Cancellation token.</param>
     IAsyncEnumerable<D1Database> ListAllAsync(

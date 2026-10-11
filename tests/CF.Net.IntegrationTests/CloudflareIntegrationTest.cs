@@ -278,7 +278,7 @@ internal static class LocalCredentials
             {
                 // Keys starting with an underscore are comments; the template uses one to explain
                 // itself, and JSON has no comment syntax.
-                if (property.Name.StartsWith('_', StringComparison.Ordinal))
+                if (property.Name.Length > 0 && property.Name[0] == '_')
                 {
                     continue;
                 }

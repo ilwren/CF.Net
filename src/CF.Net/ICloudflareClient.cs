@@ -8,6 +8,12 @@ namespace CFNet;
 /// Entry point of the library. Exposes one property per Cloudflare product area, each of which is a
 /// strongly typed service.
 /// </summary>
+/// <remarks>
+/// Implements <see cref="IDisposable"/> because a client created directly
+/// (<c>CloudflareClient.Create(...)</c>, <c>new CloudflareClient(options)</c>) owns the transport and
+/// the <see cref="HttpClient"/> inside it. A client resolved from a DI container is owned by the
+/// container instead, so disposing it yourself is harmless but unnecessary.
+/// </remarks>
 /// <example>
 /// <code>
 /// var client = CloudflareClient.Create(options =>
@@ -22,7 +28,7 @@ namespace CFNet;
 /// }
 /// </code>
 /// </example>
-public interface ICloudflareClient
+public interface ICloudflareClient : IDisposable
 {
     /// <summary>The options this client was created with.</summary>
     CloudflareClientOptions Options { get; }

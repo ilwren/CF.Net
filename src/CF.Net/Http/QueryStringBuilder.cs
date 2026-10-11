@@ -7,7 +7,7 @@ namespace CFNet.Http;
 /// Builds a query string with correct RFC 3986 percent-encoding.
 /// </summary>
 /// <remarks>
-/// Values are escaped with <see cref="Uri.EscapeDataString"/>, which unlike <c>WebUtility.UrlEncode</c>
+/// Values are escaped with <see cref="Uri.EscapeDataString(string)"/>, which unlike <c>WebUtility.UrlEncode</c>
 /// also encodes <c>/</c>, <c>+</c> and <c>~</c>. That matters for parameters such as the DNS record
 /// <c>name</c> filter or a KV <c>prefix</c>. Parameters with a <c>null</c> value are skipped so callers
 /// can pass optional filters straight through. Duplicate names are preserved - Cloudflare accepts

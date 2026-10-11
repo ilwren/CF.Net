@@ -110,6 +110,10 @@ public sealed class CloudflareUser
 /// <summary>Result of <c>GET /user/tokens/verify</c>.</summary>
 public sealed class CloudflareTokenVerification
 {
+    /// <summary>Identifier of the token that was verified.</summary>
+    [JsonPropertyName("id")]
+    public string? Id { get; set; }
+
     /// <summary><c>active</c> when the token is valid.</summary>
     [JsonPropertyName("status")]
     public string? Status { get; set; }

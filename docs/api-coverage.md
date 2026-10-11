@@ -49,6 +49,8 @@ Load balancing, Waiting Room, Turnstile — separate phases.
 | `UpdateAsync(recordId, DnsRecord, zoneId)` | `PATCH /zones/{zone_id}/dns_records/{record_id}` | sends only the fields you set |
 | `ReplaceAsync(recordId, DnsRecord, zoneId)` | `PUT /zones/{zone_id}/dns_records/{record_id}` | full replacement |
 | `DeleteAsync(recordId, zoneId)` | `DELETE /zones/{zone_id}/dns_records/{record_id}` | |
+| `ExportAsync(zoneId)` | `GET /zones/{zone_id}/dns_records/export` | returns the BIND zone file as text, not an envelope |
+| `ImportAsync(bindContents, proxied, zoneId)` | `POST /zones/{zone_id}/dns_records/import` | `multipart/form-data`: a `file` part plus an optional plain `proxied` field; returns `DnsRecordsImportResult` |
 
 Record types modelled with constants and typed data: `A`, `AAAA`, `CAA`, `CERT`, `CNAME`, `DNSKEY`,
 `DS`, `HTTPS`, `LOC`, `MX`, `NAPTR`, `NS`, `PTR`, `SMIMEA`, `SRV`, `SSHFP`, `SVCB`, `TLSA`, `TXT`,
@@ -56,7 +58,7 @@ Record types modelled with constants and typed data: `A`, `AAAA`, `CAA`, `CERT`,
 `DnsRecordSshfpData`, `DnsRecordDnskeyData`, `DnsRecordTlsaData`, `DnsRecordUriData`, … reachable
 through `DnsRecord.Data` and `DnsRecord.GetData<T>()`.
 
-⛔ DNS analytics, DNSSEC, custom nameservers, secondary zone transfers, export/import.
+⛔ DNS analytics, DNSSEC, custom nameservers, secondary zone transfers.
 
 ## Users and accounts
 

@@ -141,6 +141,26 @@ public sealed class MultipartRequestBody : CloudflareRequestBody
         return this;
     }
 
+    /// <summary>
+    /// Appends a plain form field - a part with no file name. Endpoints such as the DNS record import
+    /// take ordinary fields next to the uploaded file, and <see cref="AddFile"/> always supplies a
+    /// file name.
+    /// </summary>
+    /// <param name="name">Form field name.</param>
+    /// <param name="value">Field value, sent as UTF-8.</param>
+    /// <param name="contentType">Media type of the part.</param>
+    public MultipartRequestBody AddField(string name, string value, string contentType = "text/plain")
+    {
+        ArgumentException.ThrowIfNullOrEmpty(name);
+
+        Parts.Add(new MultipartPart(name)
+        {
+            Bytes = Encoding.UTF8.GetBytes(value ?? string.Empty),
+            ContentType = contentType,
+        });
+        return this;
+    }
+
     /// <inheritdoc />
     public override HttpContent CreateContent(JsonSerializerOptions serializerOptions)
     {

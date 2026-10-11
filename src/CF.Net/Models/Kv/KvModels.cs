@@ -323,3 +323,27 @@ public sealed class KvBulkWriteOperation
     [JsonExtensionData]
     public IDictionary<string, JsonElement>? AdditionalData { get; set; }
 }
+
+/// <summary>Small fluent helpers for building KV write requests.</summary>
+public static class KvPutValueRequestExtensions
+{
+    /// <summary>Sets a relative expiry in seconds.</summary>
+    /// <param name="request">The request to modify.</param>
+    /// <param name="expirationTtl">Seconds until the key expires; <c>null</c> leaves it unset.</param>
+    public static KvPutValueRequest WithTtl(this KvPutValueRequest request, int? expirationTtl)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        request.ExpirationTtl = expirationTtl;
+        return request;
+    }
+
+    /// <summary>Sets an absolute expiry.</summary>
+    /// <param name="request">The request to modify.</param>
+    /// <param name="expiration">The moment the key expires.</param>
+    public static KvPutValueRequest WithExpiration(this KvPutValueRequest request, DateTimeOffset expiration)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        request.Expiration = expiration.ToUnixTimeSeconds();
+        return request;
+    }
+}

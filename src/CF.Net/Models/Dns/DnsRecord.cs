@@ -240,6 +240,22 @@ public sealed class DnsRecordLocData
     public double? Size { get; set; }
 }
 
+/// <summary>Result of <c>POST /zones/{zone_id}/dns_records/import</c>.</summary>
+public sealed class DnsRecordsImportResult
+{
+    /// <summary>Number of records the import added.</summary>
+    [JsonPropertyName("recs_added")]
+    public int? RecordsAdded { get; set; }
+
+    /// <summary>Number of records parsed out of the uploaded BIND config.</summary>
+    [JsonPropertyName("total_records_parsed")]
+    public int? TotalRecordsParsed { get; set; }
+
+    /// <summary>Captures any field Cloudflare adds in the future.</summary>
+    [JsonExtensionData]
+    public IDictionary<string, JsonElement>? AdditionalData { get; set; }
+}
+
 /// <summary>Query filters for <c>GET /zones/{zone_id}/dns_records</c>.</summary>
 public sealed class DnsRecordListParameters : CloudflarePagedParameters
 {

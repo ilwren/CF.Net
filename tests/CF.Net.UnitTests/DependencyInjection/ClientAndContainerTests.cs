@@ -631,7 +631,7 @@ public class ServiceCollectionExtensionsTests
                 options.MaxRetries = 0;
             },
             configureClient: client => client.ConfigurePrimaryHttpMessageHandler(
-                () => client.Services.GetRequiredService<StubHttpMessageHandler>()));
+                provider => provider.GetRequiredService<StubHttpMessageHandler>()));
 
         using var provider = collection.BuildServiceProvider();
 

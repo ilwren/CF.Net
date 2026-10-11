@@ -24,14 +24,6 @@ public sealed class WorkerScript
     [JsonPropertyName("script_name")]
     public string? ScriptName { get; set; }
 
-    /// <summary>
-    /// The script name, whichever field Cloudflare used. The scripts list and the single-script
-    /// endpoint both report the name as <c>id</c>, while a few older payloads and the subdomain
-    /// endpoints use <c>script_name</c>; prefer this over either property.
-    /// </summary>
-    [JsonIgnore]
-    public string? Name => ScriptName ?? Id;
-
     /// <summary>Hash of the script content; usable as an <c>If-None-Match</c> header on upload.</summary>
     [JsonPropertyName("etag")]
     public string? Etag { get; set; }
@@ -96,7 +88,11 @@ public sealed class WorkerScript
     [JsonPropertyName("deployment_id")]
     public string? DeploymentId { get; set; }
 
-    /// <summary>The name a caller should prefer, whichever of the two aliases Cloudflare supplied.</summary>
+    /// <summary>
+    /// The name a caller should prefer, whichever alias Cloudflare supplied: the scripts list and the
+    /// single-script endpoint report it as <c>id</c>, while the subdomain endpoints and a few older
+    /// payloads use <c>script_name</c>.
+    /// </summary>
     [JsonIgnore]
     public string Name => ScriptName ?? Id ?? string.Empty;
 

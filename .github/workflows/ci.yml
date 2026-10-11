@@ -1,0 +1,124 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+      - 'arena/**'
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  DOTNET_NOLOGO: true
+  DOTNET_CLI_TELEMETRY_OPTOUT: true
+  DOTNET_SKIP_FIRST_TIME_EXPERIENCE: true
+  CONFIGURATION: Release
+
+jobs:
+  build:
+    name: Build & test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          # net8.0 is the floor the library supports, net10.0 the current LTS line.
+          # global.json rolls forward to the highest installed SDK, so both must be here.
+          dotnet-version: |
+            8.0.x
+            10.0.x
+
+      - name: Show SDKs
+        run: dotnet --info
+
+      - name: Restore
+        run: dotnet restore CF.Net.sln
+
+      - name: Build
+        run: dotnet build CF.Net.sln --configuration ${{ env.CONFIGURATION }} --no-restore
+
+      - name: Unit tests (net8.0)
+        run: >-
+          dotnet test tests/CF.Net.UnitTests/CF.Net.UnitTests.csproj
+          --configuration ${{ env.CONFIGURATION }}
+          --no-build
+          --framework net8.0
+          --filter "Category!=Integration"
+          --logger "trx;LogFileName=unit-net8.0.trx"
+          --results-directory TestResults
+
+      - name: Unit tests (net10.0)
+        run: >-
+          dotnet test tests/CF.Net.UnitTests/CF.Net.UnitTests.csproj
+          --configuration ${{ env.CONFIGURATION }}
+          --no-build
+          --framework net10.0
+          --filter "Category!=Integration"
+          --logger "trx;LogFileName=unit-net10.0.trx"
+          --results-directory TestResults
+
+      # The integration project builds against the real API, so CI only proves that it compiles.
+      # .github/workflows/integration.yml is what actually runs it.
+      - name: Build integration tests (compile only)
+        run: >-
+          dotnet build tests/CF.Net.IntegrationTests/CF.Net.IntegrationTests.csproj
+          --configuration ${{ env.CONFIGURATION }}
+          --no-restore
+
+      - name: Pack
+        if: matrix.os == 'ubuntu-latest'
+        run: dotnet pack src/CF.Net/CF.Net.csproj --configuration ${{ env.CONFIGURATION }} --no-build --output artifacts
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results-${{ matrix.os }}
+          path: TestResults/**/*.trx
+          if-no-files-found: ignore
+          retention-days: 14
+
+      - name: Upload package
+        if: matrix.os == 'ubuntu-latest'
+        uses: actions/upload-artifact@v4
+        with:
+          name: nupkg
+          path: artifacts/*.nupkg
+          if-no-files-found: error
+          retention-days: 30
+
+  gallery:
+    name: Gallery sample (headless build)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: |
+            8.0.x
+            10.0.x
+
+      # The gallery is a desktop app: CI proves the XAML compiles and the bindings resolve
+      # (compiled bindings are on), it does not try to open a window.
+      - name: Build gallery
+        run: >-
+          dotnet build samples/CF.Net.Gallery/CF.Net.Gallery.csproj
+          --configuration ${{ env.CONFIGURATION }}

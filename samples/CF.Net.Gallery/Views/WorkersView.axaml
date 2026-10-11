@@ -1,0 +1,118 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:vm="using:CFNet.Gallery.ViewModels"
+             x:Class="CFNet.Gallery.Views.WorkersView"
+             x:DataType="vm:WorkersViewModel">
+
+  <DockPanel>
+
+    <StackPanel DockPanel.Dock="Top" Orientation="Vertical" Margin="16,14,16,6">
+      <TextBlock Classes="h1" Text="{Binding Title}" />
+      <TextBlock Classes="hint" Text="{Binding Description}" Margin="0,4,0,2" />
+      <TextBlock Text="{Binding Status}" FontSize="12" Opacity="0.8" Margin="0,4,0,0" TextWrapping="Wrap" />
+    </StackPanel>
+
+    <ScrollViewer VerticalScrollBarVisibility="Auto" Padding="16,4,16,16">
+      <StackPanel Orientation="Vertical" MaxWidth="900" HorizontalAlignment="Left">
+
+        <Border Classes="card">
+          <StackPanel Orientation="Vertical" Spacing="10">
+            <TextBlock Classes="h2" Text="List scripts  -  GET /accounts/{account_id}/workers/scripts" />
+            <WrapPanel Orientation="Horizontal">
+              <StackPanel Orientation="Vertical" Spacing="3" Margin="0,0,16,8">
+                <TextBlock Classes="hint" Text="Per page" />
+                <TextBox Text="{Binding ListPerPage, Mode=TwoWay}" Width="100" />
+              </StackPanel>
+              <StackPanel Orientation="Vertical" Spacing="3" Margin="0,0,16,8">
+                <TextBlock Classes="hint" Text="Name contains" />
+                <TextBox Text="{Binding ListName, Mode=TwoWay}" Width="260" />
+              </StackPanel>
+            </WrapPanel>
+            <WrapPanel Orientation="Horizontal">
+              <Button Classes="run" Content="List" Command="{Binding ListCommand}" Margin="0,0,8,0" />
+              <Button Content="List every page" Command="{Binding ListAllCommand}" />
+            </WrapPanel>
+            <TextBlock Classes="hint" Text="This endpoint is cursor paginated, so the list-all walk follows result_info.cursors.after rather than a page number." />
+          </StackPanel>
+        </Border>
+
+        <Border Classes="card">
+          <StackPanel Orientation="Vertical" Spacing="10">
+            <TextBlock Classes="h2" Text="Script name used by everything below" />
+            <TextBox Text="{Binding ScriptName, Mode=TwoWay}" MinWidth="420" HorizontalAlignment="Left" Watermark="my-worker" />
+            <WrapPanel Orientation="Horizontal">
+              <Button Classes="run" Content="Get script" Command="{Binding GetCommand}" Margin="0,0,8,0" />
+              <Button Content="Get content" Command="{Binding GetContentCommand}" Margin="0,0,8,0" />
+              <Button Content="Get settings" Command="{Binding GetSettingsCommand}" Margin="0,0,8,0" />
+              <Button Content="Delete script" Command="{Binding DeleteCommand}" />
+            </WrapPanel>
+            <TextBlock Classes="hint" Text="Content comes back as modules; the library decodes base64 for you and exposes the main module directly." />
+          </StackPanel>
+        </Border>
+
+        <Border Classes="card">
+          <StackPanel Orientation="Vertical" Spacing="10">
+            <TextBlock Classes="h2" Text="Upload a script  -  PUT /accounts/{account_id}/workers/scripts/{script_name}" />
+            <TextBlock Classes="hint" Text="Sent as multipart/form-data: a 'metadata' part holding JSON plus one file part per module. Cloudflare rejects the older single-field form with error 10021." />
+            <StackPanel Orientation="Horizontal" Spacing="10">
+              <TextBlock Text="Compatibility date" Width="150" VerticalAlignment="Center" />
+              <TextBox Text="{Binding CompatibilityDate, Mode=TwoWay}" Width="180" Watermark="yyyy-MM-dd" />
+            </StackPanel>
+            <TextBlock Classes="hint" Text="Source (the main module, worker.mjs)" />
+            <TextBox Text="{Binding UploadSource, Mode=TwoWay}" AcceptsReturn="True" AcceptsTab="True" Height="180"
+                     FontFamily="Cascadia Mono,Consolas,Menlo,DejaVu Sans Mono,monospace" FontSize="12" />
+            <TextBlock Classes="hint" Text="Bindings (JSON array; WorkerBinding is a discriminated union, so the 'type' field selects the shape)" />
+            <TextBox Text="{Binding BindingsJson, Mode=TwoWay}" AcceptsReturn="True" Height="90"
+                     FontFamily="Cascadia Mono,Consolas,Menlo,DejaVu Sans Mono,monospace" FontSize="12"
+                     Watermark='[{"name":"GREETING","type":"plain_text","text":"hi"}]' />
+            <Button Classes="run" Content="Upload" Command="{Binding UploadCommand}" />
+          </StackPanel>
+        </Border>
+
+        <Border Classes="card">
+          <StackPanel Orientation="Vertical" Spacing="10">
+            <TextBlock Classes="h2" Text="Deployments  -  GET / POST /accounts/{account_id}/workers/scripts/{script_name}/deployments" />
+            <WrapPanel Orientation="Horizontal">
+              <StackPanel Orientation="Vertical" Spacing="3" Margin="0,0,16,8">
+                <TextBlock Classes="hint" Text="Version id" />
+                <TextBox Text="{Binding VersionId, Mode=TwoWay}" Width="300" />
+              </StackPanel>
+              <StackPanel Orientation="Vertical" Spacing="3" Margin="0,0,16,8">
+                <TextBlock Classes="hint" Text="Percentage" />
+                <TextBox Text="{Binding Percentage, Mode=TwoWay}" Width="110" />
+              </StackPanel>
+            </WrapPanel>
+            <WrapPanel Orientation="Horizontal">
+              <Button Classes="run" Content="List deployments" Command="{Binding ListDeploymentsCommand}" Margin="0,0,8,0" />
+              <Button Content="Deploy version" Command="{Binding CreateDeploymentCommand}" />
+            </WrapPanel>
+            <TextBlock Classes="hint" Text="The percentages in one deployment must add up to exactly 100 - the library checks that before sending." />
+          </StackPanel>
+        </Border>
+
+        <Border Classes="card">
+          <StackPanel Orientation="Vertical" Spacing="10">
+            <TextBlock Classes="h2" Text="workers.dev subdomain  -  GET / PATCH /accounts/{account_id}/workers/subdomain" />
+            <WrapPanel Orientation="Horizontal">
+              <StackPanel Orientation="Vertical" Spacing="3" Margin="0,0,16,8">
+                <TextBlock Classes="hint" Text="Subdomain prefix" />
+                <TextBox Text="{Binding Subdomain, Mode=TwoWay}" Width="260" Watermark="blank = keep the current one" />
+              </StackPanel>
+              <CheckBox IsChecked="{Binding SubdomainEnabled, Mode=TwoWay}" Content="Subdomain enabled" VerticalAlignment="Bottom" Margin="0,0,16,10" />
+              <CheckBox IsChecked="{Binding ScriptSubdomainEnabled, Mode=TwoWay}" Content="This script published" VerticalAlignment="Bottom" Margin="0,0,0,10" />
+            </WrapPanel>
+            <WrapPanel Orientation="Horizontal">
+              <Button Classes="run" Content="Get subdomain" Command="{Binding GetSubdomainCommand}" Margin="0,0,8,0" />
+              <Button Content="Update subdomain" Command="{Binding UpdateSubdomainCommand}" Margin="0,0,8,0" />
+              <Button Content="Get script state" Command="{Binding GetScriptSubdomainCommand}" Margin="0,0,8,0" />
+              <Button Content="Publish / unpublish script" Command="{Binding UpdateScriptSubdomainCommand}" />
+            </WrapPanel>
+          </StackPanel>
+        </Border>
+
+      </StackPanel>
+    </ScrollViewer>
+
+  </DockPanel>
+
+</UserControl>

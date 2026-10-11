@@ -1,0 +1,121 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:vm="using:CFNet.Gallery.ViewModels"
+        xmlns:views="using:CFNet.Gallery.Views"
+        x:Class="CFNet.Gallery.Views.MainWindow"
+        x:DataType="vm:GalleryViewModel"
+        Title="CF.Net Gallery - Cloudflare API v4 explorer"
+        Width="1440"
+        Height="920"
+        MinWidth="1024"
+        MinHeight="640"
+        WindowStartupLocation="CenterScreen"
+        Background="#1B1B1F">
+
+  <!-- One page per sidebar entry. The DataContext of each view is its own view model. -->
+  <Window.DataTemplates>
+    <DataTemplate DataType="vm:ZonesViewModel">
+      <views:ZonesView />
+    </DataTemplate>
+    <DataTemplate DataType="vm:WorkersViewModel">
+      <views:WorkersView />
+    </DataTemplate>
+    <DataTemplate DataType="vm:PagesViewModel">
+      <views:PagesView />
+    </DataTemplate>
+    <DataTemplate DataType="vm:D1ViewModel">
+      <views:D1View />
+    </DataTemplate>
+    <DataTemplate DataType="vm:KvViewModel">
+      <views:KvView />
+    </DataTemplate>
+    <DataTemplate DataType="vm:R2ViewModel">
+      <views:R2View />
+    </DataTemplate>
+    <DataTemplate DataType="vm:SettingsViewModel">
+      <views:SettingsView />
+    </DataTemplate>
+  </Window.DataTemplates>
+
+  <Grid RowDefinitions="Auto,*,260">
+
+    <!-- ================= header ================= -->
+    <Border Grid.Row="0" Padding="14,10" Background="#232329" BorderBrush="#33FFFFFF" BorderThickness="0,0,0,1">
+      <Grid ColumnDefinitions="Auto,*,Auto">
+
+        <StackPanel Grid.Column="0" Orientation="Vertical" Spacing="2">
+          <TextBlock Classes="h1" Text="CF.Net Gallery" />
+          <TextBlock Classes="hint" Text="Cloudflare API v4 - Domains, Workers, Pages, D1, KV, R2" />
+        </StackPanel>
+
+        <StackPanel Grid.Column="1" Orientation="Vertical" Spacing="2" Margin="24,0" VerticalAlignment="Center">
+          <TextBlock Text="{Binding StatusText}" FontSize="13" TextTrimming="CharacterEllipsis" />
+          <TextBlock Classes="hint" Text="{Binding ConnectionText}" TextTrimming="CharacterEllipsis" />
+        </StackPanel>
+
+        <StackPanel Grid.Column="2" Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
+          <ProgressBar IsIndeterminate="True" IsVisible="{Binding IsBusy}" Width="110" Height="16" VerticalAlignment="Center" />
+          <Button Content="Apply credentials" Command="{Binding ApplyCommand}" />
+          <Button Content="Check connection" Command="{Binding CheckConnectionCommand}" />
+          <Button Content="Clear inspector" Command="{Binding ClearInspectorCommand}" />
+        </StackPanel>
+
+      </Grid>
+    </Border>
+
+    <!-- ================= sidebar + page ================= -->
+    <Grid Grid.Row="1" ColumnDefinitions="190,*">
+
+      <Border Grid.Column="0" Background="#202026" BorderBrush="#33FFFFFF" BorderThickness="0,0,1,0">
+        <DockPanel>
+          <TextBlock DockPanel.Dock="Top" Text="Modules" Classes="h2" Margin="14,14,14,6" />
+          <ListBox ItemsSource="{Binding Navigation}"
+                   SelectedItem="{Binding CurrentPage, Mode=TwoWay}"
+                   Background="Transparent"
+                   BorderThickness="0"
+                   Padding="6,0">
+            <ListBox.ItemTemplate>
+              <DataTemplate x:DataType="vm:PageViewModelBase">
+                <TextBlock Text="{Binding Title}" FontSize="14" Padding="6,10" />
+              </DataTemplate>
+            </ListBox.ItemTemplate>
+          </ListBox>
+        </DockPanel>
+      </Border>
+
+      <ContentControl Grid.Column="1" Content="{Binding CurrentPage}" />
+
+    </Grid>
+
+    <!-- ================= inspector ================= -->
+    <Border Grid.Row="2" BorderBrush="#33FFFFFF" BorderThickness="0,1,0,0" Background="#191920">
+      <TabControl Padding="6,0,6,6">
+
+        <TabItem Header="Request">
+          <ScrollViewer HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Auto">
+            <TextBox Classes="json" Text="{Binding RequestText, Mode=OneWay}" />
+          </ScrollViewer>
+        </TabItem>
+
+        <TabItem Header="Response">
+          <ScrollViewer HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Auto">
+            <TextBox Classes="json" Text="{Binding ResponseText, Mode=OneWay}" />
+          </ScrollViewer>
+        </TabItem>
+
+        <TabItem Header="Result (typed)">
+          <ScrollViewer HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Auto">
+            <TextBox Classes="json" Text="{Binding ResultText, Mode=OneWay}" />
+          </ScrollViewer>
+        </TabItem>
+
+        <TabItem Header="History">
+          <ListBox ItemsSource="{Binding History}" Background="Transparent" BorderThickness="0" />
+        </TabItem>
+
+      </TabControl>
+    </Border>
+
+  </Grid>
+
+</Window>

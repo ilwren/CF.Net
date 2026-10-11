@@ -1,0 +1,217 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:vm="using:CFNet.Gallery.ViewModels"
+             x:Class="CFNet.Gallery.Views.ZonesView"
+             x:DataType="vm:ZonesViewModel">
+
+  <DockPanel>
+
+    <StackPanel DockPanel.Dock="Top" Orientation="Vertical" Margin="16,14,16,6">
+      <TextBlock Classes="h1" Text="{Binding Title}" />
+      <TextBlock Classes="hint" Text="{Binding Description}" Margin="0,4,0,2" />
+      <TextBlock Text="{Binding Status}" FontSize="12" Opacity="0.8" Margin="0,4,0,0" TextWrapping="Wrap" />
+    </StackPanel>
+
+    <ScrollViewer VerticalScrollBarVisibility="Auto" Padding="16,4,16,16">
+      <TabControl>
+
+        <!-- ============================ zones ============================ -->
+        <TabItem Header="Zones">
+          <StackPanel Orientation="Vertical" MaxWidth="900" HorizontalAlignment="Left" Margin="0,10,0,0">
+
+            <Border Classes="card">
+              <StackPanel Orientation="Vertical" Spacing="10">
+                <TextBlock Classes="h2" Text="List zones  -  GET /zones" />
+                <WrapPanel Orientation="Horizontal">
+                  <StackPanel Orientation="Vertical" Spacing="3" Margin="0,0,16,8">
+                    <TextBlock Classes="hint" Text="Page" />
+                    <TextBox Text="{Binding ListPage, Mode=TwoWay}" Width="90" />
+                  </StackPanel>
+                  <StackPanel Orientation="Vertical" Spacing="3" Margin="0,0,16,8">
+                    <TextBlock Classes="hint" Text="Per page" />
+                    <TextBox Text="{Binding ListPerPage, Mode=TwoWay}" Width="90" />
+                  </StackPanel>
+                  <StackPanel Orientation="Vertical" Spacing="3" Margin="0,0,16,8">
+                    <TextBlock Classes="hint" Text="Status" />
+                    <ComboBox ItemsSource="{Binding ZoneStatuses}" SelectedItem="{Binding ListStatus, Mode=TwoWay}" Width="160" />
+                  </StackPanel>
+                  <StackPanel Orientation="Vertical" Spacing="3" Margin="0,0,16,8">
+                    <TextBlock Classes="hint" Text="Name (exact)" />
+                    <TextBox Text="{Binding ListName, Mode=TwoWay}" Width="220" Watermark="example.com" />
+                  </StackPanel>
+                </WrapPanel>
+                <WrapPanel Orientation="Horizontal">
+                  <Button Classes="run" Content="List" Command="{Binding ListCommand}" Margin="0,0,8,0" />
+                  <Button Content="List every page" Command="{Binding ListAllCommand}" />
+                </WrapPanel>
+              </StackPanel>
+            </Border>
+
+            <Border Classes="card">
+              <StackPanel Orientation="Vertical" Spacing="10">
+                <TextBlock Classes="h2" Text="One zone  -  GET /zones/{zone_id}" />
+                <StackPanel Orientation="Horizontal" Spacing="10">
+                  <TextBlock Text="Zone id" Width="110" VerticalAlignment="Center" />
+                  <TextBox Text="{Binding GetZoneId, Mode=TwoWay}" MinWidth="420" Watermark="blank = the default zone id from the Credentials page" />
+                </StackPanel>
+                <StackPanel Orientation="Horizontal" Spacing="10">
+                  <TextBlock Text="Domain" Width="110" VerticalAlignment="Center" />
+                  <TextBox Text="{Binding GetZoneName, Mode=TwoWay}" MinWidth="420" Watermark="example.com" />
+                </StackPanel>
+                <WrapPanel Orientation="Horizontal">
+                  <Button Classes="run" Content="Get by id" Command="{Binding GetCommand}" Margin="0,0,8,0" />
+                  <Button Content="Get by name" Command="{Binding GetByNameCommand}" Margin="0,0,8,0" />
+                  <Button Content="Activation check" Command="{Binding ActivationCheckCommand}" Margin="0,0,8,0" />
+                  <Button Content="Delete zone" Command="{Binding DeleteZoneCommand}" />
+                </WrapPanel>
+                <StackPanel Orientation="Horizontal" Spacing="10">
+                  <CheckBox IsChecked="{Binding Paused, Mode=TwoWay}" Content="Paused" VerticalAlignment="Center" />
+                  <Button Content="Apply paused state" Command="{Binding SetPausedCommand}" />
+                </StackPanel>
+              </StackPanel>
+            </Border>
+
+            <Border Classes="card">
+              <StackPanel Orientation="Vertical" Spacing="10">
+                <TextBlock Classes="h2" Text="Add a domain  -  POST /zones" />
+                <StackPanel Orientation="Horizontal" Spacing="10">
+                  <TextBlock Text="Domain" Width="110" VerticalAlignment="Center" />
+                  <TextBox Text="{Binding CreateZoneName, Mode=TwoWay}" MinWidth="420" Watermark="example.com" />
+                </StackPanel>
+                <WrapPanel Orientation="Horizontal">
+                  <StackPanel Orientation="Vertical" Spacing="3" Margin="0,0,16,8">
+                    <TextBlock Classes="hint" Text="Type" />
+                    <ComboBox ItemsSource="{Binding ZoneTypes}" SelectedItem="{Binding CreateZoneType, Mode=TwoWay}" Width="160" />
+                  </StackPanel>
+                  <StackPanel Orientation="Vertical" Spacing="3" Margin="0,0,16,8">
+                    <TextBlock Classes="hint" Text="Account id" />
+                    <TextBox Text="{Binding CreateZoneAccount, Mode=TwoWay}" Width="320" Watermark="blank = default account" />
+                  </StackPanel>
+                </WrapPanel>
+                <Button Classes="run" Content="Create zone" Command="{Binding CreateCommand}" />
+                <TextBlock Classes="hint" Text="Adding a domain changes the account's DNS - Cloudflare replies with the nameservers to set at the registrar, and the zone stays pending until they are delegated." />
+              </StackPanel>
+            </Border>
+
+            <Border Classes="card">
+              <StackPanel Orientation="Vertical" Spacing="10">
+                <TextBlock Classes="h2" Text="Purge cache  -  POST /zones/{zone_id}/purge_cache" />
+                <CheckBox IsChecked="{Binding PurgeEverything, Mode=TwoWay}" Content="Purge everything (slow, and it empties the whole cache)" />
+                <TextBox Text="{Binding PurgeUrls, Mode=TwoWay}" AcceptsReturn="True" Height="70"
+                         Watermark="one absolute URL per line, e.g. https://example.com/a.css" />
+                <TextBox Text="{Binding PurgeTags, Mode=TwoWay}" AcceptsReturn="True" Height="60"
+                         Watermark="one cache tag per line (Enterprise)" />
+                <StackPanel Orientation="Horizontal" Spacing="10">
+                  <TextBlock Text="Zone id" Width="110" VerticalAlignment="Center" />
+                  <TextBox Text="{Binding PurgeZoneId, Mode=TwoWay}" MinWidth="420" Watermark="blank = default zone id" />
+                </StackPanel>
+                <Button Classes="run" Content="Purge" Command="{Binding PurgeCacheCommand}" />
+              </StackPanel>
+            </Border>
+
+          </StackPanel>
+        </TabItem>
+
+        <!-- ============================ dns ============================ -->
+        <TabItem Header="DNS records">
+          <StackPanel Orientation="Vertical" MaxWidth="900" HorizontalAlignment="Left" Margin="0,10,0,0">
+
+            <Border Classes="card">
+              <StackPanel Orientation="Vertical" Spacing="10">
+                <TextBlock Classes="h2" Text="List records  -  GET /zones/{zone_id}/dns_records" />
+                <WrapPanel Orientation="Horizontal">
+                  <StackPanel Orientation="Vertical" Spacing="3" Margin="0,0,16,8">
+                    <TextBlock Classes="hint" Text="Type" />
+                    <ComboBox ItemsSource="{Binding RecordTypes}" SelectedItem="{Binding DnsListType, Mode=TwoWay}" Width="130" />
+                  </StackPanel>
+                  <StackPanel Orientation="Vertical" Spacing="3" Margin="0,0,16,8">
+                    <TextBlock Classes="hint" Text="Name" />
+                    <TextBox Text="{Binding DnsListName, Mode=TwoWay}" Width="260" Watermark="www.example.com" />
+                  </StackPanel>
+                  <StackPanel Orientation="Vertical" Spacing="3" Margin="0,0,16,8">
+                    <TextBlock Classes="hint" Text="Per page" />
+                    <TextBox Text="{Binding DnsListPerPage, Mode=TwoWay}" Width="90" />
+                  </StackPanel>
+                  <StackPanel Orientation="Vertical" Spacing="3" Margin="0,0,16,8">
+                    <TextBlock Classes="hint" Text="Zone id" />
+                    <TextBox Text="{Binding DnsListZoneId, Mode=TwoWay}" Width="300" Watermark="blank = default zone id" />
+                  </StackPanel>
+                </WrapPanel>
+                <StackPanel Orientation="Horizontal" Spacing="10">
+                  <TextBlock Text="Find name" Width="110" VerticalAlignment="Center" />
+                  <TextBox Text="{Binding DnsFindName, Mode=TwoWay}" MinWidth="380" Watermark="www.example.com" />
+                </StackPanel>
+                <WrapPanel Orientation="Horizontal">
+                  <Button Classes="run" Content="List" Command="{Binding DnsListCommand}" Margin="0,0,8,0" />
+                  <Button Content="Find by name" Command="{Binding DnsFindCommand}" />
+                </WrapPanel>
+              </StackPanel>
+            </Border>
+
+            <Border Classes="card">
+              <StackPanel Orientation="Vertical" Spacing="10">
+                <TextBlock Classes="h2" Text="Create a record  -  POST /zones/{zone_id}/dns_records" />
+                <WrapPanel Orientation="Horizontal">
+                  <StackPanel Orientation="Vertical" Spacing="3" Margin="0,0,16,8">
+                    <TextBlock Classes="hint" Text="Type" />
+                    <ComboBox ItemsSource="{Binding RecordTypes}" SelectedItem="{Binding DnsCreateType, Mode=TwoWay}" Width="130" />
+                  </StackPanel>
+                  <StackPanel Orientation="Vertical" Spacing="3" Margin="0,0,16,8">
+                    <TextBlock Classes="hint" Text="TTL (1 = auto)" />
+                    <TextBox Text="{Binding DnsCreateTtl, Mode=TwoWay}" Width="110" />
+                  </StackPanel>
+                  <StackPanel Orientation="Vertical" Spacing="3" Margin="0,0,16,8">
+                    <TextBlock Classes="hint" Text="Priority (MX/SRV)" />
+                    <TextBox Text="{Binding DnsCreatePriority, Mode=TwoWay}" Width="130" />
+                  </StackPanel>
+                  <CheckBox IsChecked="{Binding DnsCreateProxied, Mode=TwoWay}" Content="Proxied" VerticalAlignment="Bottom" Margin="0,0,0,10" />
+                </WrapPanel>
+                <StackPanel Orientation="Horizontal" Spacing="10">
+                  <TextBlock Text="Name" Width="110" VerticalAlignment="Center" />
+                  <TextBox Text="{Binding DnsCreateName, Mode=TwoWay}" MinWidth="420" Watermark="www.example.com" />
+                </StackPanel>
+                <StackPanel Orientation="Horizontal" Spacing="10">
+                  <TextBlock Text="Content" Width="110" VerticalAlignment="Center" />
+                  <TextBox Text="{Binding DnsCreateContent, Mode=TwoWay}" MinWidth="420" Watermark="192.0.2.1" />
+                </StackPanel>
+                <StackPanel Orientation="Horizontal" Spacing="10">
+                  <TextBlock Text="Comment" Width="110" VerticalAlignment="Center" />
+                  <TextBox Text="{Binding DnsCreateComment, Mode=TwoWay}" MinWidth="420" />
+                </StackPanel>
+                <StackPanel Orientation="Horizontal" Spacing="10">
+                  <TextBlock Text="Zone id" Width="110" VerticalAlignment="Center" />
+                  <TextBox Text="{Binding DnsCreateZoneId, Mode=TwoWay}" MinWidth="420" Watermark="blank = default zone id" />
+                </StackPanel>
+                <Button Classes="run" Content="Create record" Command="{Binding DnsCreateCommand}" />
+                <TextBlock Classes="hint" Text="The library picks the type from DnsRecordTypes and validates the record before sending, so an A record without an address fails here rather than in Cloudflare." />
+              </StackPanel>
+            </Border>
+
+            <Border Classes="card">
+              <StackPanel Orientation="Vertical" Spacing="10">
+                <TextBlock Classes="h2" Text="One record  -  GET / PATCH / DELETE /zones/{zone_id}/dns_records/{record_id}" />
+                <StackPanel Orientation="Horizontal" Spacing="10">
+                  <TextBlock Text="Record id" Width="110" VerticalAlignment="Center" />
+                  <TextBox Text="{Binding DnsRecordId, Mode=TwoWay}" MinWidth="420" Watermark="copy it from a list result" />
+                </StackPanel>
+                <StackPanel Orientation="Horizontal" Spacing="10">
+                  <TextBlock Text="New content" Width="110" VerticalAlignment="Center" />
+                  <TextBox Text="{Binding DnsUpdateContent, Mode=TwoWay}" MinWidth="420" Watermark="only sent when non-blank" />
+                </StackPanel>
+                <WrapPanel Orientation="Horizontal">
+                  <Button Classes="run" Content="Get" Command="{Binding DnsGetCommand}" Margin="0,0,8,0" />
+                  <Button Content="Update (PATCH)" Command="{Binding DnsUpdateCommand}" Margin="0,0,8,0" />
+                  <Button Content="Delete" Command="{Binding DnsDeleteCommand}" />
+                </WrapPanel>
+              </StackPanel>
+            </Border>
+
+          </StackPanel>
+        </TabItem>
+
+      </TabControl>
+    </ScrollViewer>
+
+  </DockPanel>
+
+</UserControl>

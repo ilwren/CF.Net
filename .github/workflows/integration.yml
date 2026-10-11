@@ -1,0 +1,118 @@
+name: Integration
+
+# Runs the tests that talk to the real Cloudflare API.
+#
+# It is NOT triggered by push or pull_request on purpose: those runs have no credentials, and a
+# schedule/dispatch-only workflow keeps untrusted forks from being able to spend your API quota or
+# touch your account.
+#
+# To make it do anything, add these repository secrets
+# (Settings -> Secrets and variables -> Actions -> New repository secret):
+#
+#   CLOUDFLARE_API_TOKEN      required  - API token scoped to the resources you want to exercise
+#   CLOUDFLARE_ACCOUNT_ID     required  - for Workers, Pages, D1, KV and R2
+#   CLOUDFLARE_ZONE_ID        required  - for the DNS record and cache purge tests
+#   CLOUDFLARE_API_EMAIL      optional  - only for the legacy global-key path
+#   CLOUDFLARE_GLOBAL_API_KEY optional  - only for the legacy global-key path
+#
+# Without them the job reports a warning and the tests skip themselves instead of failing.
+# See docs/integration-testing.md for how to create a correctly scoped token.
+
+on:
+  workflow_dispatch:
+    inputs:
+      enable_writes:
+        description: 'Allow tests that create and delete resources (KV namespace, R2 bucket, D1 database, Worker, Pages project, DNS record, cache purge)'
+        type: boolean
+        default: false
+  schedule:
+    # Mondays at 04:00 UTC - read-only, so it can run unattended.
+    - cron: '0 4 * * 1'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: integration-${{ github.workflow }}
+  cancel-in-progress: false
+
+env:
+  DOTNET_NOLOGO: true
+  DOTNET_CLI_TELEMETRY_OPTOUT: true
+  CONFIGURATION: Release
+  # Injected from repository secrets. GitHub masks secret values in every log line automatically.
+  CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+  CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+  CLOUDFLARE_ZONE_ID: ${{ secrets.CLOUDFLARE_ZONE_ID }}
+  CLOUDFLARE_API_EMAIL: ${{ secrets.CLOUDFLARE_API_EMAIL }}
+  CLOUDFLARE_GLOBAL_API_KEY: ${{ secrets.CLOUDFLARE_GLOBAL_API_KEY }}
+  CLOUDFLARE_IT_ENABLE_WRITES: ${{ inputs.enable_writes && 'true' || 'false' }}
+
+jobs:
+  integration:
+    name: Cloudflare API integration tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
+
+      - name: Report which credential scheme is available
+        id: credentials
+        shell: bash
+        run: |
+          if [ -n "${CLOUDFLARE_API_TOKEN:-}" ]; then
+            echo "scheme=API token" >> "$GITHUB_OUTPUT"
+            echo "available=true" >> "$GITHUB_OUTPUT"
+            echo "::notice::Using CLOUDFLARE_API_TOKEN."
+          elif [ -n "${CLOUDFLARE_GLOBAL_API_KEY:-}" ] && [ -n "${CLOUDFLARE_API_EMAIL:-}" ]; then
+            echo "scheme=Global API key" >> "$GITHUB_OUTPUT"
+            echo "available=true" >> "$GITHUB_OUTPUT"
+            echo "::notice::Using CLOUDFLARE_GLOBAL_API_KEY with CLOUDFLARE_API_EMAIL."
+          else
+            echo "scheme=none" >> "$GITHUB_OUTPUT"
+            echo "available=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::No Cloudflare credentials are configured. Add CLOUDFLARE_API_TOKEN (and CLOUDFLARE_ACCOUNT_ID / CLOUDFLARE_ZONE_ID) as repository secrets - see docs/integration-testing.md."
+          fi
+
+          if [ -z "${CLOUDFLARE_ACCOUNT_ID:-}" ]; then
+            echo "::warning::CLOUDFLARE_ACCOUNT_ID is not set; Workers, Pages, D1, KV and R2 tests will skip."
+          fi
+          if [ -z "${CLOUDFLARE_ZONE_ID:-}" ]; then
+            echo "::warning::CLOUDFLARE_ZONE_ID is not set; DNS and cache purge tests will skip."
+          fi
+
+          echo "Write operations: ${CLOUDFLARE_IT_ENABLE_WRITES}"
+
+      - name: Restore
+        run: dotnet restore tests/CF.Net.IntegrationTests/CF.Net.IntegrationTests.csproj
+
+      - name: Run integration tests
+        if: steps.credentials.outputs.available == 'true'
+        run: >-
+          dotnet test tests/CF.Net.IntegrationTests/CF.Net.IntegrationTests.csproj
+          --configuration ${{ env.CONFIGURATION }}
+          --no-restore
+          --filter "Category=Integration"
+          --logger "trx;LogFileName=integration.trx"
+          --logger "console;verbosity=detailed"
+          --results-directory TestResults
+
+      - name: Skipped
+        if: steps.credentials.outputs.available != 'true'
+        run: echo "Integration tests skipped - no credentials. The job is green because there is nothing to verify."
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: integration-results
+          path: TestResults/**/*.trx
+          if-no-files-found: ignore
+          retention-days: 30

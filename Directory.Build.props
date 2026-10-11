@@ -1,0 +1,41 @@
+<Project>
+
+  <!--
+    Shared build properties for every project in the repository.
+    Individual projects may still override specific settings.
+  -->
+  <PropertyGroup>
+    <LangVersion>latest</LangVersion>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <EnableNETAnalyzers>true</EnableNETAnalyzers>
+    <AnalysisLevel>latest-minimum</AnalysisLevel>
+    <EnforceCodeStyleInBuild>false</EnforceCodeStyleInBuild>
+    <!-- Warnings must never break the build: the Cloudflare API evolves quickly and the
+         analyzers bundled with each SDK differ. Keep them visible, not fatal. -->
+    <TreatWarningsAsErrors>false</TreatWarningsAsErrors>
+    <WarningsNotAsErrors>$(WarningsNotAsErrors);CS1591;CA1050</WarningsNotAsErrors>
+    <NoWarn>$(NoWarn);CS1591;NETSDK1138</NoWarn>
+    <SuppressNETCoreSdkPreviewMessage>true</SuppressNETCoreSdkPreviewMessage>
+    <SuppressTfmSupportBuildWarnings>true</SuppressTfmSupportBuildWarnings>
+    <!-- Deterministic, reproducible output for CI artifacts. -->
+    <Deterministic>true</Deterministic>
+    <ContinuousIntegrationBuild Condition="'$(GITHUB_ACTIONS)' == 'true'">true</ContinuousIntegrationBuild>
+    <RestorePackagesWithLockFile>false</RestorePackagesWithLockFile>
+    <DisableImplicitNuGetFallbackFolder>true</DisableImplicitNuGetFallbackFolder>
+  </PropertyGroup>
+
+  <PropertyGroup Label="Repository metadata">
+    <Authors>CF.Net contributors</Authors>
+    <Company>CF.Net</Company>
+    <Product>CF.Net</Product>
+    <Copyright>Copyright (c) CF.Net contributors</Copyright>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
+    <PackageProjectUrl>https://github.com/ilwren/CF.Net</PackageProjectUrl>
+    <RepositoryUrl>https://github.com/ilwren/CF.Net</RepositoryUrl>
+    <RepositoryType>git</RepositoryType>
+    <VersionPrefix>0.1.0</VersionPrefix>
+    <VersionSuffix Condition="'$(VersionSuffix)' == ''"></VersionSuffix>
+  </PropertyGroup>
+
+</Project>

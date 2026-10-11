@@ -1,0 +1,108 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:vm="using:CFNet.Gallery.ViewModels"
+             x:Class="CFNet.Gallery.Views.D1View"
+             x:DataType="vm:D1ViewModel">
+
+  <DockPanel>
+
+    <StackPanel DockPanel.Dock="Top" Orientation="Vertical" Margin="16,14,16,6">
+      <TextBlock Classes="h1" Text="{Binding Title}" />
+      <TextBlock Classes="hint" Text="{Binding Description}" Margin="0,4,0,2" />
+      <TextBlock Text="{Binding Status}" FontSize="12" Opacity="0.8" Margin="0,4,0,0" TextWrapping="Wrap" />
+    </StackPanel>
+
+    <ScrollViewer VerticalScrollBarVisibility="Auto" Padding="16,4,16,16">
+      <StackPanel Orientation="Vertical" MaxWidth="900" HorizontalAlignment="Left">
+
+        <Border Classes="card">
+          <StackPanel Orientation="Vertical" Spacing="10">
+            <TextBlock Classes="h2" Text="List databases  -  GET /accounts/{account_id}/d1/database" />
+            <WrapPanel Orientation="Horizontal">
+              <StackPanel Orientation="Vertical" Spacing="3" Margin="0,0,16,8">
+                <TextBlock Classes="hint" Text="Per page" />
+                <TextBox Text="{Binding ListPerPage, Mode=TwoWay}" Width="100" />
+              </StackPanel>
+              <StackPanel Orientation="Vertical" Spacing="3" Margin="0,0,16,8">
+                <TextBlock Classes="hint" Text="Name contains" />
+                <TextBox Text="{Binding ListName, Mode=TwoWay}" Width="280" />
+              </StackPanel>
+            </WrapPanel>
+            <Button Classes="run" Content="List" Command="{Binding ListCommand}" />
+            <TextBlock Classes="hint" Text="The path is /d1/database (singular) and the filter parameter is 'name', not 'search' - both are easy to get wrong." />
+          </StackPanel>
+        </Border>
+
+        <Border Classes="card">
+          <StackPanel Orientation="Vertical" Spacing="10">
+            <TextBlock Classes="h2" Text="Database" />
+            <StackPanel Orientation="Horizontal" Spacing="10">
+              <TextBlock Text="Uuid" Width="140" VerticalAlignment="Center" />
+              <TextBox Text="{Binding DatabaseId, Mode=TwoWay}" MinWidth="380" Watermark="copy it from a list result" />
+            </StackPanel>
+            <StackPanel Orientation="Horizontal" Spacing="10">
+              <TextBlock Text="Name" Width="140" VerticalAlignment="Center" />
+              <TextBox Text="{Binding DatabaseName, Mode=TwoWay}" MinWidth="380" Watermark="my-database" />
+            </StackPanel>
+            <StackPanel Orientation="Horizontal" Spacing="10">
+              <TextBlock Text="Location hint" Width="140" VerticalAlignment="Center" />
+              <TextBox Text="{Binding LocationHint, Mode=TwoWay}" MinWidth="380" Watermark="weur, enam, apac ... (optional)" />
+            </StackPanel>
+            <WrapPanel Orientation="Horizontal">
+              <Button Classes="run" Content="Get by uuid" Command="{Binding GetCommand}" Margin="0,0,8,0" />
+              <Button Content="Get by name" Command="{Binding GetByNameCommand}" Margin="0,0,8,0" />
+              <Button Content="Create" Command="{Binding CreateCommand}" Margin="0,0,8,0" />
+              <Button Content="Delete" Command="{Binding DeleteCommand}" />
+            </WrapPanel>
+            <TextBlock Classes="hint" Text="Get-by-name lists the databases and filters locally, because D1 has no lookup-by-name endpoint." />
+          </StackPanel>
+        </Border>
+
+        <Border Classes="card">
+          <StackPanel Orientation="Vertical" Spacing="10">
+            <TextBlock Classes="h2" Text="Query  -  POST /accounts/{account_id}/d1/database/{database_id}/query" />
+            <TextBlock Classes="hint" Text="SQL statement" />
+            <TextBox Text="{Binding Sql, Mode=TwoWay}" AcceptsReturn="True" Height="90"
+                     FontFamily="Cascadia Mono,Consolas,Menlo,DejaVu Sans Mono,monospace" FontSize="12" />
+            <TextBlock Classes="hint" Text="Bound parameters (JSON array, matched to ? in order)" />
+            <TextBox Text="{Binding ParametersJson, Mode=TwoWay}" AcceptsReturn="True" Height="60"
+                     FontFamily="Cascadia Mono,Consolas,Menlo,DejaVu Sans Mono,monospace" FontSize="12"
+                     Watermark='["alpha", 2]' />
+            <Button Classes="run" Content="Run query" Command="{Binding QueryCommand}" />
+            <TextBlock Classes="hint" Text="The body is {sql, params} - there is no 'action' field, which older unofficial clients send and Cloudflare rejects." />
+          </StackPanel>
+        </Border>
+
+        <Border Classes="card">
+          <StackPanel Orientation="Vertical" Spacing="10">
+            <TextBlock Classes="h2" Text="Batch (transactional)" />
+            <TextBlock Classes="hint" Text="JSON array of statements" />
+            <TextBox Text="{Binding BatchJson, Mode=TwoWay}" AcceptsReturn="True" Height="110"
+                     FontFamily="Cascadia Mono,Consolas,Menlo,DejaVu Sans Mono,monospace" FontSize="12"
+                     Watermark='[{"sql":"CREATE TABLE t (id INTEGER)"},{"sql":"INSERT INTO t VALUES (?)","params":[1]}]' />
+            <Button Classes="run" Content="Run batch" Command="{Binding BatchCommand}" />
+          </StackPanel>
+        </Border>
+
+        <Border Classes="card">
+          <StackPanel Orientation="Vertical" Spacing="10">
+            <TextBlock Classes="h2" Text="Backups  -  /accounts/{account_id}/d1/database/{database_id}/backup" />
+            <StackPanel Orientation="Horizontal" Spacing="10">
+              <TextBlock Text="Backup id" Width="140" VerticalAlignment="Center" />
+              <TextBox Text="{Binding BackupId, Mode=TwoWay}" MinWidth="380" />
+            </StackPanel>
+            <WrapPanel Orientation="Horizontal">
+              <Button Classes="run" Content="List backups" Command="{Binding ListBackupsCommand}" Margin="0,0,8,0" />
+              <Button Content="Get backup" Command="{Binding GetBackupCommand}" Margin="0,0,8,0" />
+              <Button Content="Restore backup" Command="{Binding RestoreBackupCommand}" />
+            </WrapPanel>
+            <TextBlock Classes="hint" Text="Restoring replaces the live database with the snapshot - it is not undoable." />
+          </StackPanel>
+        </Border>
+
+      </StackPanel>
+    </ScrollViewer>
+
+  </DockPanel>
+
+</UserControl>

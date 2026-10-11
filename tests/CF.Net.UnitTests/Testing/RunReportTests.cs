@@ -25,6 +25,19 @@ public class RunReportTests
     }
 
     [Fact]
+    public void Format_collapses_a_wrapped_reason_onto_one_readable_line()
+    {
+        var line = RunReport.Format(new RunReportEntry(
+            RunReportOutcome.Info,
+            "  GET   /zones?per_page=5  ",
+            "200" + Environment.NewLine + "OK"));
+
+        // Tabs and newlines would corrupt the file, and a run of spaces would make the CI table hard
+        // to read, so every run of whitespace becomes exactly one space and the ends are trimmed.
+        Assert.Equal(string.Join(RunReport.Separator, "INFO", "GET /zones?per_page=5", "200 OK"), line);
+    }
+
+    [Fact]
     public void Parse_reads_back_what_Format_wrote()
     {
         var entries = new[]

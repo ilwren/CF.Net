@@ -196,6 +196,15 @@ public abstract class CloudflareIntegrationTest : IDisposable
             options.MaxRetries = 1;
             options.RetryBaseDelay = TimeSpan.FromMilliseconds(250);
             options.Timeout = TimeSpan.FromSeconds(30);
+
+            // Every response also lands in the run report, which makes the CI summary an audit trail
+            // of what this run did to the account - and of what a cassette captured. Only the method,
+            // path, query and status are written; credentials live in headers, never here.
+            options.InspectResponse += response =>
+                RunReport.Record(
+                    RunReportOutcome.Info,
+                    $"{response.RequestMessage?.Method} {response.RequestMessage?.RequestUri?.PathAndQuery}",
+                    $"{(int)response.StatusCode} {response.ReasonPhrase}");
         };
 
         var recorder = IntegrationCassette.Handler;

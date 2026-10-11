@@ -33,6 +33,10 @@ on:
         description: 'Commit the recorded cassette back to this branch'
         type: boolean
         default: false
+      filter:
+        description: "Narrow the run, e.g. FullyQualifiedName~R2 (always combined with Category=Integration)"
+        type: string
+        default: ''
   schedule:
     # Mondays at 04:00 UTC - read-only, so it can run unattended.
     - cron: '0 4 * * 1'
@@ -171,14 +175,26 @@ jobs:
 
       - name: Run integration tests
         if: steps.credentials.outputs.available == 'true'
-        run: >-
-          dotnet test tests/CF.Net.IntegrationTests/CF.Net.IntegrationTests.csproj
-          --configuration ${{ env.CONFIGURATION }}
-          --no-restore
-          --filter "Category=Integration"
-          --logger "trx;LogFileName=integration.trx"
-          --logger "console;verbosity=detailed"
-          --results-directory TestResults
+        shell: bash
+        env:
+          # Passed through the environment rather than interpolated into the script, so a dispatch
+          # input can never become shell.
+          EXTRA_FILTER: ${{ inputs.filter }}
+        run: |
+          set -o pipefail
+          filter="Category=Integration"
+          if [ -n "${EXTRA_FILTER:-}" ]; then
+            filter="Category=Integration&${EXTRA_FILTER}"
+          fi
+          echo "Filter: $filter"
+
+          dotnet test tests/CF.Net.IntegrationTests/CF.Net.IntegrationTests.csproj \
+            --configuration "$CONFIGURATION" \
+            --no-restore \
+            --filter "$filter" \
+            --logger "trx;LogFileName=integration.trx" \
+            --logger "console;verbosity=detailed" \
+            --results-directory TestResults
 
       - name: Skipped
         if: steps.credentials.outputs.available != 'true'
@@ -217,13 +233,18 @@ jobs:
                       failures.append((result.get('testName') or '?', message))
 
           skipped = []
+          calls = []
           report = os.environ.get('CLOUDFLARE_IT_REPORT')
           if report and os.path.exists(report):
               with open(report, encoding='utf-8') as handle:
                   for line in handle.read().splitlines():
-                      fields = line.split('\t')
-                      if len(fields) >= 3 and fields[0].upper() == 'SKIPPED':
+                      fields = line.split(chr(9))
+                      if len(fields) < 3:
+                          continue
+                      if fields[0].upper() == 'SKIPPED':
                           skipped.append((fields[1], fields[2]))
+                      elif fields[0].upper() == 'INFO':
+                          calls.append((fields[1], fields[2]))
 
           lines = ['### Cloudflare integration run', '']
           if total == 0:
@@ -244,6 +265,17 @@ jobs:
                   '', '</details>', '',
                   'These are reported as passing, which is why the job can be green without having verified anything.',
                   'Add the matching secret - or set the switch named in the reason - to make them run for real.', '']
+
+          if calls:
+              shown = calls[:200]
+              lines += [
+                  f'<details><summary>{len(calls)} Cloudflare call(s) this run made</summary>',
+                  '', '| Call | Result |', '| --- | --- |']
+              for call, result in shown:
+                  lines.append(f'| `{cell(call)}` | {cell(result)} |')
+              if len(calls) > len(shown):
+                  lines.append(f'| ... and {len(calls) - len(shown)} more | |')
+              lines += ['', '</details>', '']
 
           if failures:
               lines += [f'<details open><summary>{len(failures)} failing test(s)</summary>', '']

@@ -156,8 +156,13 @@ public static class RunReport
     }
 
     /// <summary>Removes the characters that would break the one-line-per-entry contract.</summary>
+    /// <remarks>
+    /// Every run of whitespace - a tab, a wrapped message's <c>\r\n</c>, a paragraph break - becomes
+    /// a single space, and the ends are trimmed. A field can therefore never introduce a separator or
+    /// a second line, and the same text always renders the same way.
+    /// </remarks>
     /// <param name="value">The raw text.</param>
-    /// <returns>The text with separators and line breaks replaced by spaces.</returns>
+    /// <returns>The text collapsed onto one line.</returns>
     private static string OneLine(string? value)
     {
         if (string.IsNullOrEmpty(value))
@@ -165,6 +170,29 @@ public static class RunReport
             return string.Empty;
         }
 
-        return value.Replace('\t', ' ').Replace('\r', ' ').Replace('\n', ' ').Trim();
+        var builder = new StringBuilder(value.Length);
+        var pendingSpace = false;
+        foreach (var character in value)
+        {
+            if (char.IsWhiteSpace(character))
+            {
+                // A run of whitespace collapses to a single space, and leading whitespace is dropped
+                // because nothing has been appended yet.
+                pendingSpace = builder.Length > 0;
+                continue;
+            }
+
+            if (pendingSpace)
+            {
+                builder.Append(' ');
+                pendingSpace = false;
+            }
+
+            builder.Append(character);
+        }
+
+        // Trailing whitespace never reaches the builder: a pending space is only written when a
+        // further character follows it.
+        return builder.ToString();
     }
 }

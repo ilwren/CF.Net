@@ -396,3 +396,79 @@ public class CassetteTests
         }
     }
 }
+
+/// <summary>
+/// A replay has to rebuild the URLs the recording contains, and the account and zone ids are part of
+/// them. Neither is a secret, so recovering both from the cassette is what makes an offline replay
+/// zero-configuration: no credentials, and no ids to export either.
+/// </summary>
+public class CassetteContextTests
+{
+    private const string Account = "023e105f4ecef8ad9ca31a8372d0c353";
+    private const string Zone = "8d0c8239f88f98a8cb82ec7bb29b8556";
+    private const string Record = "372e67954025e0ba6aaa6d586b9e0b59";
+
+    private static Cassette CassetteWith(params string[] paths)
+    {
+        var cassette = new Cassette("snapshot", CloudflareDefaults.BaseAddress);
+        foreach (var path in paths)
+        {
+            cassette.Exchanges.Add(new RecordedExchange
+            {
+                Name = path,
+                Method = "GET",
+                PathAndQuery = path,
+                StatusCode = 200,
+                ResponseContentType = "application/json",
+                ResponseBody = "{\"success\":true,\"errors\":[],\"messages\":[],\"result\":null}",
+            });
+        }
+
+        return cassette;
+    }
+
+    [Fact]
+    public void Account_and_zone_ids_come_out_of_the_recorded_paths()
+    {
+        var cassette = CassetteWith(
+            "/client/v4/user/tokens/verify",
+            "/client/v4/zones?page=1&per_page=20",
+            $"/client/v4/zones/{Zone}/dns_records/{Record}",
+            $"/client/v4/accounts/{Account}/workers/scripts",
+            $"/client/v4/accounts/{Account}/storage/kv/namespaces");
+
+        Assert.Equal(Account, CassetteContext.DeriveAccountId(cassette));
+        Assert.Equal(Zone, CassetteContext.DeriveZoneId(cassette));
+    }
+
+    [Fact]
+    public void A_list_endpoint_carries_no_id_and_is_not_mistaken_for_one()
+    {
+        var cassette = CassetteWith(
+            "/client/v4/zones?page=1&per_page=20",
+            "/client/v4/accounts?page=1&per_page=20");
+
+        Assert.Null(CassetteContext.DeriveZoneId(cassette));
+        Assert.Null(CassetteContext.DeriveAccountId(cassette));
+    }
+
+    [Fact]
+    public void Derive_returns_both_at_once()
+    {
+        var derived = CassetteContext.Derive(CassetteWith(
+            $"/client/v4/accounts/{Account}/r2/buckets",
+            $"/client/v4/zones/{Zone}"));
+
+        Assert.Equal(Account, derived.AccountId);
+        Assert.Equal(Zone, derived.ZoneId);
+    }
+
+    [Fact]
+    public void Nothing_is_invented_when_there_is_nothing_to_read()
+    {
+        Assert.Null(CassetteContext.DeriveAccountId(null));
+        Assert.Null(CassetteContext.DeriveZoneId(null));
+        Assert.Null(CassetteContext.DeriveAccountId(new Cassette("empty")));
+        Assert.Null(CassetteContext.DeriveZoneId(CassetteWith("/client/v4/user")));
+    }
+}

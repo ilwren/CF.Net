@@ -286,9 +286,11 @@ Three layers sit behind that one command:
 | Cassettes | `tests/CF.Net.TestKit` + `tests/cassettes` | recorded once against the real API, replayed offline forever after |
 
 The cassette layer is the bridge between the other two. Record one genuine run, commit the redacted
-transcript, and `CassetteTests` then binds **real Cloudflare payloads** to the typed models on every
-pull request — no credentials, no network, no quota. Replay runs over a handler that throws if
-anything tries to escape, so a missing recording fails loudly instead of quietly going online. See
+transcript, and from then on every push and pull request replays it two ways: `CassetteTests` binds
+**real Cloudflare payloads** to the typed models, and *Replay committed cassettes (offline)* in
+`ci.yml` runs the **real integration suite** against the recording — real service code, real URLs, no
+credentials, no network, no quota. Replay runs over a handler that throws if anything tries to escape,
+so a missing recording fails loudly with `CassetteMissException` instead of quietly going online. See
 [docs/integration-testing.md](docs/integration-testing.md#6-recording-a-cassette).
 
 ---

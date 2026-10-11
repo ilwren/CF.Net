@@ -98,6 +98,37 @@ jobs:
           dotnet build tests/CF.Net.IntegrationTests/CF.Net.IntegrationTests.csproj \
             --configuration "$CONFIGURATION" 2>&1 | tee "$RUNNER_TEMP/ci-logs/50-build-integration.log"
 
+      # A committed cassette is genuine Cloudflare traffic. Replaying it runs the real integration
+      # suite - URL building, headers, envelope parsing, error mapping - with no credentials and no
+      # network, so a payload that stops matching the typed models fails here instead of in somebody's
+      # production code. Write lifecycles are excluded on purpose: their assertions compare the names
+      # this run generated with the names the recording used, which cannot line up.
+      - name: Replay committed cassettes (offline)
+        if: matrix.os == 'ubuntu-latest'
+        shell: bash
+        run: |
+          set -o pipefail
+          shopt -s nullglob
+          cassettes=(tests/cassettes/*.json)
+          if [ ${#cassettes[@]} -eq 0 ]; then
+            echo "No cassettes committed yet, so there is nothing to replay."
+            echo "Record one with the Integration workflow's cassette input - see docs/integration-testing.md."
+            exit 0
+          fi
+
+          for cassette in "${cassettes[@]}"; do
+            name="$(basename "$cassette" .json)"
+            echo "::group::Replaying $name"
+            CLOUDFLARE_IT_CASSETTE="$name" CLOUDFLARE_IT_RECORD=replay \
+              dotnet test tests/CF.Net.IntegrationTests/CF.Net.IntegrationTests.csproj \
+              --configuration "$CONFIGURATION" --no-build --no-restore \
+              --filter "Category=Integration&ClassName~ReadOnly" \
+              --logger "trx;LogFileName=replay-$name.trx" \
+              --logger "console;verbosity=detailed" \
+              --results-directory TestResults 2>&1 | tee "$RUNNER_TEMP/ci-logs/55-replay-$name.log"
+            echo "::endgroup::"
+          done
+
       - name: Pack
         if: matrix.os == 'ubuntu-latest'
         shell: bash

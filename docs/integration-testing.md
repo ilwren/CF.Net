@@ -28,7 +28,7 @@ what the tests do once they have them.
 | `CLOUDFLARE_ZONE_ID` | DNS records, cache purge | |
 | `CLOUDFLARE_IT_ENABLE_WRITES` | the lifecycle tests | must be exactly `true` |
 | `CLOUDFLARE_IT_CASSETTE` | recording | name of the cassette file to write, see [section 6](#6-recording-a-cassette) |
-| `CLOUDFLARE_IT_RECORD` | recording | `true`/`record`/`1`; implied when a cassette name is given |
+| `CLOUDFLARE_IT_RECORD` | recording and replay | `true`/`record`/`1` records (implied by a cassette name); `replay` answers from the committed cassette instead of calling Cloudflare |
 | `CLOUDFLARE_IT_REPORT` | nothing — reporting only | path of a file that collects one line per skipped test, for the CI summary; unset writes nothing anywhere |
 
 These are the same variables `CloudflareClientOptions.FromEnvironment()` reads, and the same ones
@@ -402,6 +402,36 @@ the diff before committing, and do not record from an account you would not publ
 In GitHub Actions, run the **Integration** workflow manually and fill in the `cassette` input. The
 file is attached as the `cassette-<name>` artifact; with `commit_cassette` ticked, the workflow
 commits it back to the branch it ran on.
+
+### Replaying a cassette offline
+
+Once a cassette is committed, the **integration suite itself** can run against it — no credentials, no
+network, no quota:
+
+```bash
+CLOUDFLARE_IT_CASSETTE=readonly-smoke CLOUDFLARE_IT_RECORD=replay \
+  dotnet test tests/CF.Net.IntegrationTests \
+  --filter "Category=Integration&ClassName~ReadOnly" --logger "console;verbosity=detailed"
+```
+
+Three things make that work:
+
+* **The token is invented.** A replay authenticates against nothing, so the fixture substitutes a
+  placeholder for `CLOUDFLARE_API_TOKEN`. Every credential header was redacted on the way in anyway.
+* **The account and zone ids are recovered from the recording.** They are part of the URLs the match
+  key is built from, so they cannot be invented — but they are not secrets either, and
+  `CFNet.TestKit.CassetteContext` reads them straight back out of the recorded paths. Export them
+  yourself and your values win.
+* **Write lifecycles stay out.** `WriteIntegrationTests` generates a fresh resource name on every run
+  and asserts that the response echoes it, which a recording cannot do. A replay therefore ignores
+  `CLOUDFLARE_IT_ENABLE_WRITES`, and those tests skip with that explanation.
+
+`.github/workflows/ci.yml` does exactly this for **every** cassette in `tests/cassettes/`, on every
+push and pull request, in a step called *Replay committed cassettes (offline)*. That is the strongest
+form of the guarantee this repository can give: real service code, real URLs, real Cloudflare
+payloads, verified in CI without a single secret. A `CassetteMissException` there means the client now
+asks Cloudflare something the recording never asked — drift you want to hear about, fixed by
+re-recording.
 
 ---
 

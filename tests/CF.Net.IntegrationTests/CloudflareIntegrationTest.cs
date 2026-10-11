@@ -55,15 +55,41 @@ public abstract class CloudflareIntegrationTest : IDisposable
         _localFile = LocalCredentials.Load();
         _environment = Lookup;
 
-        ApiToken = Lookup(CloudflareDefaults.EnvironmentVariables.ApiToken);
-        GlobalApiKey = Lookup(CloudflareDefaults.EnvironmentVariables.GlobalApiKey);
-        ApiEmail = Lookup(CloudflareDefaults.EnvironmentVariables.ApiEmail);
-        AccountId = Lookup(CloudflareDefaults.EnvironmentVariables.AccountId);
-        ZoneId = Lookup(CloudflareDefaults.EnvironmentVariables.ZoneId);
-        WritesEnabled = IsTrue(Lookup("CLOUDFLARE_IT_ENABLE_WRITES"));
-        CredentialSource = _localFile.Count > 0 && Environment.GetEnvironmentVariable(CloudflareDefaults.EnvironmentVariables.ApiToken) is null
+        var apiToken = Lookup(CloudflareDefaults.EnvironmentVariables.ApiToken);
+        var globalApiKey = Lookup(CloudflareDefaults.EnvironmentVariables.GlobalApiKey);
+        var apiEmail = Lookup(CloudflareDefaults.EnvironmentVariables.ApiEmail);
+        var accountId = Lookup(CloudflareDefaults.EnvironmentVariables.AccountId);
+        var zoneId = Lookup(CloudflareDefaults.EnvironmentVariables.ZoneId);
+        var writes = IsTrue(Lookup("CLOUDFLARE_IT_ENABLE_WRITES"));
+        var source = _localFile.Count > 0 && Environment.GetEnvironmentVariable(CloudflareDefaults.EnvironmentVariables.ApiToken) is null
             ? "credentials.local.json"
             : "environment";
+
+        if (IsReplay)
+        {
+            // A replay authenticates against nothing, so the secret half of the credentials can be
+            // invented - which is exactly what lets the suite run with no credentials configured at
+            // all. The account and zone ids cannot be invented: they are part of the recorded URLs
+            // the match key is built from, so when they were not exported they are recovered from the
+            // recording itself.
+            var cassette = IntegrationCassette.ReplayCassette;
+            apiToken ??= ReplayApiToken;
+            accountId = FirstSet(accountId, CassetteContext.DeriveAccountId(cassette));
+            zoneId = FirstSet(zoneId, CassetteContext.DeriveZoneId(cassette));
+
+            // A create/delete lifecycle cannot be replayed faithfully: the recorded response belongs
+            // to the names the recording happened to use, not to the ones this run would generate.
+            writes = false;
+            source = $"cassette replay ({cassette?.Name ?? "unnamed"})";
+        }
+
+        ApiToken = apiToken;
+        GlobalApiKey = globalApiKey;
+        ApiEmail = apiEmail;
+        AccountId = accountId;
+        ZoneId = zoneId;
+        WritesEnabled = writes;
+        CredentialSource = source;
     }
 
     /// <summary>xunit output sink.</summary>
@@ -152,7 +178,12 @@ public abstract class CloudflareIntegrationTest : IDisposable
     /// <summary>Ends the test early unless destructive operations were explicitly allowed.</summary>
     /// <param name="test">Filled in by the compiler; used to label the run report.</param>
     protected bool SkipWithoutWritePermission([CallerMemberName] string? test = null) =>
-        SkipUnless(WritesEnabled, "CLOUDFLARE_IT_ENABLE_WRITES is not 'true'.", test);
+        SkipUnless(
+            WritesEnabled,
+            IsReplay
+                ? "this run replays a cassette, and a create/delete lifecycle cannot be replayed faithfully: the recorded responses belong to the names the recording used."
+                : "CLOUDFLARE_IT_ENABLE_WRITES is not 'true'.",
+            test);
 
     /// <summary>A unique suffix so parallel or repeated runs never collide.</summary>
     protected static string UniqueSuffix(string prefix) =>
@@ -160,6 +191,21 @@ public abstract class CloudflareIntegrationTest : IDisposable
 
     /// <summary>Logs a Cloudflare call and its outcome, so a failing run shows the CF-RAY to quote.</summary>
     protected void Log(string message) => Output.WriteLine(message);
+
+    /// <summary>True when this run answers from a recorded cassette instead of calling Cloudflare.</summary>
+    protected bool IsReplay => IntegrationCassette.Mode == CassetteMode.Replay;
+
+    /// <summary>
+    /// The stand-in token used while replaying. Nothing ever validates it: the cassette handler
+    /// answers every call before a socket could be opened.
+    /// </summary>
+    private const string ReplayApiToken = "replay-only-not-a-credential";
+
+    /// <summary>Prefers a value that was configured over one recovered from a cassette.</summary>
+    /// <param name="preferred">What the environment or the local file supplied.</param>
+    /// <param name="fallback">What the recording implies.</param>
+    private static string? FirstSet(string? preferred, string? fallback) =>
+        string.IsNullOrWhiteSpace(preferred) ? fallback : preferred;
 
     /// <summary>Looks one setting up: environment variable first, then the local credentials file.</summary>
     /// <param name="name">The environment variable name, e.g. <c>CLOUDFLARE_API_TOKEN</c>.</param>
@@ -357,8 +403,12 @@ internal static class IntegrationCassette
     private static Cassette? _cassette;
     private static string? _name;
     private static bool _flushHooked;
+    private static CassetteMode _mode = CassetteMode.Passthrough;
 
-    /// <summary>The shared recorder, or <see langword="null"/> when this run is not recording.</summary>
+    /// <summary>
+    /// The shared handler: a recorder when this run is recording, a replayer when it is answering from
+    /// a committed cassette, and <see langword="null"/> when it should talk to Cloudflare directly.
+    /// </summary>
     public static CassetteHandler? Handler
     {
         get
@@ -369,6 +419,25 @@ internal static class IntegrationCassette
             }
         }
     }
+
+    /// <summary>
+    /// What this run is doing with a cassette. Reading it initialises the shared handler, so the
+    /// fixture can ask before it has built a client.
+    /// </summary>
+    public static CassetteMode Mode
+    {
+        get
+        {
+            lock (Gate)
+            {
+                _ = _handler ??= TryCreate();
+                return _mode;
+            }
+        }
+    }
+
+    /// <summary>The cassette being replayed, or <see langword="null"/> when this run is not replaying.</summary>
+    public static Cassette? ReplayCassette => Mode == CassetteMode.Replay ? _cassette : null;
 
     private static CassetteHandler? TryCreate()
     {
@@ -385,12 +454,18 @@ internal static class IntegrationCassette
             mode = CassetteMode.Record;
         }
 
-        if (mode != CassetteMode.Record)
+        _name = name.Trim();
+
+        if (mode == CassetteMode.Replay)
         {
-            return null;
+            // Answer from the recording and never open a socket. A cassette that is missing or empty
+            // still installs the handler, so every call fails with CassetteMissException rather than
+            // quietly falling back to the live API.
+            _cassette = LoadOrEmpty(_name);
+            _mode = CassetteMode.Replay;
+            return CassetteHandler.Replaying(_cassette);
         }
 
-        _name = name.Trim();
         _cassette = new Cassette(_name, CloudflareDefaults.BaseAddress);
         _cassette.LibraryVersion = typeof(CloudflareClient).Assembly.GetName().Version?.ToString();
 
@@ -400,7 +475,18 @@ internal static class IntegrationCassette
             AppDomain.CurrentDomain.ProcessExit += (_, _) => FlushCore();
         }
 
+        _mode = CassetteMode.Record;
         return new CassetteHandler(_cassette, CassetteMode.Record);
+    }
+
+    /// <summary>
+    /// Loads the cassette to replay, falling back to an empty one. An empty cassette answers nothing,
+    /// so a wrong name surfaces as <see cref="CassetteMissException"/> on the first call.
+    /// </summary>
+    private static Cassette LoadOrEmpty(string name)
+    {
+        var path = RepoPaths.CassettePath(name);
+        return File.Exists(path) ? Cassette.Load(path) : new Cassette(name, CloudflareDefaults.BaseAddress);
     }
 
     /// <summary>Merges what has been recorded so far into the cassette file.</summary>

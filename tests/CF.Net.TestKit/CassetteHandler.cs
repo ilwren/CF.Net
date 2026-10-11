@@ -25,8 +25,10 @@ namespace CFNet.TestKit;
 /// <code>
 /// // Record (credentials required, one authenticated run)
 /// var cassette = new Cassette("zones-list", CloudflareDefaults.BaseAddress);
+/// var recorder = CassetteHandler.Recording(cassette);
 /// services.AddCloudflareHttpClient(options => options.ApiToken = token,
-///     configureClient: builder => builder.AddHttpMessageHandler(() => CassetteHandler.Recording(cassette)));
+///     // One recorder for the whole run, handed to each pipeline through a forwarder.
+///     configureClient: builder => builder.AddHttpMessageHandler(() => new CassetteForwarder(recorder)));
 /// ...
 /// cassette.Save(RepoPaths.CassettePath("zones-list"));
 ///
@@ -327,5 +329,52 @@ public sealed class CassetteHandler : DelegatingHandler
             CancellationToken cancellationToken) =>
             throw new InvalidOperationException(
                 $"A cassette replay tried to call {request.RequestUri}. The cassette is missing an entry and the handler refuses to fall back to the network.");
+    }
+}
+
+/// <summary>
+/// Hands one shared <see cref="CassetteHandler"/> to any number of <c>IHttpClientFactory</c>
+/// pipelines.
+/// </summary>
+/// <remarks>
+/// <para>
+/// A recording run deliberately shares one handler: one run should produce one cassette, so every
+/// client in the process has to write into the same instance. <c>AddHttpMessageHandler</c> does not
+/// allow that, because building a pipeline assigns <see cref="DelegatingHandler.InnerHandler"/> and
+/// that property can only be assigned once - the first client works and the second throws
+/// <c>The inner handler has already been assigned</c>.
+/// </para>
+/// <para>
+/// This wrapper is the way out: each pipeline gets a forwarder of its own, whose inner handler the
+/// factory may assign and then ignore, and every forwarder calls the same shared handler through an
+/// invoker that does not own it. Disposing a forwarder therefore never disposes the recorder.
+/// </para>
+/// </remarks>
+public sealed class CassetteForwarder : DelegatingHandler
+{
+    private readonly HttpMessageInvoker _invoker;
+
+    /// <summary>Wraps a shared handler so several pipelines can use it.</summary>
+    /// <param name="shared">The handler that does the work. It is not disposed by this instance.</param>
+    public CassetteForwarder(HttpMessageHandler shared)
+    {
+        ArgumentNullException.ThrowIfNull(shared);
+        _invoker = new HttpMessageInvoker(shared, disposeHandler: false);
+    }
+
+    /// <inheritdoc />
+    protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken) =>
+        _invoker.SendAsync(request, cancellationToken);
+
+    /// <inheritdoc />
+    protected override void Dispose(bool disposing)
+    {
+        if (disposing)
+        {
+            // The shared handler outlives every pipeline that borrowed it.
+            _invoker.Dispose();
+        }
+
+        base.Dispose(disposing);
     }
 }

@@ -256,9 +256,12 @@ public abstract class CloudflareIntegrationTest : IDisposable
         var recorder = IntegrationCassette.Handler;
         if (recorder is not null)
         {
+            // One recorder is shared by every client this process builds, because one run should
+            // produce one cassette. A DelegatingHandler cannot be chained into two pipelines - its
+            // InnerHandler may only be assigned once - so each pipeline gets a forwarder instead.
             services.AddCloudflareHttpClient(
                 configureOptions: configure,
-                configureClient: builder => builder.AddHttpMessageHandler(() => recorder));
+                configureClient: builder => builder.AddHttpMessageHandler(() => new CassetteForwarder(recorder)));
         }
         else
         {

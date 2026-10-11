@@ -129,6 +129,71 @@ jobs:
             echo "::endgroup::"
           done
 
+      # Proves the replay plumbing itself on every pull request, while tests/cassettes is still
+      # empty: a synthetic recording is written, two credential-only integration tests are replayed
+      # against it, and the file is deleted again. Nothing synthetic is ever committed - a real
+      # cassette is recorded by the Integration workflow, against a real account.
+      - name: Replay plumbing smoke test (synthetic, not committed)
+        if: matrix.os == 'ubuntu-latest'
+        shell: bash
+        run: |
+          set -o pipefail
+          PY=$(command -v python3 || command -v python || true)
+          if [ -z "$PY" ]; then echo "no python; skipping the replay smoke test"; exit 0; fi
+
+          cassette=tests/cassettes/_replay-smoke.json
+          trap 'rm -f "$cassette"' EXIT
+
+          "$PY" - "$cassette" <<'PY'
+          import json, sys
+
+          def envelope(result):
+              return json.dumps({'success': True, 'errors': [], 'messages': [], 'result': result})
+
+          def exchange(name, path, result, ray):
+              return {
+                  'name': name,
+                  'method': 'GET',
+                  'pathAndQuery': path,
+                  'requestHeaders': {'Authorization': '<redacted>'},
+                  'statusCode': 200,
+                  'responseHeaders': {'CF-RAY': ray},
+                  'responseContentType': 'application/json',
+                  'responseBody': envelope(result),
+                  'recordedAt': '2026-01-01T00:00:00Z',
+              }
+
+          cassette = {
+              'name': '_replay-smoke',
+              'baseUrl': 'https://api.cloudflare.com/client/v4/',
+              'recordedAt': '2026-01-01T00:00:00Z',
+              'libraryVersion': '0.1.0',
+              'exchanges': [
+                  exchange('A_token_can_be_verified_directly', '/client/v4/user/tokens/verify',
+                           {'id': 'f0e1d2c3b4a5968778695a4b3c2d1e0f', 'status': 'active'},
+                           '0000000000000000-SMOKE'),
+                  exchange('The_authenticated_user_can_be_read', '/client/v4/user',
+                           {'id': 'a1b2c3d4e5f60718293a4b5c6d7e8f90', 'email': 'smoke@example.com',
+                            'username': 'smoke'},
+                           '0000000000000001-SMOKE'),
+              ],
+          }
+
+          with open(sys.argv[1], 'w', encoding='utf-8') as handle:
+              json.dump(cassette, handle, indent=2)
+          print('wrote a synthetic cassette with', len(cassette['exchanges']), 'exchanges')
+          PY
+
+          # Both tests only need credentials to exist, which is exactly what a replay invents. The
+          # account and zone ids are absent here, so nothing account-scoped can be attempted.
+          CLOUDFLARE_IT_CASSETTE=_replay-smoke CLOUDFLARE_IT_RECORD=replay \
+            dotnet test tests/CF.Net.IntegrationTests/CF.Net.IntegrationTests.csproj \
+            --configuration "$CONFIGURATION" --no-build --no-restore \
+            --filter "Category=Integration&FullyQualifiedName~A_token_can_be_verified_directly|FullyQualifiedName~The_authenticated_user_can_be_read" \
+            --logger "trx;LogFileName=replay-smoke.trx" \
+            --logger "console;verbosity=detailed" \
+            --results-directory TestResults 2>&1 | tee "$RUNNER_TEMP/ci-logs/56-replay-smoke.log"
+
       - name: Pack
         if: matrix.os == 'ubuntu-latest'
         shell: bash

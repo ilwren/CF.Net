@@ -385,7 +385,10 @@ dotnet test tests/CF.Net.IntegrationTests --filter "Category=Integration"
 
 The recorder is `CFNet.TestKit.CassetteHandler`, a `DelegatingHandler` dropped into the
 `IHttpClientFactory` pipeline. It is shared across every test in the run, so one file collects the
-whole transcript, and it merges into an existing cassette rather than truncating it.
+whole transcript — and a replay consumes a recording in the order it was made — and it merges into an
+existing cassette rather than truncating it. Sharing a `DelegatingHandler` between factory pipelines
+is not allowed (its `InnerHandler` can only be assigned once), so each client is handed a
+`CassetteForwarder` around the one shared recorder.
 
 Two things it guarantees:
 

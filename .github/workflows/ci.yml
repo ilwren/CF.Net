@@ -4,12 +4,14 @@ on:
   push:
     branches:
       - main
-      - 'arena/**'
   pull_request:
   workflow_dispatch:
 
 permissions:
   contents: read
+  # Needed by the "Report failures" step, which posts the compiler output to the pull request:
+  # log downloads are awkward to reach from restricted environments, a PR comment is not.
+  pull-requests: write
 
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
@@ -20,6 +22,8 @@ env:
   DOTNET_CLI_TELEMETRY_OPTOUT: true
   DOTNET_SKIP_FIRST_TIME_EXPERIENCE: true
   CONFIGURATION: Release
+  # Force the culture so compiler messages are greppable in English.
+  DOTNET_CLI_UI_LANGUAGE: en-US
 
 jobs:
   build:
@@ -44,45 +48,83 @@ jobs:
             10.0.x
 
       - name: Show SDKs
-        run: dotnet --info
+        shell: bash
+        run: |
+          dotnet --info || true
+          echo "logs=$RUNNER_TEMP/ci-logs" >> "$GITHUB_ENV"
 
       - name: Restore
-        run: dotnet restore CF.Net.sln
+        shell: bash
+        run: |
+          mkdir -p "$RUNNER_TEMP/ci-logs"
+          set -o pipefail
+          dotnet restore CF.Net.sln 2>&1 | tee "$RUNNER_TEMP/ci-logs/10-restore.log"
 
       - name: Build
-        run: dotnet build CF.Net.sln --configuration ${{ env.CONFIGURATION }} --no-restore
+        shell: bash
+        run: |
+          set -o pipefail
+          dotnet build CF.Net.sln --configuration "$CONFIGURATION" --no-restore 2>&1 \
+            | tee "$RUNNER_TEMP/ci-logs/20-build.log"
 
       - name: Unit tests (net8.0)
-        run: >-
-          dotnet test tests/CF.Net.UnitTests/CF.Net.UnitTests.csproj
-          --configuration ${{ env.CONFIGURATION }}
-          --no-build
-          --framework net8.0
-          --filter "Category!=Integration"
-          --logger "trx;LogFileName=unit-net8.0.trx"
-          --results-directory TestResults
+        shell: bash
+        run: |
+          set -o pipefail
+          dotnet test tests/CF.Net.UnitTests/CF.Net.UnitTests.csproj \
+            --configuration "$CONFIGURATION" --no-build --framework net8.0 \
+            --filter "Category!=Integration" \
+            --logger "trx;LogFileName=unit-net8.0.trx" --results-directory TestResults 2>&1 \
+            | tee "$RUNNER_TEMP/ci-logs/30-test-net8.log"
 
       - name: Unit tests (net10.0)
-        run: >-
-          dotnet test tests/CF.Net.UnitTests/CF.Net.UnitTests.csproj
-          --configuration ${{ env.CONFIGURATION }}
-          --no-build
-          --framework net10.0
-          --filter "Category!=Integration"
-          --logger "trx;LogFileName=unit-net10.0.trx"
-          --results-directory TestResults
+        shell: bash
+        run: |
+          set -o pipefail
+          dotnet test tests/CF.Net.UnitTests/CF.Net.UnitTests.csproj \
+            --configuration "$CONFIGURATION" --no-build --framework net10.0 \
+            --filter "Category!=Integration" \
+            --logger "trx;LogFileName=unit-net10.0.trx" --results-directory TestResults 2>&1 \
+            | tee "$RUNNER_TEMP/ci-logs/40-test-net10.log"
 
-      # The integration project builds against the real API, so CI only proves that it compiles.
+      # The integration project talks to the real API, so CI only proves that it compiles.
       # .github/workflows/integration.yml is what actually runs it.
       - name: Build integration tests (compile only)
-        run: >-
-          dotnet build tests/CF.Net.IntegrationTests/CF.Net.IntegrationTests.csproj
-          --configuration ${{ env.CONFIGURATION }}
-          --no-restore
+        shell: bash
+        run: |
+          set -o pipefail
+          dotnet build tests/CF.Net.IntegrationTests/CF.Net.IntegrationTests.csproj \
+            --configuration "$CONFIGURATION" 2>&1 | tee "$RUNNER_TEMP/ci-logs/50-build-integration.log"
 
       - name: Pack
         if: matrix.os == 'ubuntu-latest'
-        run: dotnet pack src/CF.Net/CF.Net.csproj --configuration ${{ env.CONFIGURATION }} --no-build --output artifacts
+        shell: bash
+        run: |
+          set -o pipefail
+          dotnet pack src/CF.Net/CF.Net.csproj --configuration "$CONFIGURATION" --no-build --output artifacts 2>&1 \
+            | tee "$RUNNER_TEMP/ci-logs/60-pack.log"
+
+      - name: Report failures
+        if: failure() && github.event_name == 'pull_request'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          {
+            echo '### CI failure on `${{ matrix.os }}`'
+            echo
+            echo '<details><summary>Compiler / restore / test output</summary>'
+            echo
+            echo '```'
+            cat "$RUNNER_TEMP"/ci-logs/*.log 2>/dev/null \
+              | grep -aE 'error|Error|warning NU|FAILED|Failed!|\bNU[0-9]{4}\b|\bCS[0-9]{4}\b|\bAVLN[0-9]+\b|\bXDG[0-9]+\b|\bMSB[0-9]{4}\b|\bNETSDK[0-9]{4}\b' \
+              | grep -avE '^\s*$' | sed 's/\x1b\[[0-9;]*m//g' | sort -u | head -80
+            echo '```'
+            echo
+            echo '</details>'
+          } > "$RUNNER_TEMP/comment.md"
+
+          gh pr comment "${{ github.event.pull_request.number }}" --body-file "$RUNNER_TEMP/comment.md"
 
       - name: Upload test results
         if: always()
@@ -116,9 +158,34 @@ jobs:
             8.0.x
             10.0.x
 
-      # The gallery is a desktop app: CI proves the XAML compiles and the bindings resolve
-      # (compiled bindings are on), it does not try to open a window.
+      # The gallery is a desktop app: CI proves the XAML compiles and the compiled bindings resolve,
+      # it does not try to open a window.
       - name: Build gallery
-        run: >-
-          dotnet build samples/CF.Net.Gallery/CF.Net.Gallery.csproj
-          --configuration ${{ env.CONFIGURATION }}
+        shell: bash
+        run: |
+          mkdir -p "$RUNNER_TEMP/ci-logs"
+          set -o pipefail
+          dotnet build samples/CF.Net.Gallery/CF.Net.Gallery.csproj --configuration "$CONFIGURATION" 2>&1 \
+            | tee "$RUNNER_TEMP/ci-logs/70-gallery.log"
+
+      - name: Report failures
+        if: failure() && github.event_name == 'pull_request'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          {
+            echo '### CI failure in the gallery build'
+            echo
+            echo '<details><summary>Compiler output</summary>'
+            echo
+            echo '```'
+            cat "$RUNNER_TEMP"/ci-logs/*.log 2>/dev/null \
+              | grep -aE 'error|Error|\bCS[0-9]{4}\b|\bAVLN[0-9]+\b|\bMSB[0-9]{4}\b|\bNU[0-9]{4}\b|\bNETSDK[0-9]{4}\b' \
+              | sed 's/\x1b\[[0-9;]*m//g' | sort -u | head -80
+            echo '```'
+            echo
+            echo '</details>'
+          } > "$RUNNER_TEMP/comment.md"
+
+          gh pr comment "${{ github.event.pull_request.number }}" --body-file "$RUNNER_TEMP/comment.md"

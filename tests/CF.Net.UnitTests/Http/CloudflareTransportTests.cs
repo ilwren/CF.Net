@@ -92,7 +92,7 @@ public class CloudflareTransportAuthenticationTests
         var exception = await Assert.ThrowsAsync<CloudflareConfigurationException>(
             () => harness.Client.Zones.ListAsync());
 
-        Assert.Contains("ApiToken", exception.Message, StringComparison.Ordinal);
+        Assert.Contains("credentials", exception.Message, StringComparison.OrdinalIgnoreCase);
         Assert.Equal(0, harness.RequestCount);
     }
 

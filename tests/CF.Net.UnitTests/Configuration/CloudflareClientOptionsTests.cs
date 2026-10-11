@@ -67,7 +67,11 @@ public class CloudflareClientOptionsTests
         Assert.Contains(exception.Problems, problem => problem.Contains("MaxRetries", StringComparison.Ordinal));
         Assert.Contains(exception.Problems, problem => problem.Contains("Timeout", StringComparison.Ordinal));
         Assert.Contains(exception.Problems, problem => problem.Contains("RetryBaseDelay", StringComparison.Ordinal));
-        Assert.Equal(5, exception.Problems.Count);
+
+        // A global key without an e-mail leaves no usable scheme at all, so that is reported twice:
+        // once as the incomplete pair, once as missing credentials.
+        Assert.Contains(exception.Problems, problem => problem.Contains("credentials", StringComparison.OrdinalIgnoreCase));
+        Assert.Equal(6, exception.Problems.Count);
     }
 
     [Fact]

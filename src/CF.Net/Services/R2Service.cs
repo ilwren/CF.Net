@@ -259,7 +259,7 @@ public sealed class R2Service : CloudflareService, IR2Service
             return;
         }
 
-        if (CloudflareEnumConverter<R2Jurisdiction>.TryToWire(jurisdiction.Value, out var value))
+        if (CloudflareEnumConverter<R2Jurisdiction>.TryToWire(jurisdiction.Value, out var value) && value is not null)
         {
             request.WithHeader(CloudflareDefaults.Headers.R2Jurisdiction, value);
         }

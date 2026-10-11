@@ -227,7 +227,7 @@ public class ReadOnlyIntegrationTests : CloudflareIntegrationTest
         Log($"worker scripts: {scripts.Count}");
         foreach (var script in scripts.Items)
         {
-            Log($"  {script.ScriptName} modified={script.ModifiedOn:O} handlers={string.Join(",", script.Handlers ?? new List<string>())}");
+            Log($"  {script.Name} modified={script.ModifiedOn:O} handlers={string.Join(",", script.Handlers ?? new List<string>())}");
         }
     }
 
@@ -595,11 +595,11 @@ public class WriteIntegrationTests : CloudflareIntegrationTest
                 "2025-01-01",
                 new[] { WorkerBinding.PlainText("GREETING", "hello") });
 
-            Log($"uploaded {uploaded.ScriptName}");
+            Log($"uploaded {uploaded.Name}");
 
             var read = await Client.Workers.GetAsync(name);
             Assert.NotNull(read);
-            Assert.Equal(name, read!.ScriptName);
+            Assert.Equal(name, read!.Name);
 
             var content = await Client.Workers.GetContentAsync(name);
             Assert.NotNull(content);

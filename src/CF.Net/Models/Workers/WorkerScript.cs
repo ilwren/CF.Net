@@ -24,6 +24,14 @@ public sealed class WorkerScript
     [JsonPropertyName("script_name")]
     public string? ScriptName { get; set; }
 
+    /// <summary>
+    /// The script name, whichever field Cloudflare used. The scripts list and the single-script
+    /// endpoint both report the name as <c>id</c>, while a few older payloads and the subdomain
+    /// endpoints use <c>script_name</c>; prefer this over either property.
+    /// </summary>
+    [JsonIgnore]
+    public string? Name => ScriptName ?? Id;
+
     /// <summary>Hash of the script content; usable as an <c>If-None-Match</c> header on upload.</summary>
     [JsonPropertyName("etag")]
     public string? Etag { get; set; }

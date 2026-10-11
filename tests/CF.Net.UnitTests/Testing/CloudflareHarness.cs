@@ -92,8 +92,9 @@ public sealed class CloudflareHarness : IDisposable
         };
 
         configure?.Invoke(options);
-        options.Validate();
 
+        // Not validated here on purpose: the transport validates at send time, and one test needs to
+        // build a credential-less harness to prove that.
         return new CloudflareHarness(new StubHttpMessageHandler(), options);
     }
 
@@ -115,7 +116,6 @@ public sealed class CloudflareHarness : IDisposable
         };
 
         configure?.Invoke(options);
-        options.Validate();
 
         return new CloudflareHarness(new StubHttpMessageHandler(responder), options);
     }

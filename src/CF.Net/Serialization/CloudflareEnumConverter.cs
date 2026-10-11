@@ -64,7 +64,7 @@ public sealed class CloudflareEnumConverter<TEnum> : JsonConverter<TEnum>
         {
             throw new JsonException(
                 $"Enum value '{value}' of type '{typeof(TEnum).Name}' has no Cloudflare wire representation. " +
-                $"Known values: {string.Join(", ", Maps.Value.ToWire.Keys)}.");
+                $"Known values: {string.Join(", ", Maps.Value.ToWire.Values)}.");
         }
 
         writer.WriteStringValue(text);
@@ -107,7 +107,8 @@ public sealed class CloudflareEnumConverter<TEnum> : JsonConverter<TEnum>
         if (!Maps.Value.ToWire.TryGetValue(value, out var text))
         {
             throw new InvalidOperationException(
-                $"Enum value '{value}' of type '{typeof(TEnum).Name}' has no Cloudflare wire representation.");
+                $"Enum value '{value}' of type '{typeof(TEnum).Name}' has no Cloudflare wire representation. " +
+                $"Known values: {string.Join(", ", Maps.Value.ToWire.Values)}.");
         }
 
         return text;
@@ -115,8 +116,8 @@ public sealed class CloudflareEnumConverter<TEnum> : JsonConverter<TEnum>
 
     /// <summary>Attempts to convert an enum member into its wire representation.</summary>
     /// <param name="value">The enum value.</param>
-    /// <param name="wire">Receives the wire string when the conversion succeeded.</param>
-    public static bool TryToWire(TEnum value, out string wire)
+    /// <param name="wire">Receives the wire string when the conversion succeeded, or <see langword="null"/> when it did not.</param>
+    public static bool TryToWire(TEnum value, out string? wire)
     {
         if (Maps.Value.ToWire.TryGetValue(value, out var text))
         {
@@ -124,7 +125,7 @@ public sealed class CloudflareEnumConverter<TEnum> : JsonConverter<TEnum>
             return true;
         }
 
-        wire = string.Empty;
+        wire = null;
         return false;
     }
 

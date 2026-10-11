@@ -313,8 +313,38 @@ public sealed class PagesEnvVar
     public string? Type { get; set; }
 
     /// <summary>Variable value. Secrets are never returned by the API.</summary>
+    /// <remarks>
+    /// Typed as <see cref="object"/> because Pages accepts a string, a number or a JSON object here
+    /// depending on <see cref="Type"/>. System.Text.Json hands back a <see cref="JsonElement"/>, so
+    /// read it through <see cref="ValueAsString"/> unless you need the raw element.
+    /// </remarks>
     [JsonPropertyName("value")]
     public object? Value { get; set; }
+
+    /// <summary>
+    /// <see cref="Value"/> rendered as text, whatever JSON kind Cloudflare sent: the string itself,
+    /// a number's literal, or the raw JSON of an object.
+    /// </summary>
+    [JsonIgnore]
+    public string? ValueAsString
+    {
+        get
+        {
+            var value = Value;
+            return value switch
+            {
+                null => null,
+                string text => text,
+                JsonElement element => element.ValueKind switch
+                {
+                    JsonValueKind.Null or JsonValueKind.Undefined => null,
+                    JsonValueKind.String => element.GetString(),
+                    _ => element.GetRawText(),
+                },
+                _ => value.ToString(),
+            };
+        }
+    }
 
     /// <summary>Captures any field Cloudflare adds in the future.</summary>
     [JsonExtensionData]

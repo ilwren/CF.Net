@@ -1,3 +1,5 @@
+using CFNet.Serialization;
+
 namespace CFNet.Configuration;
 
 /// <summary>
@@ -74,7 +76,7 @@ public sealed class CloudflareClientOptions
     /// Replaces the JSON serializer options. When <c>null</c> the library uses
     /// <see cref="Serialization.CloudflareJson.Default"/>.
     /// </summary>
-    public System.Text.Json.JsonSerializerOptions? JsonSerializerOptions { get; set; }
+    public System.Text.Json.JsonSerializerOptions? JsonSerializerOptions { get; set; } = CloudflareJson.Default;
 
     /// <summary>Resolves the credential scheme implied by the current settings.</summary>
     public CloudflareAuthenticationMode AuthenticationMode
@@ -212,7 +214,13 @@ public sealed class CloudflareClientOptions
 
         target.ConfigureRequest ??= ConfigureRequest;
         target.InspectResponse ??= InspectResponse;
-        target.JsonSerializerOptions ??= JsonSerializerOptions;
+
+        // The serializer options default to the shared CloudflareJson.Default rather than to null, so
+        // "untouched" has to be recognised by reference instead of by nullability.
+        if (ReferenceEquals(target.JsonSerializerOptions, CloudflareJson.Default))
+        {
+            target.JsonSerializerOptions = JsonSerializerOptions;
+        }
 
         return target;
     }

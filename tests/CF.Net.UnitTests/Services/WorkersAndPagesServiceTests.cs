@@ -15,14 +15,16 @@ public class WorkersScriptsServiceTests
     {
         using var harness = CloudflareHarness.Create();
         harness.RespondWithPage(
-            "[{\"id\":\"s-1\",\"script\":\"hello\"},{\"id\":\"s-2\",\"script\":\"world\"}]",
+            "[{\"id\":\"hello\",\"etag\":\"e-1\",\"handlers\":[\"fetch\"]},{\"id\":\"world\"}]",
             page: 1, totalPages: 1, count: 2, totalCount: 2);
 
         var page = await harness.Client.Workers.ListAsync();
 
         Assert.Equal($"/client/v4/accounts/{CloudflareHarness.TestAccountId}/workers/scripts", harness.LastRequest.Path);
         Assert.Equal(2, page.Count);
-        Assert.Equal("hello", page.Items[0].ScriptName);
+        // The scripts list reports the name as "id"; Name covers whichever field Cloudflare used.
+        Assert.Equal("hello", page.Items[0].Name);
+        Assert.Equal("hello", page.Items[0].Id);
     }
 
     [Fact]
@@ -51,18 +53,18 @@ public class WorkersScriptsServiceTests
         using var harness = CloudflareHarness.Create();
         harness.Respond("""
         {"success":true,"errors":[],"messages":[],
-         "result":[{"id":"s-1","script":"a"}],
+         "result":[{"id":"a"}],
          "result_info":{"cursors":{"before":"","after":"c-2"}}}
         """);
         harness.Respond("""
         {"success":true,"errors":[],"messages":[],
-         "result":[{"id":"s-2","script":"b"}],
+         "result":[{"id":"b"}],
          "result_info":{"cursors":{"before":"c-1","after":"c-2"}}}
         """);
 
         var scripts = await harness.Client.Workers.ListAllAsync().CollectAsync();
 
-        Assert.Equal(new[] { "a", "b" }, scripts.Select(script => script.ScriptName));
+        Assert.Equal(new[] { "a", "b" }, scripts.Select(script => script.Name));
         Assert.Equal(2, harness.RequestCount);
         Assert.Equal(string.Empty, harness.Requests[0].Query.TrimStart('?'));
         Assert.Equal("cursor=c-2", harness.Requests[1].Query.TrimStart('?'));
@@ -74,7 +76,7 @@ public class WorkersScriptsServiceTests
         using var harness = CloudflareHarness.Create();
         harness.Respond("""
         {"success":true,"errors":[],"messages":[],
-         "result":[{"id":"s-1","script":"a"}],
+         "result":[{"id":"a"}],
          "result_info":{"cursors":{"before":"c-1","after":""}}}
         """);
 
@@ -102,8 +104,7 @@ public class WorkersScriptsServiceTests
         using var harness = CloudflareHarness.Create();
         harness.RespondWithResult("""
         {
-          "id": "5c8a1e20",
-          "script": "hello",
+          "id": "hello",
           "etag": "etag-1",
           "handlers": ["fetch"],
           "compatibility_date": "2025-01-01",
@@ -122,8 +123,8 @@ public class WorkersScriptsServiceTests
         var script = await harness.Client.Workers.GetAsync("hello");
 
         Assert.NotNull(script);
-        Assert.Equal("hello", script!.ScriptName);
-        Assert.Equal("5c8a1e20", script.Id);
+        Assert.Equal("hello", script!.Name);
+        Assert.Equal("hello", script.Id);
         Assert.Equal("etag-1", script.Etag);
         Assert.Equal("fetch", Assert.Single(script.Handlers!));
         Assert.Equal("2025-01-01", script.CompatibilityDate);
@@ -169,14 +170,14 @@ public class WorkersScriptsServiceTests
     public async Task UploadAsync_sends_multipart_with_a_metadata_part_and_one_file_part_per_module()
     {
         using var harness = CloudflareHarness.Create();
-        harness.RespondWithResult("{\"id\":\"s-1\",\"script\":\"hello\"}");
+        harness.RespondWithResult("{\"id\":\"hello\",\"etag\":\"s-1\"}");
 
         var script = await harness.Client.Workers.UploadAsync(new UploadWorkerScriptRequest(
             "hello",
             "export default { async fetch(request, env) { return new Response('hi'); } }",
             "2025-01-01"));
 
-        Assert.Equal("hello", script.ScriptName);
+        Assert.Equal("hello", script.Name);
         Assert.Equal(HttpMethod.Put, harness.LastRequest.Method);
         Assert.Equal($"/client/v4/accounts/{CloudflareHarness.TestAccountId}/workers/scripts/hello", harness.LastRequest.Path);
         Assert.StartsWith("multipart/form-data", harness.LastRequest.ContentType, StringComparison.Ordinal);
@@ -201,7 +202,7 @@ public class WorkersScriptsServiceTests
     public async Task UploadAsync_includes_bindings_and_keep_bindings_in_the_metadata()
     {
         using var harness = CloudflareHarness.Create();
-        harness.RespondWithResult("{\"script\":\"hello\"}");
+        harness.RespondWithResult("{\"id\":\"hello\"}");
 
         await harness.Client.Workers.UploadAsync(new UploadWorkerScriptRequest("hello", "export default{}", "2025-01-01")
         {
@@ -239,12 +240,13 @@ public class WorkersScriptsServiceTests
     public async Task UploadAsync_decodes_a_module_supplied_as_base64()
     {
         using var harness = CloudflareHarness.Create();
-        harness.RespondWithResult("{\"script\":\"hello\"}");
+        harness.RespondWithResult("{\"id\":\"hello\"}");
 
         await harness.Client.Workers.UploadAsync(new UploadWorkerScriptRequest
         {
             ScriptName = "hello",
             MainModule = "worker.mjs",
+            CompatibilityDate = "2025-01-01",
             Modules = new List<WorkerModule>
             {
                 new()
@@ -263,7 +265,7 @@ public class WorkersScriptsServiceTests
     public async Task UploadAsync_supports_multiple_modules_including_python()
     {
         using var harness = CloudflareHarness.Create();
-        harness.RespondWithResult("{\"script\":\"py\"}");
+        harness.RespondWithResult("{\"id\":\"py\"}");
 
         var request = new UploadWorkerScriptRequest
         {
@@ -298,7 +300,7 @@ public class WorkersScriptsServiceTests
 
         var script = await harness.Client.Workers.UploadAsync("hello", "export default{}", "2025-01-01");
 
-        Assert.Equal("hello", script.ScriptName);
+        Assert.Equal("hello", script.Name);
         Assert.Equal("hello", script.Id);
     }
 
@@ -306,7 +308,7 @@ public class WorkersScriptsServiceTests
     public async Task UploadAsync_uses_todays_date_when_no_compatibility_date_is_supplied()
     {
         using var harness = CloudflareHarness.Create();
-        harness.RespondWithResult("{\"script\":\"hello\"}");
+        harness.RespondWithResult("{\"id\":\"hello\"}");
 
         await harness.Client.Workers.UploadAsync("hello", "export default{}");
 
@@ -655,7 +657,7 @@ public class PagesProjectsServiceTests
         var preview = project.DeploymentConfigs!.Preview!;
         Assert.Equal("2025-01-01", preview.CompatibilityDate);
         Assert.Equal("plain_text", preview.EnvVars!["NODE_VERSION"].Type);
-        Assert.Equal("20", preview.EnvVars["NODE_VERSION"].Value);
+        Assert.Equal("20", preview.EnvVars["NODE_VERSION"].ValueAsString);
 
         // Pages bindings are dictionaries keyed by binding name, unlike Workers' array.
         Assert.Equal("ns-1", preview.KvNamespaces!["CACHE"].NamespaceId);

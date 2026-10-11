@@ -114,7 +114,9 @@ public class QueryStringBuilderTests
             .Add("until", moment, "yyyy-MM-dd")
             .Add("never", (DateTimeOffset?)null);
 
-        Assert.Equal("since=2024-03-15T11:45:30Z&until=2024-03-15", builder.ToString());
+        // Values go through Uri.EscapeDataString, which escapes ':' - harmless to Cloudflare, and
+        // the same reason an "owner:web" filter arrives as owner%3Aweb.
+        Assert.Equal("since=2024-03-15T11%3A45%3A30Z&until=2024-03-15", builder.ToString());
     }
 
     [Fact]

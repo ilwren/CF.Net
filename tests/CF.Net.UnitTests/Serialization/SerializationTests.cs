@@ -64,13 +64,16 @@ public class CloudflareEnumConverterTests
     }
 
     [Fact]
-    public void FromWire_is_case_sensitive_because_cloudflare_is()
+    public void FromWire_matches_exactly_first_and_tolerates_casing_drift()
     {
         Assert.Equal(SampleState.Done, CloudflareEnumConverter<SampleState>.FromWire("Done"));
         Assert.Equal(SampleState.InProgress, CloudflareEnumConverter<SampleState>.FromWire("in_progress"));
 
-        // "done" is not a value Cloudflare would send, and silently accepting it would hide bugs.
-        Assert.Equal(SampleState.Unknown, CloudflareEnumConverter<SampleState>.FromWire("done"));
+        // Reading is forgiving on purpose: an exact match always wins, and a differently cased value
+        // still binds rather than collapsing onto the sentinel. Writing stays strict, so a wrong
+        // literal can never be sent back to Cloudflare.
+        Assert.Equal(SampleState.Done, CloudflareEnumConverter<SampleState>.FromWire("done"));
+        Assert.Equal(SampleState.InProgress, CloudflareEnumConverter<SampleState>.FromWire("IN_PROGRESS"));
     }
 
     [Fact]
@@ -104,8 +107,12 @@ public class CloudflareEnumConverterTests
     [Fact]
     public void Json_write_of_the_sentinel_throws_instead_of_emitting_junk()
     {
-        Assert.Throws<InvalidOperationException>(
+        // The converter throws JsonException, which System.Text.Json surfaces as-is.
+        var exception = Assert.Throws<JsonException>(
             () => JsonSerializer.Serialize(new Holder { State = SampleState.Unknown }, CloudflareJson.Default));
+
+        Assert.Contains("SampleState", exception.Message, StringComparison.Ordinal);
+        Assert.Contains("in_progress", exception.Message, StringComparison.Ordinal);
     }
 
     [Theory]
@@ -245,13 +252,17 @@ public class CloudflareJsonTests
     }
 
     [Fact]
-    public void Default_reads_both_camel_and_snake_case()
+    public void Default_reads_snake_case_in_any_casing_but_not_camel_case()
     {
-        var fromSnake = JsonSerializer.Deserialize<Probe>("{\"zone_name\":\"a.test\"}", CloudflareJson.Default);
-        var fromCamel = JsonSerializer.Deserialize<Probe>("{\"zoneName\":\"b.test\"}", CloudflareJson.Default);
+        // The naming policy decides the wire name once, so "zone_name" binds whatever its casing.
+        Assert.Equal("a.test", JsonSerializer.Deserialize<Probe>("{\"zone_name\":\"a.test\"}", CloudflareJson.Default)!.ZoneName);
+        Assert.Equal("a.test", JsonSerializer.Deserialize<Probe>("{\"ZONE_NAME\":\"a.test\"}", CloudflareJson.Default)!.ZoneName);
 
-        Assert.Equal("a.test", fromSnake!.ZoneName);
-        Assert.Equal("b.test", fromCamel!.ZoneName);
+        // camelCase is a different name, not a different casing: it lands in the extension data
+        // instead, which is what keeps an unmodelled field from being dropped.
+        var fromCamel = JsonSerializer.Deserialize<Probe>("{\"zoneName\":\"b.test\"}", CloudflareJson.Default)!;
+        Assert.Null(fromCamel.ZoneName);
+        Assert.True(fromCamel.AdditionalData!.ContainsKey("zoneName"));
     }
 
     [Fact]

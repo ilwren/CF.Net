@@ -38,9 +38,15 @@ public abstract class ModuleViewModelBase : PageViewModelBase
     protected string ZoneId => Gallery.Settings.ZoneId.Trim();
 
     /// <summary>Runs a call that returns a value.</summary>
+    /// <remarks>
+    /// Generic rather than <c>Func&lt;Task&lt;object?&gt;&gt;</c> on purpose: <see cref="Task{TResult}"/>
+    /// is invariant, so a lambda that awaits a service call returning <c>Task&lt;Zone&gt;</c> does not
+    /// convert to <c>Task&lt;object?&gt;</c> and every page would need a cast.
+    /// </remarks>
+    /// <typeparam name="TResult">What the service call returns.</typeparam>
     /// <param name="operation">Name shown in the status line.</param>
     /// <param name="action">The service call.</param>
-    protected async Task RunAsync(string operation, Func<Task<object?>> action)
+    protected async Task RunAsync<TResult>(string operation, Func<Task<TResult>> action)
     {
         if (Gallery.IsBusy)
         {

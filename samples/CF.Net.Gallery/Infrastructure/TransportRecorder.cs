@@ -260,7 +260,7 @@ public sealed class RecordingTransport : ICloudflareTransport, IDisposable
         }
 
         builder.AppendLine();
-        builder.AppendLine(Json.PrettyPrint(response.RawBody));
+        builder.AppendLine(Json.Indent(response.RawBody));
 
         if (response.Errors.Count > 0)
         {
@@ -299,7 +299,7 @@ public sealed class RecordingTransport : ICloudflareTransport, IDisposable
 
         builder.AppendLine();
         builder.AppendLine(response.ContentType?.Contains("json", StringComparison.OrdinalIgnoreCase) == true
-            ? Json.PrettyPrint(response.Body)
+            ? Json.Indent(response.Body)
             : response.Body);
 
         return builder.ToString().TrimEnd();

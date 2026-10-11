@@ -39,7 +39,7 @@
         <Border Classes="card">
           <StackPanel Orientation="Vertical" Spacing="10">
             <TextBlock Classes="h2" Text="Script name used by everything below" />
-            <TextBox Text="{Binding ScriptName, Mode=TwoWay}" MinWidth="420" HorizontalAlignment="Left" Watermark="my-worker" />
+            <TextBox Text="{Binding ScriptName, Mode=TwoWay}" MinWidth="420" HorizontalAlignment="Left" PlaceholderText="my-worker" />
             <WrapPanel Orientation="Horizontal">
               <Button Classes="run" Content="Get script" Command="{Binding GetCommand}" Margin="0,0,8,0" />
               <Button Content="Get content" Command="{Binding GetContentCommand}" Margin="0,0,8,0" />
@@ -56,7 +56,7 @@
             <TextBlock Classes="hint" Text="Sent as multipart/form-data: a 'metadata' part holding JSON plus one file part per module. Cloudflare rejects the older single-field form with error 10021." />
             <StackPanel Orientation="Horizontal" Spacing="10">
               <TextBlock Text="Compatibility date" Width="150" VerticalAlignment="Center" />
-              <TextBox Text="{Binding CompatibilityDate, Mode=TwoWay}" Width="180" Watermark="yyyy-MM-dd" />
+              <TextBox Text="{Binding CompatibilityDate, Mode=TwoWay}" Width="180" PlaceholderText="yyyy-MM-dd" />
             </StackPanel>
             <TextBlock Classes="hint" Text="Source (the main module, worker.mjs)" />
             <TextBox Text="{Binding UploadSource, Mode=TwoWay}" AcceptsReturn="True" AcceptsTab="True" Height="180"
@@ -64,7 +64,7 @@
             <TextBlock Classes="hint" Text="Bindings (JSON array; WorkerBinding is a discriminated union, so the 'type' field selects the shape)" />
             <TextBox Text="{Binding BindingsJson, Mode=TwoWay}" AcceptsReturn="True" Height="90"
                      FontFamily="Cascadia Mono,Consolas,Menlo,DejaVu Sans Mono,monospace" FontSize="12"
-                     Watermark='[{"name":"GREETING","type":"plain_text","text":"hi"}]' />
+                     PlaceholderText='[{"name":"GREETING","type":"plain_text","text":"hi"}]' />
             <Button Classes="run" Content="Upload" Command="{Binding UploadCommand}" />
           </StackPanel>
         </Border>
@@ -96,7 +96,7 @@
             <WrapPanel Orientation="Horizontal">
               <StackPanel Orientation="Vertical" Spacing="3" Margin="0,0,16,8">
                 <TextBlock Classes="hint" Text="Subdomain prefix" />
-                <TextBox Text="{Binding Subdomain, Mode=TwoWay}" Width="260" Watermark="blank = keep the current one" />
+                <TextBox Text="{Binding Subdomain, Mode=TwoWay}" Width="260" PlaceholderText="blank = keep the current one" />
               </StackPanel>
               <CheckBox IsChecked="{Binding SubdomainEnabled, Mode=TwoWay}" Content="Subdomain enabled" VerticalAlignment="Bottom" Margin="0,0,16,10" />
               <CheckBox IsChecked="{Binding ScriptSubdomainEnabled, Mode=TwoWay}" Content="This script published" VerticalAlignment="Bottom" Margin="0,0,0,10" />

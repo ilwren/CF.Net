@@ -38,15 +38,15 @@
             <TextBlock Classes="h2" Text="Database" />
             <StackPanel Orientation="Horizontal" Spacing="10">
               <TextBlock Text="Uuid" Width="140" VerticalAlignment="Center" />
-              <TextBox Text="{Binding DatabaseId, Mode=TwoWay}" MinWidth="380" Watermark="copy it from a list result" />
+              <TextBox Text="{Binding DatabaseId, Mode=TwoWay}" MinWidth="380" PlaceholderText="copy it from a list result" />
             </StackPanel>
             <StackPanel Orientation="Horizontal" Spacing="10">
               <TextBlock Text="Name" Width="140" VerticalAlignment="Center" />
-              <TextBox Text="{Binding DatabaseName, Mode=TwoWay}" MinWidth="380" Watermark="my-database" />
+              <TextBox Text="{Binding DatabaseName, Mode=TwoWay}" MinWidth="380" PlaceholderText="my-database" />
             </StackPanel>
             <StackPanel Orientation="Horizontal" Spacing="10">
               <TextBlock Text="Location hint" Width="140" VerticalAlignment="Center" />
-              <TextBox Text="{Binding LocationHint, Mode=TwoWay}" MinWidth="380" Watermark="weur, enam, apac ... (optional)" />
+              <TextBox Text="{Binding LocationHint, Mode=TwoWay}" MinWidth="380" PlaceholderText="weur, enam, apac ... (optional)" />
             </StackPanel>
             <WrapPanel Orientation="Horizontal">
               <Button Classes="run" Content="Get by uuid" Command="{Binding GetCommand}" Margin="0,0,8,0" />
@@ -67,7 +67,7 @@
             <TextBlock Classes="hint" Text="Bound parameters (JSON array, matched to ? in order)" />
             <TextBox Text="{Binding ParametersJson, Mode=TwoWay}" AcceptsReturn="True" Height="60"
                      FontFamily="Cascadia Mono,Consolas,Menlo,DejaVu Sans Mono,monospace" FontSize="12"
-                     Watermark='["alpha", 2]' />
+                     PlaceholderText='["alpha", 2]' />
             <Button Classes="run" Content="Run query" Command="{Binding QueryCommand}" />
             <TextBlock Classes="hint" Text="The body is {sql, params} - there is no 'action' field, which older unofficial clients send and Cloudflare rejects." />
           </StackPanel>
@@ -79,7 +79,7 @@
             <TextBlock Classes="hint" Text="JSON array of statements" />
             <TextBox Text="{Binding BatchJson, Mode=TwoWay}" AcceptsReturn="True" Height="110"
                      FontFamily="Cascadia Mono,Consolas,Menlo,DejaVu Sans Mono,monospace" FontSize="12"
-                     Watermark='[{"sql":"CREATE TABLE t (id INTEGER)"},{"sql":"INSERT INTO t VALUES (?)","params":[1]}]' />
+                     PlaceholderText='[{"sql":"CREATE TABLE t (id INTEGER)"},{"sql":"INSERT INTO t VALUES (?)","params":[1]}]' />
             <Button Classes="run" Content="Run batch" Command="{Binding BatchCommand}" />
           </StackPanel>
         </Border>

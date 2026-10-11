@@ -40,11 +40,11 @@
             <TextBlock Classes="h2" Text="Project" />
             <StackPanel Orientation="Horizontal" Spacing="10">
               <TextBlock Text="Project name" Width="140" VerticalAlignment="Center" />
-              <TextBox Text="{Binding ProjectName, Mode=TwoWay}" MinWidth="380" Watermark="my-site" />
+              <TextBox Text="{Binding ProjectName, Mode=TwoWay}" MinWidth="380" PlaceholderText="my-site" />
             </StackPanel>
             <StackPanel Orientation="Horizontal" Spacing="10">
               <TextBlock Text="Production branch" Width="140" VerticalAlignment="Center" />
-              <TextBox Text="{Binding ProductionBranch, Mode=TwoWay}" MinWidth="380" Watermark="main" />
+              <TextBox Text="{Binding ProductionBranch, Mode=TwoWay}" MinWidth="380" PlaceholderText="main" />
             </StackPanel>
             <WrapPanel Orientation="Horizontal">
               <Button Classes="run" Content="Get" Command="{Binding GetCommand}" Margin="0,0,8,0" />
@@ -84,7 +84,7 @@
             <TextBlock Classes="h2" Text="Custom domains  -  /accounts/{account_id}/pages/projects/{project_name}/domains" />
             <StackPanel Orientation="Horizontal" Spacing="10">
               <TextBlock Text="Domain" Width="140" VerticalAlignment="Center" />
-              <TextBox Text="{Binding DomainName, Mode=TwoWay}" MinWidth="380" Watermark="www.example.com" />
+              <TextBox Text="{Binding DomainName, Mode=TwoWay}" MinWidth="380" PlaceholderText="www.example.com" />
             </StackPanel>
             <StackPanel Orientation="Horizontal" Spacing="10">
               <CheckBox IsChecked="{Binding DomainVerified, Mode=TwoWay}" Content="Mark verified" VerticalAlignment="Center" />

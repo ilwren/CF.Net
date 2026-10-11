@@ -74,7 +74,8 @@ jobs:
           dotnet test tests/CF.Net.UnitTests/CF.Net.UnitTests.csproj \
             --configuration "$CONFIGURATION" --no-build --framework net8.0 \
             --filter "Category!=Integration" \
-            --logger "trx;LogFileName=unit-net8.0.trx" --results-directory TestResults 2>&1 \
+            --logger "trx;LogFileName=unit-net8.0.trx" \
+            --logger "console;verbosity=detailed" --results-directory TestResults 2>&1 \
             | tee "$RUNNER_TEMP/ci-logs/30-test-net8.log"
 
       - name: Unit tests (net10.0)
@@ -84,7 +85,8 @@ jobs:
           dotnet test tests/CF.Net.UnitTests/CF.Net.UnitTests.csproj \
             --configuration "$CONFIGURATION" --no-build --framework net10.0 \
             --filter "Category!=Integration" \
-            --logger "trx;LogFileName=unit-net10.0.trx" --results-directory TestResults 2>&1 \
+            --logger "trx;LogFileName=unit-net10.0.trx" \
+            --logger "console;verbosity=detailed" --results-directory TestResults 2>&1 \
             | tee "$RUNNER_TEMP/ci-logs/40-test-net10.log"
 
       # The integration project talks to the real API, so CI only proves that it compiles.
@@ -104,6 +106,39 @@ jobs:
           dotnet pack src/CF.Net/CF.Net.csproj --configuration "$CONFIGURATION" --no-build --output artifacts 2>&1 \
             | tee "$RUNNER_TEMP/ci-logs/60-pack.log"
 
+      - name: Extract failing tests from the trx
+        if: failure()
+        shell: bash
+        run: |
+          PY=$(command -v python3 || command -v python || true)
+          if [ -z "$PY" ]; then echo "no python"; exit 0; fi
+          "$PY" - <<'PY'
+          import glob, os, xml.etree.ElementTree as ET
+
+          ns = {'t': 'http://microsoft.com/schemas/VisualStudio/TeamTest/2010'}
+          blocks = []
+          for trx in sorted(glob.glob('TestResults/**/*.trx', recursive=True)):
+              try:
+                  root = ET.parse(trx).getroot()
+              except Exception:
+                  continue
+              for result in root.findall('.//t:UnitTestResult', ns):
+                  if result.get('outcome') != 'Failed':
+                      continue
+                  info = result.find('.//t:ErrorInfo', ns)
+                  message = (info.findtext('t:Message', '', ns) or '').strip() if info is not None else ''
+                  stack = (info.findtext('t:StackTrace', '', ns) or '').strip() if info is not None else ''
+                  blocks.append(
+                      f"FAILED {os.path.basename(trx)} :: {result.get('testName')}\n"
+                      f"{message[:900]}\n"
+                      f"{stack[:400]}")
+
+          out = os.path.join(os.environ['RUNNER_TEMP'], 'failures.txt')
+          with open(out, 'w', encoding='utf-8') as handle:
+              handle.write('\n\n'.join(blocks))
+          print(f'{len(blocks)} failing test(s)')
+          PY
+
       - name: Report failures
         if: failure() && github.event_name == 'pull_request'
         shell: bash
@@ -113,12 +148,22 @@ jobs:
           {
             echo '### CI failure on `${{ matrix.os }}`'
             echo
+            if [ -s "$RUNNER_TEMP/failures.txt" ]; then
+              echo '<details open><summary>Failing tests</summary>'
+              echo
+              echo '```'
+              head -c 20000 "$RUNNER_TEMP/failures.txt"
+              echo '```'
+              echo
+              echo '</details>'
+              echo
+            fi
             echo '<details><summary>Compiler / restore / test output</summary>'
             echo
             echo '```'
             cat "$RUNNER_TEMP"/ci-logs/*.log 2>/dev/null \
-              | grep -aE 'error|Error|warning NU|FAILED|Failed!|\bNU[0-9]{4}\b|\bCS[0-9]{4}\b|\bAVLN[0-9]+\b|\bXDG[0-9]+\b|\bMSB[0-9]{4}\b|\bNETSDK[0-9]{4}\b' \
-              | grep -avE '^\s*$' | sed 's/\x1b\[[0-9;]*m//g' | sort -u | head -80
+              | grep -aE 'error|Error|warning NU|Failed |Failed!|Assert|Expected|Actual|\bNU[0-9]{4}\b|\bCS[0-9]{4}\b|\bAVLN[0-9]+\b|\bXDG[0-9]+\b|\bMSB[0-9]{4}\b|\bNETSDK[0-9]{4}\b' \
+              | grep -avE '^\s*$|AVLN5001|CS0618|CS1574|CS1712|CS0419|CS8603' | sed 's/\x1b\[[0-9;]*m//g' | sort -u | head -80
             echo '```'
             echo
             echo '</details>'

@@ -29,7 +29,7 @@
               </StackPanel>
               <StackPanel Orientation="Vertical" Spacing="3" Margin="0,0,16,8">
                 <TextBlock Classes="hint" Text="New title" />
-                <TextBox Text="{Binding NamespaceTitle, Mode=TwoWay}" Width="260" Watermark="my-namespace" />
+                <TextBox Text="{Binding NamespaceTitle, Mode=TwoWay}" Width="260" PlaceholderText="my-namespace" />
               </StackPanel>
             </WrapPanel>
             <WrapPanel Orientation="Horizontal">
@@ -46,7 +46,7 @@
         <Border Classes="card">
           <StackPanel Orientation="Vertical" Spacing="10">
             <TextBlock Classes="h2" Text="Namespace used by every key call" />
-            <TextBox Text="{Binding NamespaceId, Mode=TwoWay}" MinWidth="420" HorizontalAlignment="Left" Watermark="namespace uuid" />
+            <TextBox Text="{Binding NamespaceId, Mode=TwoWay}" MinWidth="420" HorizontalAlignment="Left" PlaceholderText="namespace uuid" />
           </StackPanel>
         </Border>
 
@@ -56,7 +56,7 @@
             <WrapPanel Orientation="Horizontal">
               <StackPanel Orientation="Vertical" Spacing="3" Margin="0,0,16,8">
                 <TextBlock Classes="hint" Text="Prefix" />
-                <TextBox Text="{Binding KeyPrefix, Mode=TwoWay}" Width="240" Watermark="users/" />
+                <TextBox Text="{Binding KeyPrefix, Mode=TwoWay}" Width="240" PlaceholderText="users/" />
               </StackPanel>
               <StackPanel Orientation="Vertical" Spacing="3" Margin="0,0,16,8">
                 <TextBlock Classes="hint" Text="Limit (10-1000)" />
@@ -76,7 +76,7 @@
             <TextBlock Classes="h2" Text="Values  -  /accounts/{account_id}/storage/kv/namespaces/{namespace_id}/values/{key}" />
             <StackPanel Orientation="Horizontal" Spacing="10">
               <TextBlock Text="Key" Width="120" VerticalAlignment="Center" />
-              <TextBox Text="{Binding Key, Mode=TwoWay}" MinWidth="420" Watermark="users/1/profile - slashes are percent-encoded for you" />
+              <TextBox Text="{Binding Key, Mode=TwoWay}" MinWidth="420" PlaceholderText="users/1/profile - slashes are percent-encoded for you" />
             </StackPanel>
             <TextBlock Classes="hint" Text="Value" />
             <TextBox Text="{Binding Value, Mode=TwoWay}" AcceptsReturn="True" Height="90"
@@ -88,7 +88,7 @@
               </StackPanel>
               <StackPanel Orientation="Vertical" Spacing="3" Margin="0,0,16,8">
                 <TextBlock Classes="hint" Text="TTL seconds (min 60)" />
-                <TextBox Text="{Binding ValueTtl, Mode=TwoWay}" Width="150" Watermark="blank = no expiry" />
+                <TextBox Text="{Binding ValueTtl, Mode=TwoWay}" Width="150" PlaceholderText="blank = no expiry" />
               </StackPanel>
             </WrapPanel>
             <WrapPanel Orientation="Horizontal">
@@ -105,7 +105,7 @@
             <TextBlock Classes="h2" Text="Bulk write  -  PUT /accounts/{account_id}/storage/kv/namespaces/{namespace_id}/bulk" />
             <TextBox Text="{Binding BulkJson, Mode=TwoWay}" AcceptsReturn="True" Height="100"
                      FontFamily="Cascadia Mono,Consolas,Menlo,DejaVu Sans Mono,monospace" FontSize="12"
-                     Watermark='[{"key":"a","value":"1"},{"key":"b","value":"Mg==","base64":true},{"key":"c","delete":true}]' />
+                     PlaceholderText='[{"key":"a","value":"1"},{"key":"b","value":"Mg==","base64":true},{"key":"c","delete":true}]' />
             <Button Classes="run" Content="Write" Command="{Binding BulkWriteCommand}" />
             <TextBlock Classes="hint" Text="Up to 10000 operations or 100 MB per call. Binary values go in as base64 with base64 set to true." />
           </StackPanel>

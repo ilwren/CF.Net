@@ -33,7 +33,7 @@
             <TextBox Text="{Binding ApiToken, Mode=TwoWay}"
                      PasswordChar="&#x2022;"
                      RevealPassword="{Binding RevealSecrets, Mode=TwoWay}"
-                     Watermark="CLOUDFLARE_API_TOKEN"
+                     PlaceholderText="CLOUDFLARE_API_TOKEN"
                      MinWidth="480" />
           </StackPanel>
 
@@ -42,14 +42,14 @@
             <TextBox Text="{Binding GlobalApiKey, Mode=TwoWay}"
                      PasswordChar="&#x2022;"
                      RevealPassword="{Binding RevealSecrets, Mode=TwoWay}"
-                     Watermark="CLOUDFLARE_GLOBAL_API_KEY (legacy)"
+                     PlaceholderText="CLOUDFLARE_GLOBAL_API_KEY (legacy)"
                      MinWidth="480" />
           </StackPanel>
 
           <StackPanel Orientation="Horizontal" Spacing="10">
             <TextBlock Text="Account email" Width="130" VerticalAlignment="Center" />
             <TextBox Text="{Binding ApiEmail, Mode=TwoWay}"
-                     Watermark="CLOUDFLARE_API_EMAIL - required with the global key"
+                     PlaceholderText="CLOUDFLARE_API_EMAIL - required with the global key"
                      MinWidth="480" />
           </StackPanel>
 
@@ -69,12 +69,12 @@
 
           <StackPanel Orientation="Horizontal" Spacing="10">
             <TextBlock Text="Account id" Width="130" VerticalAlignment="Center" />
-            <TextBox Text="{Binding AccountId, Mode=TwoWay}" Watermark="CLOUDFLARE_ACCOUNT_ID" MinWidth="480" />
+            <TextBox Text="{Binding AccountId, Mode=TwoWay}" PlaceholderText="CLOUDFLARE_ACCOUNT_ID" MinWidth="480" />
           </StackPanel>
 
           <StackPanel Orientation="Horizontal" Spacing="10">
             <TextBlock Text="Zone id" Width="130" VerticalAlignment="Center" />
-            <TextBox Text="{Binding ZoneId, Mode=TwoWay}" Watermark="CLOUDFLARE_ZONE_ID" MinWidth="480" />
+            <TextBox Text="{Binding ZoneId, Mode=TwoWay}" PlaceholderText="CLOUDFLARE_ZONE_ID" MinWidth="480" />
           </StackPanel>
 
           <TextBlock Classes="hint"
@@ -92,7 +92,7 @@
           <StackPanel Orientation="Horizontal" Spacing="10">
             <TextBlock Text="Base address" Width="130" VerticalAlignment="Center" />
             <TextBox Text="{Binding BaseAddress, Mode=TwoWay}"
-                     Watermark="https://api.cloudflare.com/client/v4/"
+                     PlaceholderText="https://api.cloudflare.com/client/v4/"
                      MinWidth="480" />
           </StackPanel>
 

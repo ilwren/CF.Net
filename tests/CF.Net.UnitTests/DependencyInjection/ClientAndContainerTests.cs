@@ -592,8 +592,7 @@ public class ServiceCollectionExtensionsTests
         collection.AddCloudflareHttpClient(
             options => options.ApiToken = "tok",
             httpClientName: "cf",
-            configureClient: client => client.ConfigureHttpMessageHandlerBuilder(builder =>
-                builder.PrimaryHandler = stub));
+            configureClient: client => client.ConfigurePrimaryHttpMessageHandler(() => stub));
 
         using var provider = collection.BuildServiceProvider();
 
@@ -631,8 +630,8 @@ public class ServiceCollectionExtensionsTests
                 options.ApiToken = "tok";
                 options.MaxRetries = 0;
             },
-            configureClient: client => client.ConfigureHttpMessageHandlerBuilder(builder =>
-                builder.PrimaryHandler = builder.Services.GetRequiredService<StubHttpMessageHandler>()));
+            configureClient: client => client.ConfigurePrimaryHttpMessageHandler(
+                () => client.Services.GetRequiredService<StubHttpMessageHandler>()));
 
         using var provider = collection.BuildServiceProvider();
 

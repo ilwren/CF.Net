@@ -277,6 +277,20 @@ That covers URL construction, query-string ordering and escaping, header selecti
 
 Both TFMs are exercised: `net8.0` and `net10.0`.
 
+Three layers sit behind that one command:
+
+| Layer | Where | Network |
+| --- | --- | --- |
+| Unit tests | `tests/CF.Net.UnitTests` | none — `StubHttpMessageHandler` answers every call |
+| Integration tests | `tests/CF.Net.IntegrationTests` | the real `api.cloudflare.com`, and only when credentials are present |
+| Cassettes | `tests/CF.Net.TestKit` + `tests/cassettes` | recorded once against the real API, replayed offline forever after |
+
+The cassette layer is the bridge between the other two. Record one genuine run, commit the redacted
+transcript, and `CassetteTests` then binds **real Cloudflare payloads** to the typed models on every
+pull request — no credentials, no network, no quota. Replay runs over a handler that throws if
+anything tries to escape, so a missing recording fails loudly instead of quietly going online. See
+[docs/integration-testing.md](docs/integration-testing.md#6-recording-a-cassette).
+
 ---
 
 ## The Avalonia gallery
@@ -352,6 +366,16 @@ Actions → Integration → Run workflow → [ ] Allow tests that create and del
 ```
 
 The workflow first reports which credential scheme it found. With none, it emits a warning and finishes green, because there is nothing to verify.
+
+With credentials it verifies them against the live API **before building anything** — one `curl` to `/user/tokens/verify` (or `/user` for the legacy pair) — so an expired, revoked or under-scoped secret fails the job with Cloudflare's own error code and message instead of turning 25 tests red. The **Run workflow** form also takes an optional `filter` (`FullyQualifiedName~R2`, appended to `Category=Integration&`) to narrow a run, and a `cassette` name to record one.
+
+### What a run reports back
+
+The job appends a summary with three parts:
+
+- an **outcome table** parsed from the `.trx`, plus the message of every failing test;
+- a **skip table** — xunit v2 cannot skip a test dynamically, so a test with nothing to do ends early and is reported as *passed*. Every early exit is recorded with its reason, which is how you tell a green no-op from a green run that really talked to Cloudflare;
+- a **call transcript** — method, path, query and status for every request the run made, so you can see exactly what touched your account, and that a write run deleted what it created. Credentials live in headers, so none of it can reach the report.
 
 ### What the tests do
 

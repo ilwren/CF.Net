@@ -122,7 +122,14 @@ dotnet test tests/CF.Net.IntegrationTests --filter "FullyQualifiedName~A_txt_rec
 
 # Everything read-only
 dotnet test tests/CF.Net.IntegrationTests --filter "Category=Integration&ClassName~ReadOnly"
+
+# One product area only - the cheapest way to check a token's R2 permission, for instance
+dotnet test tests/CF.Net.IntegrationTests --filter "Category=Integration&FullyQualifiedName~R2"
 ```
+
+In GitHub Actions the workflow's **`filter`** input does the same thing: whatever you type is appended
+to `Category=Integration&`, so `FullyQualifiedName~R2` runs only the R2 tests. It reaches
+`dotnet test` through the environment, never by being interpolated into a shell.
 
 ---
 
@@ -227,6 +234,10 @@ on:
         description: 'Commit the recorded cassette back to this branch'
         type: boolean
         default: false
+      filter:
+        description: 'Narrow the run, e.g. FullyQualifiedName~R2'
+        type: string
+        default: ''
   schedule:
     - cron: '0 4 * * 1'
 ```
@@ -288,6 +299,20 @@ The writer is `CFNet.TestKit.RunReport`, and its file format is pinned down by o
 `tests/CF.Net.UnitTests/Testing/RunReportTests.cs`. With `CLOUDFLARE_IT_REPORT` unset — the normal
 case at a terminal — it writes nothing anywhere, and a write that fails is swallowed rather than
 turning a passing test into a failing one.
+
+The same report carries a **transcript of every Cloudflare call the run made**, because the fixture
+hooks `CloudflareClientOptions.InspectResponse`:
+
+| Call | Result |
+| --- | --- |
+| `GET /client/v4/zones?per_page=50` | `200 OK` |
+| `POST /client/v4/accounts/…/storage/kv/namespaces` | `200 OK` |
+| `DELETE /client/v4/accounts/…/storage/kv/namespaces/…` | `200 OK` |
+
+It appears collapsed in the summary, and only the method, path, query and status are written —
+credentials live in headers, so nothing secret can reach the report. Use it to confirm a run really
+touched the account, to see that a write run deleted what it created, and to spot retries as the
+repeated call they are.
 
 ---
 

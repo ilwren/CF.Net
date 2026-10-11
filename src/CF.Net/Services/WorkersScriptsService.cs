@@ -166,7 +166,7 @@ public sealed class WorkersScriptsService : CloudflareService, IWorkersScriptsSe
         var request = Apply(CloudflareRequest.Get($"{AccountPath(account)}/workers/scripts"), parameters);
         request.OperationName = "List Worker Scripts";
 
-        var response = await Transport.SendAsync<List<WorkerScript>?>(request, cancellationToken).ConfigureAwait(false);
+        var response = await Transport.SendAsync<List<WorkerScript>>(request, cancellationToken).ConfigureAwait(false);
         return response.ToPage();
     }
 
@@ -226,7 +226,7 @@ public sealed class WorkersScriptsService : CloudflareService, IWorkersScriptsSe
             .Tolerate(System.Net.HttpStatusCode.NotFound);
         request.OperationName = "Get Worker Script";
 
-        var response = await Transport.SendAsync<WorkerScript?>(request, cancellationToken).ConfigureAwait(false);
+        var response = await Transport.SendAsync<WorkerScript>(request, cancellationToken).ConfigureAwait(false);
         return response.Result;
     }
 
@@ -244,7 +244,7 @@ public sealed class WorkersScriptsService : CloudflareService, IWorkersScriptsSe
             .Tolerate(System.Net.HttpStatusCode.NotFound);
         request.OperationName = "Get Worker Script Content";
 
-        var response = await Transport.SendAsync<WorkerScriptContent?>(request, cancellationToken).ConfigureAwait(false);
+        var response = await Transport.SendAsync<WorkerScriptContent>(request, cancellationToken).ConfigureAwait(false);
         return response.Result;
     }
 
@@ -262,7 +262,7 @@ public sealed class WorkersScriptsService : CloudflareService, IWorkersScriptsSe
             .Tolerate(System.Net.HttpStatusCode.NotFound);
         request.OperationName = "Get Worker Script Settings";
 
-        var response = await Transport.SendAsync<WorkerScriptSettings?>(request, cancellationToken).ConfigureAwait(false);
+        var response = await Transport.SendAsync<WorkerScriptSettings>(request, cancellationToken).ConfigureAwait(false);
         return response.Result;
     }
 
@@ -295,7 +295,7 @@ public sealed class WorkersScriptsService : CloudflareService, IWorkersScriptsSe
             OperationName = "Upload Worker Script",
         };
 
-        var response = await Transport.SendAsync<WorkerScript?>(httpRequest, cancellationToken).ConfigureAwait(false);
+        var response = await Transport.SendAsync<WorkerScript>(httpRequest, cancellationToken).ConfigureAwait(false);
 
         // Some accounts get a bare success response for an upload; fall back to the known name so the
         // caller always receives something usable.
@@ -355,7 +355,7 @@ public sealed class WorkersScriptsService : CloudflareService, IWorkersScriptsSe
             parameters);
         request.OperationName = "List Worker Deployments";
 
-        var response = await Transport.SendAsync<List<WorkerDeployment>?>(request, cancellationToken).ConfigureAwait(false);
+        var response = await Transport.SendAsync<List<WorkerDeployment>>(request, cancellationToken).ConfigureAwait(false);
         return response.ToPage();
     }
 
@@ -390,7 +390,7 @@ public sealed class WorkersScriptsService : CloudflareService, IWorkersScriptsSe
             request);
         httpRequest.OperationName = "Create Worker Deployment";
 
-        var response = await Transport.SendAsync<WorkerDeployment?>(httpRequest, cancellationToken).ConfigureAwait(false);
+        var response = await Transport.SendAsync<WorkerDeployment>(httpRequest, cancellationToken).ConfigureAwait(false);
         return response.EnsureResult();
     }
 
@@ -401,7 +401,7 @@ public sealed class WorkersScriptsService : CloudflareService, IWorkersScriptsSe
         var request = CloudflareRequest.Get($"{AccountPath(account)}/workers/subdomain");
         request.OperationName = "Get Workers Subdomain";
 
-        var response = await Transport.SendAsync<WorkerSubdomain?>(request, cancellationToken).ConfigureAwait(false);
+        var response = await Transport.SendAsync<WorkerSubdomain>(request, cancellationToken).ConfigureAwait(false);
         return response.Result;
     }
 
@@ -417,7 +417,7 @@ public sealed class WorkersScriptsService : CloudflareService, IWorkersScriptsSe
         var httpRequest = CloudflareRequest.Patch($"{AccountPath(account)}/workers/subdomain", request);
         httpRequest.OperationName = "Update Workers Subdomain";
 
-        var response = await Transport.SendAsync<WorkerSubdomain?>(httpRequest, cancellationToken).ConfigureAwait(false);
+        var response = await Transport.SendAsync<WorkerSubdomain>(httpRequest, cancellationToken).ConfigureAwait(false);
         return response.Result ?? new WorkerSubdomain
         {
             Subdomain = request.Subdomain,
@@ -440,7 +440,7 @@ public sealed class WorkersScriptsService : CloudflareService, IWorkersScriptsSe
             .Tolerate(System.Net.HttpStatusCode.NotFound);
         request.OperationName = "Get Worker Script Subdomain";
 
-        var response = await Transport.SendAsync<WorkerScriptSubdomain?>(request, cancellationToken).ConfigureAwait(false);
+        var response = await Transport.SendAsync<WorkerScriptSubdomain>(request, cancellationToken).ConfigureAwait(false);
         return response.Result;
     }
 
@@ -461,7 +461,7 @@ public sealed class WorkersScriptsService : CloudflareService, IWorkersScriptsSe
             request);
         httpRequest.OperationName = "Update Worker Script Subdomain";
 
-        var response = await Transport.SendAsync<WorkerScriptSubdomain?>(httpRequest, cancellationToken).ConfigureAwait(false);
+        var response = await Transport.SendAsync<WorkerScriptSubdomain>(httpRequest, cancellationToken).ConfigureAwait(false);
         return response.Result;
     }
 

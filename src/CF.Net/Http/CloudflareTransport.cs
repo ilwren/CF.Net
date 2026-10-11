@@ -361,7 +361,9 @@ public sealed class CloudflareTransport : ICloudflareTransport, IDisposable
         var response = new CloudflareResponse<T>
         {
             Success = success,
-            Result = envelope?.Result,
+            // A null-conditional operator cannot be used here: forming T? from a member that is
+            // already T? makes the compiler try to nullable-annotate an unconstrained type parameter.
+            Result = envelope is null ? default : envelope.Result,
             Errors = errors,
             Messages = messages,
             ResultInfo = envelope?.ResultInfo,

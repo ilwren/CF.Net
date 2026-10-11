@@ -121,7 +121,7 @@ public sealed class R2Service : CloudflareService, IR2Service
         request.OperationName = "List R2 Buckets";
         ApplyJurisdiction(request, parameters?.Jurisdiction);
 
-        var response = await Transport.SendAsync<R2BucketListResult?>(request, cancellationToken).ConfigureAwait(false);
+        var response = await Transport.SendAsync<R2BucketListResult>(request, cancellationToken).ConfigureAwait(false);
 
         return new CloudflarePage<R2Bucket>(
             response.Result?.Buckets ?? new List<R2Bucket>(),
@@ -183,7 +183,7 @@ public sealed class R2Service : CloudflareService, IR2Service
         request.OperationName = "Get R2 Bucket";
         ApplyJurisdiction(request, jurisdiction);
 
-        var response = await Transport.SendAsync<R2Bucket?>(request, cancellationToken).ConfigureAwait(false);
+        var response = await Transport.SendAsync<R2Bucket>(request, cancellationToken).ConfigureAwait(false);
         return response.Result;
     }
 
@@ -198,7 +198,7 @@ public sealed class R2Service : CloudflareService, IR2Service
         httpRequest.OperationName = "Create R2 Bucket";
         ApplyJurisdiction(httpRequest, request.Jurisdiction);
 
-        var response = await Transport.SendAsync<R2Bucket?>(httpRequest, cancellationToken).ConfigureAwait(false);
+        var response = await Transport.SendAsync<R2Bucket>(httpRequest, cancellationToken).ConfigureAwait(false);
         return response.EnsureResult();
     }
 
@@ -230,7 +230,7 @@ public sealed class R2Service : CloudflareService, IR2Service
         httpRequest.OperationName = "Update R2 Bucket";
         ApplyJurisdiction(httpRequest, jurisdiction);
 
-        var response = await Transport.SendAsync<R2Bucket?>(httpRequest, cancellationToken).ConfigureAwait(false);
+        var response = await Transport.SendAsync<R2Bucket>(httpRequest, cancellationToken).ConfigureAwait(false);
         return response.Result ?? new R2Bucket { Name = bucketName, StorageClass = storageClass };
     }
 

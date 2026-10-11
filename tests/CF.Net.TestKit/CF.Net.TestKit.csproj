@@ -1,0 +1,23 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    Shared test plumbing for both test projects:
+
+      * a cassette recorder/replayer, so one authenticated run against the real Cloudflare API can
+        be turned into offline fixtures that the unit tests replay byte for byte;
+      * repository path discovery, so tests can find those fixtures regardless of the working
+        directory the test host was started from.
+
+    It is a library, not a test project: no IsTestProject, no test adapter, and never packed.
+    Both TFMs are targeted because CF.Net.UnitTests multi-targets and a project reference has to
+    match one of the referencing project's frameworks.
+  -->
+  <PropertyGroup>
+    <TargetFrameworks>net8.0;net10.0</TargetFrameworks>
+    <AssemblyName>CF.Net.TestKit</AssemblyName>
+    <RootNamespace>CFNet.TestKit</RootNamespace>
+    <IsPackable>false</IsPackable>
+    <IsTestProject>false</IsTestProject>
+  </PropertyGroup>
+
+</Project>

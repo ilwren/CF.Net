@@ -143,20 +143,9 @@ public static class ServiceCollectionCloudflareExtensions
     {
         return services.AddCloudflare(options =>
         {
-            var fromEnvironment = CloudflareClientOptions.FromEnvironment();
-
             // Merge rather than overwrite: anything already configured (appsettings.json, an earlier
             // Configure call) keeps winning, and the environment only fills the gaps.
-            options.ApiToken ??= fromEnvironment.ApiToken;
-            options.GlobalApiKey ??= fromEnvironment.GlobalApiKey;
-            options.ApiEmail ??= fromEnvironment.ApiEmail;
-            options.AccountId ??= fromEnvironment.AccountId;
-            options.ZoneId ??= fromEnvironment.ZoneId;
-
-            if (!string.Equals(fromEnvironment.BaseAddress.OriginalString, CloudflareDefaults.BaseAddress, StringComparison.OrdinalIgnoreCase))
-            {
-                options.BaseAddress = fromEnvironment.BaseAddress;
-            }
+            CloudflareClientOptions.FromEnvironment().CopyMissingInto(options);
 
             configure?.Invoke(options);
         });
@@ -285,23 +274,6 @@ public static class ServiceCollectionCloudflareExtensions
     /// Copies every setting of <paramref name="source"/> onto <paramref name="target"/>. Used so an
     /// options instance can be fed into the <c>IOptions</c> pipeline without losing members.
     /// </summary>
-    private static void CopyInto(CloudflareClientOptions source, CloudflareClientOptions target)
-    {
-        target.BaseAddress = source.BaseAddress;
-        target.ApiToken = source.ApiToken;
-        target.GlobalApiKey = source.GlobalApiKey;
-        target.ApiEmail = source.ApiEmail;
-        target.AccountId = source.AccountId;
-        target.ZoneId = source.ZoneId;
-        target.Timeout = source.Timeout;
-        target.UserAgent = source.UserAgent;
-        target.MaxRetries = source.MaxRetries;
-        target.RetryBaseDelay = source.RetryBaseDelay;
-        target.MaxRetryDelay = source.MaxRetryDelay;
-        target.UseRetryJitter = source.UseRetryJitter;
-        target.ThrowOnApiError = source.ThrowOnApiError;
-        target.ConfigureRequest = source.ConfigureRequest;
-        target.InspectResponse = source.InspectResponse;
-        target.JsonSerializerOptions = source.JsonSerializerOptions;
-    }
+    private static void CopyInto(CloudflareClientOptions source, CloudflareClientOptions target) =>
+        source.CopyTo(target);
 }

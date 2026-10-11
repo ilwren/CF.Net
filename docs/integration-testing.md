@@ -4,8 +4,8 @@ CF.Net separates two kinds of tests, and the difference matters:
 
 | | `tests/CF.Net.UnitTests` | `tests/CF.Net.IntegrationTests` |
 | --- | --- | --- |
-| Network | **never** — a stubbed `HttpMessageHandler` | real `api.cloudflare.com` |
-| Credentials | none | `CLOUDFLARE_*` environment variables |
+| Network | **never** — a stubbed `HttpMessageHandler`, or a replayed cassette | real `api.cloudflare.com` |
+| Credentials | none | `CLOUDFLARE_*` variables, or a git-ignored `credentials.local.json` |
 | Tag | none | `[Trait("Category", "Integration")]` |
 | Target frameworks | `net8.0`, `net10.0` | `net8.0` |
 | Runs on | every push and pull request | manual dispatch and a weekly schedule |
@@ -27,16 +27,36 @@ what the tests do once they have them.
 | `CLOUDFLARE_ACCOUNT_ID` | Workers, Pages, D1, KV, R2 | |
 | `CLOUDFLARE_ZONE_ID` | DNS records, cache purge | |
 | `CLOUDFLARE_IT_ENABLE_WRITES` | the lifecycle tests | must be exactly `true` |
+| `CLOUDFLARE_IT_CASSETTE` | recording | name of the cassette file to write, see [section 6](#6-recording-a-cassette) |
+| `CLOUDFLARE_IT_RECORD` | recording | `true`/`record`/`1`; implied when a cassette name is given |
 
 These are the same variables `CloudflareClientOptions.FromEnvironment()` reads, and the same ones
 `.github/workflows/integration.yml` injects — so there is no separate CI-only configuration path.
+
+**Not everyone wants to export variables in every shell.** A git-ignored
+`tests/CF.Net.IntegrationTests/credentials.local.json` works too, and environment variables still win,
+so a CI secret can never be shadowed by a stray local file:
+
+```json
+{
+  "apiToken": "v1.0-...",
+  "accountId": "023e105f4ecef8ad9ca31a8372d0c353",
+  "zoneId": "8d0c8239f88f98a8cb82ec7bb29b8556",
+  "enableWrites": false
+}
+```
+
+`apiToken`/`globalApiKey`/`apiEmail`/`accountId`/`zoneId`/`baseAddress`/`enableWrites`/`cassette`/`record`
+are all accepted, in camelCase or as their `CLOUDFLARE_*` spelling. `credentials.example.json` is the
+committed template; copy it, fill it in, and it stays out of git.
 
 When a variable is missing the test **does not fail**. xunit v2 has no dynamic skip, so the fixture
 prints `SKIPPED: <reason>` through `ITestOutputHelper` and returns early. A run with no credentials
 at all is a fast, green no-op — which is exactly what you want on a pull request from a fork.
 
-The client itself is built through `AddCloudflareFromEnvironment()`, so the integration suite also
-proves the dependency-injection registration works against the live API.
+The client is built through the container — `AddCloudflare(...)`, or `AddCloudflareHttpClient(...)`
+when a run is recording — so the integration suite also proves the dependency-injection registration
+works against the live API.
 
 ---
 
@@ -69,16 +89,26 @@ $env:CLOUDFLARE_IT_ENABLE_WRITES = 'true'
 dotnet test tests/CF.Net.IntegrationTests --filter "Category=Integration"
 ```
 
-Prefer not to put a token in your shell history? Use
-[`dotnet user-secrets`](https://learn.microsoft.com/aspnet/core/security/app-secrets) in a scratch
-project and export from there, or a `.env` file that is already gitignored:
+Prefer not to put a token in your shell history? Copy the committed template and fill it in:
+
+```bash
+cp tests/CF.Net.IntegrationTests/credentials.example.json \
+   tests/CF.Net.IntegrationTests/credentials.local.json
+$EDITOR tests/CF.Net.IntegrationTests/credentials.local.json
+dotnet test tests/CF.Net.IntegrationTests --filter "Category=Integration"
+```
+
+`credentials.local.json` is git-ignored, and environment variables still take precedence over it, so
+a CI secret can never be shadowed by a stale local file. The same works with a `.env` you source
+yourself:
 
 ```bash
 set -a; . ./.env; set +a
 dotnet test tests/CF.Net.IntegrationTests --filter "Category=Integration"
 ```
 
-`.gitignore` in this repository excludes `.env`, `.env.*` and `secrets.json`.
+`.gitignore` in this repository excludes `.env`, `.env.*`, `secrets.json`, `credentials.json` and
+`credentials.local.json`.
 
 ### Narrowing a run
 
@@ -157,6 +187,8 @@ env:
   CLOUDFLARE_API_EMAIL: ${{ secrets.CLOUDFLARE_API_EMAIL }}
   CLOUDFLARE_GLOBAL_API_KEY: ${{ secrets.CLOUDFLARE_GLOBAL_API_KEY }}
   CLOUDFLARE_IT_ENABLE_WRITES: ${{ inputs.enable_writes && 'true' || 'false' }}
+  CLOUDFLARE_IT_CASSETTE: ${{ inputs.cassette }}
+  CLOUDFLARE_IT_RECORD: ${{ inputs.cassette && 'true' || 'false' }}
 ```
 
 Job-level `env:` is what makes them visible as process environment variables to `dotnet test`.
@@ -172,6 +204,14 @@ on:
     inputs:
       enable_writes:
         description: 'Allow tests that create and delete resources'
+        type: boolean
+        default: false
+      cassette:
+        description: 'Record into tests/cassettes/<name>.json'
+        type: string
+        default: ''
+      commit_cassette:
+        description: 'Commit the recorded cassette back to this branch'
         type: boolean
         default: false
   schedule:
@@ -190,7 +230,7 @@ on:
 ### Running it
 
 GitHub → **Actions** → **Integration** → **Run workflow** → choose the branch → optionally tick
-*Allow tests that create and delete resources* → **Run workflow**.
+*Allow tests that create and delete resources*, or name a cassette to record → **Run workflow**.
 
 The first step reports what it found:
 
@@ -205,7 +245,8 @@ With no credentials at all it emits a warning and finishes green, printing
 should not have a permanently red workflow.
 
 Results are uploaded as the `integration-results` artifact (a `.trx` you can open in Visual Studio
-or with `trx2junit`).
+or with `trx2junit`). A recording run also uploads `cassette-<name>` and, with *Commit the recorded
+cassette* ticked, pushes the file to the branch it ran on.
 
 ---
 
@@ -262,13 +303,49 @@ schedule.
 
 ---
 
-## 6. Pointing the tests somewhere else
+## 6. Recording a cassette
+
+The integration suite proves the client works *today*. A cassette freezes that proof so the unit
+suite can keep asserting against genuine Cloudflare payloads — offline, on every pull request, with
+no credentials and no quota. `tests/cassettes/README.md` has the full format; the short version:
+
+```bash
+export CLOUDFLARE_IT_CASSETTE=readonly-smoke   # file: tests/cassettes/readonly-smoke.json
+export CLOUDFLARE_IT_RECORD=true               # implied by the name
+export CLOUDFLARE_IT_ENABLE_WRITES=true        # only if writes belong in the recording
+
+dotnet test tests/CF.Net.IntegrationTests --filter "Category=Integration"
+```
+
+The recorder is `CFNet.TestKit.CassetteHandler`, a `DelegatingHandler` dropped into the
+`IHttpClientFactory` pipeline. It is shared across every test in the run, so one file collects the
+whole transcript, and it merges into an existing cassette rather than truncating it.
+
+Two things it guarantees:
+
+* **Credentials never reach disk.** `Authorization`, `X-Auth-Key`, `X-Auth-Email`, `X-Api-Key`,
+  `Cookie` and `Set-Cookie` are replaced with `<redacted>` on the way in, and
+  `CassetteTests.Committed_cassettes_bind_to_the_typed_models` fails the build if a committed
+  cassette carries a real value for any of them.
+* **Replay never reaches the network.** The replaying handler's inner handler throws, so a request
+  the cassette does not contain is a `CassetteMissException`, not a silent API call.
+
+Everything *else* in a cassette is real data: account ids, zone names, KV values, DNS records. Read
+the diff before committing, and do not record from an account you would not publish.
+
+In GitHub Actions, run the **Integration** workflow manually and fill in the `cassette` input. The
+file is attached as the `cassette-<name>` artifact; with `commit_cassette` ticked, the workflow
+commits it back to the branch it ran on.
+
+---
+
+## 7. Pointing the tests somewhere else
 
 `CloudflareClientOptions.BaseAddress` is honoured by everything, and
 `CLOUDFLARE_BASE_ADDRESS` feeds it. That gives you three useful configurations:
 
 ```bash
-# Record what the integration suite really sends, with mitmproxy.
+# Record what the integration suite really sends, with a proxy instead of the built-in recorder.
 export CLOUDFLARE_BASE_ADDRESS='https://api.cloudflare.com/client/v4/'
 export HTTPS_PROXY='http://127.0.0.1:8080'
 
@@ -285,7 +362,7 @@ credentials out of CI entirely.
 
 ---
 
-## 7. Troubleshooting
+## 8. Troubleshooting
 
 | Symptom | Cause | Fix |
 | --- | --- | --- |
@@ -296,6 +373,8 @@ credentials out of CI entirely.
 | `7403 D1_DATABASE_NOT_FOUND` | wrong account id | `CLOUDFLARE_ACCOUNT_ID` must own the database |
 | `10007` on a zone you can see in the dashboard | the token's *Zone resources* scope excludes it | include the specific zone, or all zones |
 | Writes skip even though credentials are set | `CLOUDFLARE_IT_ENABLE_WRITES` is not exactly `true` | tick the workflow input, or export `true` |
+| No cassette file appears after a recording run | `CLOUDFLARE_IT_CASSETTE` is empty, or every test skipped | set the name, and check the credentials are actually present |
+| `CassetteMissException` during replay | the code asked Cloudflare something the recording never asked | re-record, or fix the call — this is the drift the cassette exists to catch |
 | Rate limited (429) after several runs | purge or list quotas | wait; the transport already honours `Retry-After` when retries are on |
 
 When a test fails, the log line includes the `CF-RAY`. Quoting it to Cloudflare support gets you the

@@ -149,7 +149,7 @@ public sealed class DnsRecordsService : CloudflareService, IDnsRecordsService
         var request = Apply(CloudflareRequest.Get($"{ZonePath(zone)}/dns_records"), parameters);
         request.OperationName = "List DNS Records";
 
-        var response = await Transport.SendAsync<List<DnsRecord>?>(request, cancellationToken).ConfigureAwait(false);
+        var response = await Transport.SendAsync<List<DnsRecord>>(request, cancellationToken).ConfigureAwait(false);
         return response.ToPage();
     }
 
@@ -226,7 +226,7 @@ public sealed class DnsRecordsService : CloudflareService, IDnsRecordsService
             .Tolerate(System.Net.HttpStatusCode.NotFound);
         request.OperationName = "Get DNS Record";
 
-        var response = await Transport.SendAsync<DnsRecord?>(request, cancellationToken).ConfigureAwait(false);
+        var response = await Transport.SendAsync<DnsRecord>(request, cancellationToken).ConfigureAwait(false);
         return response.Result;
     }
 
@@ -413,7 +413,7 @@ public sealed class DnsRecordsService : CloudflareService, IDnsRecordsService
 
     private async Task<DnsRecord> SendForRecordAsync(CloudflareRequest request, CancellationToken cancellationToken)
     {
-        var response = await Transport.SendAsync<DnsRecord?>(request, cancellationToken).ConfigureAwait(false);
+        var response = await Transport.SendAsync<DnsRecord>(request, cancellationToken).ConfigureAwait(false);
         return response.EnsureResult();
     }
 }

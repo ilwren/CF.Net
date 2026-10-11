@@ -122,6 +122,102 @@ public sealed class CloudflareClientOptions
     }
 
     /// <summary>
+    /// Copies every setting onto <paramref name="target"/>, overwriting what was already there.
+    /// </summary>
+    /// <remarks>
+    /// Useful when options are assembled from more than one source - for example binding a
+    /// configuration file first and then layering environment variables or user secrets on top.
+    /// Callers that want the opposite precedence copy in the other direction, and callers that want
+    /// to fill gaps without overwriting should use <see cref="CopyMissingInto"/>.
+    /// </remarks>
+    /// <param name="target">The instance to write into. Must not be <see langword="null"/>.</param>
+    /// <returns><paramref name="target"/>, so calls can be chained.</returns>
+    public CloudflareClientOptions CopyTo(CloudflareClientOptions target)
+    {
+        ArgumentNullException.ThrowIfNull(target);
+
+        target.BaseAddress = BaseAddress;
+        target.ApiToken = ApiToken;
+        target.GlobalApiKey = GlobalApiKey;
+        target.ApiEmail = ApiEmail;
+        target.AccountId = AccountId;
+        target.ZoneId = ZoneId;
+        target.Timeout = Timeout;
+        target.UserAgent = UserAgent;
+        target.MaxRetries = MaxRetries;
+        target.RetryBaseDelay = RetryBaseDelay;
+        target.MaxRetryDelay = MaxRetryDelay;
+        target.UseRetryJitter = UseRetryJitter;
+        target.ThrowOnApiError = ThrowOnApiError;
+        target.ConfigureRequest = ConfigureRequest;
+        target.InspectResponse = InspectResponse;
+        target.JsonSerializerOptions = JsonSerializerOptions;
+
+        return target;
+    }
+
+    /// <summary>
+    /// Copies only the settings that <paramref name="target"/> has not been given yet, so an
+    /// existing value always wins.
+    /// </summary>
+    /// <remarks>
+    /// This is the merge direction used by
+    /// <c>AddCloudflareFromEnvironment</c>: a value bound from <c>appsettings.json</c> or set by a
+    /// configure callback is kept, and the environment only fills the holes. Credentials count as
+    /// "already set" when they are neither <see langword="null"/> nor whitespace.
+    /// </remarks>
+    /// <param name="target">The instance to fill in. Must not be <see langword="null"/>.</param>
+    /// <returns><paramref name="target"/>, so calls can be chained.</returns>
+    public CloudflareClientOptions CopyMissingInto(CloudflareClientOptions target)
+    {
+        ArgumentNullException.ThrowIfNull(target);
+
+        target.ApiToken ??= ApiToken;
+        target.GlobalApiKey ??= GlobalApiKey;
+        target.ApiEmail ??= ApiEmail;
+        target.AccountId ??= AccountId;
+        target.ZoneId ??= ZoneId;
+
+        // Value types cannot express "unset", so the documented factory defaults stand in for it:
+        // a target still carrying a default is treated as untouched and takes this instance's value.
+        if (string.Equals(target.BaseAddress.OriginalString, CloudflareDefaults.BaseAddress, StringComparison.OrdinalIgnoreCase))
+        {
+            target.BaseAddress = BaseAddress;
+        }
+
+        if (target.Timeout == TimeSpan.FromSeconds(100))
+        {
+            target.Timeout = Timeout;
+        }
+
+        if (string.Equals(target.UserAgent, CloudflareDefaults.UserAgent, StringComparison.Ordinal))
+        {
+            target.UserAgent = UserAgent;
+        }
+
+        if (target.MaxRetries == 2)
+        {
+            target.MaxRetries = MaxRetries;
+        }
+
+        if (target.RetryBaseDelay == TimeSpan.FromMilliseconds(500))
+        {
+            target.RetryBaseDelay = RetryBaseDelay;
+        }
+
+        if (target.MaxRetryDelay == TimeSpan.FromSeconds(20))
+        {
+            target.MaxRetryDelay = MaxRetryDelay;
+        }
+
+        target.ConfigureRequest ??= ConfigureRequest;
+        target.InspectResponse ??= InspectResponse;
+        target.JsonSerializerOptions ??= JsonSerializerOptions;
+
+        return target;
+    }
+
+    /// <summary>
     /// Builds options from environment variables. This is exactly what the integration tests and
     /// the GitHub Actions workflow use, so a locally exported variable behaves like a CI secret.
     /// </summary>

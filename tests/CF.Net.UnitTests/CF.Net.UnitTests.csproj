@@ -27,6 +27,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\..\src\CF.Net\CF.Net.csproj" />
+    <ProjectReference Include="..\CF.Net.TestKit\CF.Net.TestKit.csproj" />
   </ItemGroup>
 
 </Project>

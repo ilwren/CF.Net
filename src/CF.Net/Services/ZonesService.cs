@@ -91,7 +91,7 @@ public sealed class ZonesService : CloudflareService, IZonesService
         var request = Apply(CloudflareRequest.Get("zones"), parameters);
         request.OperationName = "List Zones";
 
-        var response = await Transport.SendAsync<List<Zone>?>(request, cancellationToken).ConfigureAwait(false);
+        var response = await Transport.SendAsync<List<Zone>>(request, cancellationToken).ConfigureAwait(false);
         return response.ToPage();
     }
 
@@ -138,7 +138,7 @@ public sealed class ZonesService : CloudflareService, IZonesService
             .Tolerate(System.Net.HttpStatusCode.NotFound);
         request.OperationName = "Get Zone";
 
-        var response = await Transport.SendAsync<Zone?>(request, cancellationToken).ConfigureAwait(false);
+        var response = await Transport.SendAsync<Zone>(request, cancellationToken).ConfigureAwait(false);
         return response.Result;
     }
 
@@ -220,7 +220,7 @@ public sealed class ZonesService : CloudflareService, IZonesService
         var request = CloudflareRequest.Post($"{ZonePath(id)}/activation_check");
         request.OperationName = "Run Zone Activation Check";
 
-        var response = await Transport.SendAsync<ZoneActivationCheckResult?>(request, cancellationToken).ConfigureAwait(false);
+        var response = await Transport.SendAsync<ZoneActivationCheckResult>(request, cancellationToken).ConfigureAwait(false);
         return response.Result ?? new ZoneActivationCheckResult { Id = id };
     }
 
@@ -237,13 +237,13 @@ public sealed class ZonesService : CloudflareService, IZonesService
         var httpRequest = CloudflareRequest.Post($"{ZonePath(id)}/purge_cache", request);
         httpRequest.OperationName = "Purge Cache";
 
-        var response = await Transport.SendAsync<PurgeCacheResult?>(httpRequest, cancellationToken).ConfigureAwait(false);
+        var response = await Transport.SendAsync<PurgeCacheResult>(httpRequest, cancellationToken).ConfigureAwait(false);
         return response.Result ?? new PurgeCacheResult();
     }
 
     private async Task<Zone> SendForZoneAsync(CloudflareRequest request, CancellationToken cancellationToken)
     {
-        var response = await Transport.SendAsync<Zone?>(request, cancellationToken).ConfigureAwait(false);
+        var response = await Transport.SendAsync<Zone>(request, cancellationToken).ConfigureAwait(false);
         return response.EnsureResult();
     }
 }

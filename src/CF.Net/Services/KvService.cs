@@ -197,7 +197,7 @@ public sealed class KvService : CloudflareService, IKvService
         var request = Apply(CloudflareRequest.Get($"{AccountPath(account)}/storage/kv/namespaces"), parameters);
         request.OperationName = "List KV Namespaces";
 
-        var response = await Transport.SendAsync<List<KvNamespace>?>(request, cancellationToken).ConfigureAwait(false);
+        var response = await Transport.SendAsync<List<KvNamespace>>(request, cancellationToken).ConfigureAwait(false);
         return response.ToPage();
     }
 
@@ -255,7 +255,7 @@ public sealed class KvService : CloudflareService, IKvService
         var request = CloudflareRequest.Get(path).Tolerate(System.Net.HttpStatusCode.NotFound);
         request.OperationName = "Get KV Namespace";
 
-        var response = await Transport.SendAsync<KvNamespace?>(request, cancellationToken).ConfigureAwait(false);
+        var response = await Transport.SendAsync<KvNamespace>(request, cancellationToken).ConfigureAwait(false);
         return response.Result;
     }
 
@@ -270,7 +270,7 @@ public sealed class KvService : CloudflareService, IKvService
             new CreateKvNamespaceRequest(title.Trim()));
         request.OperationName = "Create KV Namespace";
 
-        var response = await Transport.SendAsync<KvNamespace?>(request, cancellationToken).ConfigureAwait(false);
+        var response = await Transport.SendAsync<KvNamespace>(request, cancellationToken).ConfigureAwait(false);
         return response.EnsureResult();
     }
 
@@ -287,7 +287,7 @@ public sealed class KvService : CloudflareService, IKvService
         var request = CloudflareRequest.Put(path, new UpdateKvNamespaceRequest(title.Trim()));
         request.OperationName = "Rename KV Namespace";
 
-        var response = await Transport.SendAsync<KvNamespace?>(request, cancellationToken).ConfigureAwait(false);
+        var response = await Transport.SendAsync<KvNamespace>(request, cancellationToken).ConfigureAwait(false);
         return response.Result ?? new KvNamespace { Id = namespaceId, Title = title.Trim() };
     }
 
@@ -312,7 +312,7 @@ public sealed class KvService : CloudflareService, IKvService
         var request = Apply(CloudflareRequest.Get($"{path}/keys"), parameters);
         request.OperationName = "List KV Keys";
 
-        var response = await Transport.SendAsync<List<KvKey>?>(request, cancellationToken).ConfigureAwait(false);
+        var response = await Transport.SendAsync<List<KvKey>>(request, cancellationToken).ConfigureAwait(false);
         return response.ToPage();
     }
 

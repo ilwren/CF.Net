@@ -52,3 +52,13 @@ appsettings.Local.json
 *.pfx
 secrets.json
 credentials.json
+
+# ---------------------------------------------------------------------------
+# Local Cloudflare credentials for the integration tests.
+# Cassettes in tests/cassettes/ ARE committed on purpose: they are the offline
+# fixtures the unit tests replay. Credentials are never a cassette, and the
+# recorder redacts them, but keep the file that holds them out of git anyway.
+# ---------------------------------------------------------------------------
+credentials.local.json
+tests/CF.Net.IntegrationTests/credentials*.json
+!tests/CF.Net.IntegrationTests/credentials.example.json

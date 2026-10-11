@@ -50,7 +50,7 @@ public sealed class UserService : CloudflareService, IUserService
         var request = CloudflareRequest.Get("user/tokens/verify");
         request.OperationName = "Verify API Token";
 
-        var response = await Transport.SendAsync<CloudflareTokenVerification?>(request, cancellationToken).ConfigureAwait(false);
+        var response = await Transport.SendAsync<CloudflareTokenVerification>(request, cancellationToken).ConfigureAwait(false);
         return response.Result ?? new CloudflareTokenVerification();
     }
 
@@ -60,7 +60,7 @@ public sealed class UserService : CloudflareService, IUserService
         var request = CloudflareRequest.Get("user");
         request.OperationName = "Get User";
 
-        var response = await Transport.SendAsync<CloudflareUser?>(request, cancellationToken).ConfigureAwait(false);
+        var response = await Transport.SendAsync<CloudflareUser>(request, cancellationToken).ConfigureAwait(false);
         return response.EnsureResult();
     }
 
@@ -213,7 +213,7 @@ public sealed class AccountsService : CloudflareService, IAccountsService
         var request = Apply(CloudflareRequest.Get("accounts"), parameters);
         request.OperationName = "List Accounts";
 
-        var response = await Transport.SendAsync<List<CloudflareAccount>?>(request, cancellationToken).ConfigureAwait(false);
+        var response = await Transport.SendAsync<List<CloudflareAccount>>(request, cancellationToken).ConfigureAwait(false);
         return response.ToPage();
     }
 
@@ -224,7 +224,7 @@ public sealed class AccountsService : CloudflareService, IAccountsService
         var request = CloudflareRequest.Get(AccountPath(id)).Tolerate(System.Net.HttpStatusCode.NotFound);
         request.OperationName = "Get Account";
 
-        var response = await Transport.SendAsync<CloudflareAccount?>(request, cancellationToken).ConfigureAwait(false);
+        var response = await Transport.SendAsync<CloudflareAccount>(request, cancellationToken).ConfigureAwait(false);
         return response.Result;
     }
 }

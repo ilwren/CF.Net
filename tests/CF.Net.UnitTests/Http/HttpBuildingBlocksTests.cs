@@ -494,7 +494,7 @@ public class CloudflarePageTests
     [Fact]
     public void ToPage_copies_result_and_metadata()
     {
-        var response = new CloudflareResponse<List<Zone>?>
+        var response = new CloudflareResponse<List<Zone>>
         {
             Success = true,
             Result = new List<Zone> { new() { Name = "a.test" } },
@@ -512,7 +512,7 @@ public class CloudflarePageTests
     [Fact]
     public void ToPage_of_a_null_result_yields_an_empty_page()
     {
-        var page = new CloudflareResponse<List<Zone>?> { Success = true, Result = null }.ToPage();
+        var page = new CloudflareResponse<List<Zone>> { Success = true, Result = null }.ToPage();
 
         Assert.Empty(page.Items);
         Assert.False(page.HasMore);
@@ -522,14 +522,14 @@ public class CloudflarePageTests
     public void ToPage_with_a_selector_unwraps_a_named_array()
     {
         // R2 returns { "buckets": [...] } rather than a bare array.
-        var response = new CloudflareResponse<Wrapper?>
+        var response = new CloudflareResponse<Wrapper>
         {
             Success = true,
             Result = new Wrapper { Buckets = new List<Zone> { new() { Name = "x" } } },
             ResultInfo = Info(null, null, null, cursor: "next"),
         };
 
-        var page = response.ToPage((Wrapper? result) => result?.Buckets ?? Array.Empty<Zone>());
+        var page = response.ToPage((Wrapper? result) => (IReadOnlyList<Zone>)(result?.Buckets ?? new List<Zone>()));
 
         Assert.Single(page.Items);
         Assert.Equal("next", page.NextCursor);
@@ -538,7 +538,7 @@ public class CloudflarePageTests
     [Fact]
     public void FromResponse_matches_ToPage()
     {
-        var response = new CloudflareResponse<List<Zone>?> { Result = new List<Zone> { new() } };
+        var response = new CloudflareResponse<List<Zone>> { Result = new List<Zone> { new() } };
 
         Assert.Equal(CloudflarePage<Zone>.FromResponse(response).Count, response.ToPage().Count);
     }

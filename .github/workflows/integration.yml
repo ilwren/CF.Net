@@ -25,6 +25,14 @@ on:
         description: 'Allow tests that create and delete resources (KV namespace, R2 bucket, D1 database, Worker, Pages project, DNS record, cache purge)'
         type: boolean
         default: false
+      cassette:
+        description: 'Record every call into tests/cassettes/<name>.json, for the offline unit tests to replay (leave empty to disable recording)'
+        type: string
+        default: ''
+      commit_cassette:
+        description: 'Commit the recorded cassette back to this branch'
+        type: boolean
+        default: false
   schedule:
     # Mondays at 04:00 UTC - read-only, so it can run unattended.
     - cron: '0 4 * * 1'
@@ -47,12 +55,18 @@ env:
   CLOUDFLARE_API_EMAIL: ${{ secrets.CLOUDFLARE_API_EMAIL }}
   CLOUDFLARE_GLOBAL_API_KEY: ${{ secrets.CLOUDFLARE_GLOBAL_API_KEY }}
   CLOUDFLARE_IT_ENABLE_WRITES: ${{ inputs.enable_writes && 'true' || 'false' }}
+  # Recording is off unless a cassette name is given. CLOUDFLARE_IT_RECORD only means something
+  # together with CLOUDFLARE_IT_CASSETTE.
+  CLOUDFLARE_IT_CASSETTE: ${{ inputs.cassette }}
+  CLOUDFLARE_IT_RECORD: ${{ inputs.cassette && 'true' || 'false' }}
 
 jobs:
   integration:
     name: Cloudflare API integration tests
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    permissions:
+      contents: write   # only used by the opt-in "commit the cassette" step
 
     steps:
       - name: Checkout
@@ -90,6 +104,10 @@ jobs:
 
           echo "Write operations: ${CLOUDFLARE_IT_ENABLE_WRITES}"
 
+          if [ -n "${CLOUDFLARE_IT_CASSETTE:-}" ]; then
+            echo "::notice::Recording this run into tests/cassettes/${CLOUDFLARE_IT_CASSETTE}.json. Credentials are redacted on the way in."
+          fi
+
       - name: Restore
         run: dotnet restore tests/CF.Net.IntegrationTests/CF.Net.IntegrationTests.csproj
 
@@ -107,6 +125,49 @@ jobs:
       - name: Skipped
         if: steps.credentials.outputs.available != 'true'
         run: echo "Integration tests skipped - no credentials. The job is green because there is nothing to verify."
+
+      - name: Show what was recorded
+        if: always() && inputs.cassette != ''
+        run: |
+          echo "### Cassette" >> "$GITHUB_STEP_SUMMARY"
+          if ls tests/cassettes/*.json >/dev/null 2>&1; then
+            echo '```json' >> "$GITHUB_STEP_SUMMARY"
+            head -c 4000 tests/cassettes/"${CLOUDFLARE_IT_CASSETTE}".json >> "$GITHUB_STEP_SUMMARY" || true
+            echo '```' >> "$GITHUB_STEP_SUMMARY"
+            echo >> "$GITHUB_STEP_SUMMARY"
+            echo "Exchanges recorded: $(grep -c '"pathAndQuery"' tests/cassettes/"${CLOUDFLARE_IT_CASSETTE}".json || echo 0)" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "Nothing was recorded - the tests probably all skipped." >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      # Either download the artifact below and commit it yourself, or let the workflow do it.
+      - name: Commit the cassette back to the branch
+        if: always() && inputs.cassette != '' && inputs.commit_cassette && github.event_name == 'workflow_dispatch'
+        run: |
+          if ! ls tests/cassettes/*.json >/dev/null 2>&1; then
+            echo "No cassette file to commit."
+            exit 0
+          fi
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git checkout -B "$GITHUB_REF_NAME"
+          git add tests/cassettes
+          if git diff --cached --quiet; then
+            echo "The cassette is unchanged."
+          else
+            git commit -m "Record Cloudflare cassette '${{ inputs.cassette }}'"
+            git push origin "HEAD:$GITHUB_REF_NAME"
+          fi
+
+      - name: Upload recorded cassette
+        if: always() && inputs.cassette != ''
+        uses: actions/upload-artifact@v4
+        with:
+          name: cassette-${{ inputs.cassette }}
+          path: tests/cassettes/**/*.json
+          if-no-files-found: ignore
+          retention-days: 30
 
       - name: Upload test results
         if: always()

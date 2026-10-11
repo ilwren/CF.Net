@@ -159,7 +159,7 @@ public sealed class PagesProjectsService : CloudflareService, IPagesProjectsServ
         var request = Apply(CloudflareRequest.Get($"{AccountPath(account)}/pages/projects"), parameters);
         request.OperationName = "List Pages Projects";
 
-        var response = await Transport.SendAsync<List<PagesProject>?>(request, cancellationToken).ConfigureAwait(false);
+        var response = await Transport.SendAsync<List<PagesProject>>(request, cancellationToken).ConfigureAwait(false);
         return response.ToPage();
     }
 
@@ -209,7 +209,7 @@ public sealed class PagesProjectsService : CloudflareService, IPagesProjectsServ
         var request = CloudflareRequest.Get(path).Tolerate(System.Net.HttpStatusCode.NotFound);
         request.OperationName = "Get Pages Project";
 
-        var response = await Transport.SendAsync<PagesProject?>(request, cancellationToken).ConfigureAwait(false);
+        var response = await Transport.SendAsync<PagesProject>(request, cancellationToken).ConfigureAwait(false);
         return response.Result;
     }
 
@@ -226,7 +226,7 @@ public sealed class PagesProjectsService : CloudflareService, IPagesProjectsServ
         var httpRequest = CloudflareRequest.Post($"{AccountPath(account)}/pages/projects", request);
         httpRequest.OperationName = "Create Pages Project";
 
-        var response = await Transport.SendAsync<PagesProject?>(httpRequest, cancellationToken).ConfigureAwait(false);
+        var response = await Transport.SendAsync<PagesProject>(httpRequest, cancellationToken).ConfigureAwait(false);
         return response.EnsureResult();
     }
 
@@ -254,7 +254,7 @@ public sealed class PagesProjectsService : CloudflareService, IPagesProjectsServ
         var httpRequest = CloudflareRequest.Patch(path, request);
         httpRequest.OperationName = "Update Pages Project";
 
-        var response = await Transport.SendAsync<PagesProject?>(httpRequest, cancellationToken).ConfigureAwait(false);
+        var response = await Transport.SendAsync<PagesProject>(httpRequest, cancellationToken).ConfigureAwait(false);
         return response.EnsureResult();
     }
 
@@ -279,7 +279,7 @@ public sealed class PagesProjectsService : CloudflareService, IPagesProjectsServ
         var request = Apply(CloudflareRequest.Get($"{path}/deployments"), parameters);
         request.OperationName = "List Pages Deployments";
 
-        var response = await Transport.SendAsync<List<PagesDeployment>?>(request, cancellationToken).ConfigureAwait(false);
+        var response = await Transport.SendAsync<List<PagesDeployment>>(request, cancellationToken).ConfigureAwait(false);
         return response.ToPage();
     }
 
@@ -298,7 +298,7 @@ public sealed class PagesProjectsService : CloudflareService, IPagesProjectsServ
             .Tolerate(System.Net.HttpStatusCode.NotFound);
         request.OperationName = "Get Pages Deployment";
 
-        var response = await Transport.SendAsync<PagesDeployment?>(request, cancellationToken).ConfigureAwait(false);
+        var response = await Transport.SendAsync<PagesDeployment>(request, cancellationToken).ConfigureAwait(false);
         return response.Result;
     }
 
@@ -313,7 +313,7 @@ public sealed class PagesProjectsService : CloudflareService, IPagesProjectsServ
         var httpRequest = CloudflareRequest.Post($"{path}/deployments", request ?? new CreatePagesDeploymentRequest());
         httpRequest.OperationName = "Create Pages Deployment";
 
-        var response = await Transport.SendAsync<PagesDeployment?>(httpRequest, cancellationToken).ConfigureAwait(false);
+        var response = await Transport.SendAsync<PagesDeployment>(httpRequest, cancellationToken).ConfigureAwait(false);
         return response.EnsureResult();
     }
 
@@ -344,7 +344,7 @@ public sealed class PagesProjectsService : CloudflareService, IPagesProjectsServ
         var request = Apply(CloudflareRequest.Get($"{path}/domains"), parameters);
         request.OperationName = "List Pages Domains";
 
-        var response = await Transport.SendAsync<List<PagesDomain>?>(request, cancellationToken).ConfigureAwait(false);
+        var response = await Transport.SendAsync<List<PagesDomain>>(request, cancellationToken).ConfigureAwait(false);
         return response.ToPage();
     }
 
@@ -361,7 +361,7 @@ public sealed class PagesProjectsService : CloudflareService, IPagesProjectsServ
         var httpRequest = CloudflareRequest.Post($"{path}/domains", new AddPagesDomainRequest(domainName.Trim()));
         httpRequest.OperationName = "Add Pages Domain";
 
-        var response = await Transport.SendAsync<PagesDomain?>(httpRequest, cancellationToken).ConfigureAwait(false);
+        var response = await Transport.SendAsync<PagesDomain>(httpRequest, cancellationToken).ConfigureAwait(false);
         return response.Result ?? new PagesDomain { Name = domainName.Trim() };
     }
 
@@ -381,7 +381,7 @@ public sealed class PagesProjectsService : CloudflareService, IPagesProjectsServ
         var httpRequest = CloudflareRequest.Patch($"{path}/domains/{CloudflareUrl.EncodeSegment(domain)}", request);
         httpRequest.OperationName = "Update Pages Domain";
 
-        var response = await Transport.SendAsync<PagesDomain?>(httpRequest, cancellationToken).ConfigureAwait(false);
+        var response = await Transport.SendAsync<PagesDomain>(httpRequest, cancellationToken).ConfigureAwait(false);
         return response.Result ?? new PagesDomain { Name = domain };
     }
 

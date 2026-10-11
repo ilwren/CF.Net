@@ -56,7 +56,7 @@ public sealed class CloudflarePage<T>
 
     /// <summary>Builds a page from a parsed response.</summary>
     /// <param name="response">The response whose <c>result</c> is the item list.</param>
-    public static CloudflarePage<T> FromResponse(CloudflareResponse<List<T>?> response)
+    public static CloudflarePage<T> FromResponse(CloudflareResponse<List<T>> response)
     {
         return new CloudflarePage<T>(response.Result ?? new List<T>(), response.ResultInfo);
     }
@@ -74,7 +74,7 @@ public static class CloudflareResponseExtensions
     /// <summary>Wraps a list response into a <see cref="CloudflarePage{T}"/>.</summary>
     /// <typeparam name="T">Item type.</typeparam>
     /// <param name="response">The list response.</param>
-    public static CloudflarePage<T> ToPage<T>(this CloudflareResponse<List<T>?> response) =>
+    public static CloudflarePage<T> ToPage<T>(this CloudflareResponse<List<T>> response) =>
         CloudflarePage<T>.FromResponse(response);
 
     /// <summary>
@@ -85,7 +85,7 @@ public static class CloudflareResponseExtensions
     /// <param name="response">The response.</param>
     /// <param name="selector">Extractor picking the array out of the result object.</param>
     public static CloudflarePage<T> ToPage<TWrapper, T>(
-        this CloudflareResponse<TWrapper?> response,
+        this CloudflareResponse<TWrapper> response,
         Func<TWrapper?, IReadOnlyList<T>> selector)
     {
         var items = selector(response.Result) ?? Array.Empty<T>();

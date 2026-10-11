@@ -147,7 +147,7 @@ public sealed class D1DatabaseService : CloudflareService, ID1DatabaseService
         var request = Apply(CloudflareRequest.Get($"{AccountPath(account)}/d1/database"), parameters);
         request.OperationName = "List D1 Databases";
 
-        var response = await Transport.SendAsync<List<D1Database>?>(request, cancellationToken).ConfigureAwait(false);
+        var response = await Transport.SendAsync<List<D1Database>>(request, cancellationToken).ConfigureAwait(false);
         return response.ToPage();
     }
 
@@ -205,7 +205,7 @@ public sealed class D1DatabaseService : CloudflareService, ID1DatabaseService
         var request = CloudflareRequest.Get(path).Tolerate(System.Net.HttpStatusCode.NotFound);
         request.OperationName = "Get D1 Database";
 
-        var response = await Transport.SendAsync<D1Database?>(request, cancellationToken).ConfigureAwait(false);
+        var response = await Transport.SendAsync<D1Database>(request, cancellationToken).ConfigureAwait(false);
         return response.Result;
     }
 
@@ -226,7 +226,7 @@ public sealed class D1DatabaseService : CloudflareService, ID1DatabaseService
         var httpRequest = CloudflareRequest.Post($"{AccountPath(account)}/d1/database", request);
         httpRequest.OperationName = "Create D1 Database";
 
-        var response = await Transport.SendAsync<D1Database?>(httpRequest, cancellationToken).ConfigureAwait(false);
+        var response = await Transport.SendAsync<D1Database>(httpRequest, cancellationToken).ConfigureAwait(false);
         return response.EnsureResult();
     }
 
@@ -310,8 +310,8 @@ public sealed class D1DatabaseService : CloudflareService, ID1DatabaseService
         var httpRequest = CloudflareRequest.Post($"{path}/query", request);
         httpRequest.OperationName = "Query D1 Database";
 
-        var response = await Transport.SendAsync<List<D1QueryResult>?>(httpRequest, cancellationToken).ConfigureAwait(false);
-        return response.Result ?? Array.Empty<D1QueryResult>();
+        var response = await Transport.SendAsync<List<D1QueryResult>>(httpRequest, cancellationToken).ConfigureAwait(false);
+        return response.Result is { } results ? results : Array.Empty<D1QueryResult>();
     }
 
     /// <inheritdoc />
@@ -325,7 +325,7 @@ public sealed class D1DatabaseService : CloudflareService, ID1DatabaseService
         var request = Apply(CloudflareRequest.Get($"{path}/backup"), parameters);
         request.OperationName = "List D1 Backups";
 
-        var response = await Transport.SendAsync<List<D1Backup>?>(request, cancellationToken).ConfigureAwait(false);
+        var response = await Transport.SendAsync<List<D1Backup>>(request, cancellationToken).ConfigureAwait(false);
         return response.ToPage();
     }
 
@@ -344,7 +344,7 @@ public sealed class D1DatabaseService : CloudflareService, ID1DatabaseService
             .Tolerate(System.Net.HttpStatusCode.NotFound);
         request.OperationName = "Get D1 Backup";
 
-        var response = await Transport.SendAsync<D1Backup?>(request, cancellationToken).ConfigureAwait(false);
+        var response = await Transport.SendAsync<D1Backup>(request, cancellationToken).ConfigureAwait(false);
         return response.Result;
     }
 

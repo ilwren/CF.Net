@@ -68,6 +68,12 @@ jobs:
     permissions:
       contents: write   # only used by the opt-in "commit the cassette" step
 
+    env:
+      # Every test that ends early appends one line here, and the "Summarise the run" step turns it
+      # into a table. xunit v2 has no dynamic skip, so without this a credential-less run would look
+      # exactly like a run that talked to Cloudflare 25 times.
+      CLOUDFLARE_IT_REPORT: ${{ runner.temp }}/integration-report.tsv
+
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -108,6 +114,58 @@ jobs:
             echo "::notice::Recording this run into tests/cassettes/${CLOUDFLARE_IT_CASSETTE}.json. Credentials are redacted on the way in."
           fi
 
+      - name: Verify the credentials against the live API
+        id: verify
+        if: steps.credentials.outputs.available == 'true'
+        shell: bash
+        run: |
+          set -o pipefail
+          base="${CLOUDFLARE_BASE_ADDRESS:-https://api.cloudflare.com/client/v4}"
+          base="${base%/}"
+
+          # One call made outside the library on purpose: an expired, revoked or under-scoped token
+          # should fail here with a single clear message instead of turning every test red and making
+          # you read 25 stack traces to find out. It is not recorded into a cassette, which captures
+          # only what the client itself sends.
+          if [ -n "${CLOUDFLARE_API_TOKEN:-}" ]; then
+            url="$base/user/tokens/verify"
+            auth=(-H "Authorization: Bearer ${CLOUDFLARE_API_TOKEN}")
+          else
+            url="$base/user"
+            auth=(-H "X-Auth-Key: ${CLOUDFLARE_GLOBAL_API_KEY}" -H "X-Auth-Email: ${CLOUDFLARE_API_EMAIL}")
+          fi
+
+          body="$RUNNER_TEMP/credential-check.json"
+          if ! curl --silent --show-error --max-time 30 --output "$body" "$url" "${auth[@]}"; then
+            echo "::warning::Could not reach $url to pre-check the credentials. Continuing anyway; the tests will report what they see."
+            exit 0
+          fi
+
+          PY=$(command -v python3 || command -v python || true)
+          if [ -z "$PY" ]; then exit 0; fi
+          "$PY" - "$body" "$url" <<'PY'
+          import json, sys
+
+          body, url = sys.argv[1], sys.argv[2]
+          try:
+              with open(body, encoding='utf-8') as handle:
+                  payload = json.load(handle)
+          except Exception as error:
+              print(f'::warning::Could not read the response from {url}: {error}')
+              sys.exit(0)
+
+          if payload.get('success'):
+              status = (payload.get('result') or {}).get('status')
+              print(f"::notice::Cloudflare accepted these credentials{f' (token status: {status})' if status else ''}.")
+              sys.exit(0)
+
+          rendered = ', '.join(
+              f"{error.get('code')}: {error.get('message')}"
+              for error in (payload.get('errors') or [])) or 'no error detail was returned'
+          print(f'::error::Cloudflare rejected these credentials - {rendered}. Fix the repository secrets before reading any test output.')
+          sys.exit(1)
+          PY
+
       - name: Restore
         run: dotnet restore tests/CF.Net.IntegrationTests/CF.Net.IntegrationTests.csproj
 
@@ -125,6 +183,81 @@ jobs:
       - name: Skipped
         if: steps.credentials.outputs.available != 'true'
         run: echo "Integration tests skipped - no credentials. The job is green because there is nothing to verify."
+
+      - name: Summarise the run
+        if: always()
+        shell: bash
+        run: |
+          set -o pipefail
+          PY=$(command -v python3 || command -v python || true)
+          if [ -z "$PY" ]; then echo "no python"; exit 0; fi
+          "$PY" - <<'PY'
+          import glob, os, xml.etree.ElementTree as ET
+
+          ns = {'t': 'http://microsoft.com/schemas/VisualStudio/TeamTest/2010'}
+
+          def cell(text):
+              return (text or '').replace('|', r'\|').replace('\n', ' ')
+
+          counts = {}
+          failures = []
+          total = 0
+          for trx in sorted(glob.glob('TestResults/**/*.trx', recursive=True)):
+              try:
+                  root = ET.parse(trx).getroot()
+              except Exception:
+                  continue
+              for result in root.findall('.//t:UnitTestResult', ns):
+                  total += 1
+                  outcome = result.get('outcome') or 'Unknown'
+                  counts[outcome] = counts.get(outcome, 0) + 1
+                  if outcome == 'Failed':
+                      info = result.find('.//t:ErrorInfo', ns)
+                      message = (info.findtext('t:Message', '', ns) or '').strip() if info is not None else ''
+                      failures.append((result.get('testName') or '?', message))
+
+          skipped = []
+          report = os.environ.get('CLOUDFLARE_IT_REPORT')
+          if report and os.path.exists(report):
+              with open(report, encoding='utf-8') as handle:
+                  for line in handle.read().splitlines():
+                      fields = line.split('\t')
+                      if len(fields) >= 3 and fields[0].upper() == 'SKIPPED':
+                          skipped.append((fields[1], fields[2]))
+
+          lines = ['### Cloudflare integration run', '']
+          if total == 0:
+              lines += ['No test results were produced. The suite never ran, which normally means no credentials were configured.', '']
+          else:
+              lines += ['| Outcome | Tests |', '| --- | ---: |']
+              for outcome in sorted(counts):
+                  lines.append(f'| {outcome} | {counts[outcome]} |')
+              lines += [f'| **Total** | **{total}** |', '']
+
+          if skipped:
+              lines += [
+                  f'<details open><summary>{len(skipped)} test(s) ended early without calling Cloudflare</summary>',
+                  '', '| Test | Why |', '| --- | --- |']
+              for test, reason in skipped:
+                  lines.append(f'| `{cell(test)}` | {cell(reason)} |')
+              lines += [
+                  '', '</details>', '',
+                  'These are reported as passing, which is why the job can be green without having verified anything.',
+                  'Add the matching secret - or set the switch named in the reason - to make them run for real.', '']
+
+          if failures:
+              lines += [f'<details open><summary>{len(failures)} failing test(s)</summary>', '']
+              for test, message in failures:
+                  lines += [f'**{cell(test)}**', '', '```', (message or '(no message)')[:1200], '```', '']
+              lines.append('</details>')
+
+          text = '\n'.join(lines)
+          print(text)
+          summary = os.environ.get('GITHUB_STEP_SUMMARY')
+          if summary:
+              with open(summary, 'a', encoding='utf-8') as handle:
+                  handle.write(text + '\n')
+          PY
 
       - name: Show what was recorded
         if: always() && inputs.cassette != ''

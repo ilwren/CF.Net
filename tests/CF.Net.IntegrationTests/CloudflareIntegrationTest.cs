@@ -1,3 +1,4 @@
+using System.Runtime.CompilerServices;
 using System.Text.Json;
 using CFNet.Configuration;
 using CFNet.DependencyInjection;
@@ -30,6 +31,10 @@ namespace CFNet.IntegrationTests;
 /// <para><b>Behaviour switches</b>:</para>
 /// <list type="bullet">
 ///   <item><description><c>CLOUDFLARE_IT_ENABLE_WRITES=true</c> - allow create/delete tests.</description></item>
+///   <item><description>
+///     <c>CLOUDFLARE_IT_REPORT=&lt;file&gt;</c> - append one line per skipped test to that file, which
+///     is how the workflow builds its summary. Unset means nothing is written anywhere.
+///   </description></item>
 ///   <item><description>
 ///     <c>CLOUDFLARE_IT_CASSETTE=&lt;name&gt;</c> with <c>CLOUDFLARE_IT_RECORD=true</c> - record every
 ///     call into <c>tests/cassettes/&lt;name&gt;.json</c>, so the offline unit tests can later replay
@@ -107,8 +112,9 @@ public abstract class CloudflareIntegrationTest : IDisposable
     /// </summary>
     /// <param name="condition">Whether the test can run.</param>
     /// <param name="reason">Shown in the test output when it cannot.</param>
+    /// <param name="test">Filled in by the compiler; used to label the run report.</param>
     /// <returns>True when the test should continue.</returns>
-    protected bool SkipUnless(bool condition, string reason)
+    protected bool SkipUnless(bool condition, string reason, [CallerMemberName] string? test = null)
     {
         if (condition)
         {
@@ -116,24 +122,37 @@ public abstract class CloudflareIntegrationTest : IDisposable
         }
 
         Output.WriteLine($"SKIPPED: {reason}");
+
+        // Also hand the reason to the run report, so the CI summary can say what did not happen
+        // instead of only that everything passed.
+        RunReport.Record(RunReportOutcome.Skipped, $"{GetType().Name}.{test ?? "unknown"}", reason);
         return false;
     }
 
     /// <summary>Ends the test early unless credentials are configured.</summary>
-    protected bool SkipWithoutCredentials() =>
-        SkipUnless(HasCredentials, "no Cloudflare credentials found (set CLOUDFLARE_API_TOKEN, or CLOUDFLARE_GLOBAL_API_KEY and CLOUDFLARE_API_EMAIL, or put them in tests/CF.Net.IntegrationTests/credentials.local.json).");
+    /// <param name="test">Filled in by the compiler; used to label the run report.</param>
+    protected bool SkipWithoutCredentials([CallerMemberName] string? test = null) =>
+        SkipUnless(
+            HasCredentials,
+            "no Cloudflare credentials found (set CLOUDFLARE_API_TOKEN, or CLOUDFLARE_GLOBAL_API_KEY and CLOUDFLARE_API_EMAIL, or put them in tests/CF.Net.IntegrationTests/credentials.local.json).",
+            test);
 
     /// <summary>Ends the test early unless an account id is configured.</summary>
-    protected bool SkipWithoutAccount() =>
-        SkipWithoutCredentials() && SkipUnless(!string.IsNullOrWhiteSpace(AccountId), "CLOUDFLARE_ACCOUNT_ID is not set.");
+    /// <param name="test">Filled in by the compiler; used to label the run report.</param>
+    protected bool SkipWithoutAccount([CallerMemberName] string? test = null) =>
+        SkipWithoutCredentials(test) &&
+        SkipUnless(!string.IsNullOrWhiteSpace(AccountId), "CLOUDFLARE_ACCOUNT_ID is not set.", test);
 
     /// <summary>Ends the test early unless a zone id is configured.</summary>
-    protected bool SkipWithoutZone() =>
-        SkipWithoutCredentials() && SkipUnless(!string.IsNullOrWhiteSpace(ZoneId), "CLOUDFLARE_ZONE_ID is not set.");
+    /// <param name="test">Filled in by the compiler; used to label the run report.</param>
+    protected bool SkipWithoutZone([CallerMemberName] string? test = null) =>
+        SkipWithoutCredentials(test) &&
+        SkipUnless(!string.IsNullOrWhiteSpace(ZoneId), "CLOUDFLARE_ZONE_ID is not set.", test);
 
     /// <summary>Ends the test early unless destructive operations were explicitly allowed.</summary>
-    protected bool SkipWithoutWritePermission() =>
-        SkipUnless(WritesEnabled, "CLOUDFLARE_IT_ENABLE_WRITES is not 'true'.");
+    /// <param name="test">Filled in by the compiler; used to label the run report.</param>
+    protected bool SkipWithoutWritePermission([CallerMemberName] string? test = null) =>
+        SkipUnless(WritesEnabled, "CLOUDFLARE_IT_ENABLE_WRITES is not 'true'.", test);
 
     /// <summary>A unique suffix so parallel or repeated runs never collide.</summary>
     protected static string UniqueSuffix(string prefix) =>

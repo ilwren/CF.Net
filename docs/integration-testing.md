@@ -29,6 +29,7 @@ what the tests do once they have them.
 | `CLOUDFLARE_IT_ENABLE_WRITES` | the lifecycle tests | must be exactly `true` |
 | `CLOUDFLARE_IT_CASSETTE` | recording | name of the cassette file to write, see [section 6](#6-recording-a-cassette) |
 | `CLOUDFLARE_IT_RECORD` | recording | `true`/`record`/`1`; implied when a cassette name is given |
+| `CLOUDFLARE_IT_REPORT` | nothing — reporting only | path of a file that collects one line per skipped test, for the CI summary; unset writes nothing anywhere |
 
 These are the same variables `CloudflareClientOptions.FromEnvironment()` reads, and the same ones
 `.github/workflows/integration.yml` injects — so there is no separate CI-only configuration path.
@@ -52,7 +53,10 @@ committed template; copy it, fill it in, and it stays out of git.
 
 When a variable is missing the test **does not fail**. xunit v2 has no dynamic skip, so the fixture
 prints `SKIPPED: <reason>` through `ITestOutputHelper` and returns early. A run with no credentials
-at all is a fast, green no-op — which is exactly what you want on a pull request from a fork.
+at all is a fast, green no-op — which is exactly what you want on a pull request from a fork. It also
+appends the reason to `CLOUDFLARE_IT_REPORT` when that names a file, which is how the GitHub Actions
+summary can tell a green no-op apart from a green run that really talked to Cloudflare
+(see [section 4](#what-a-run-reports-back)).
 
 The client is built through the container — `AddCloudflare(...)`, or `AddCloudflareHttpClient(...)`
 when a run is recording — so the integration suite also proves the dependency-injection registration
@@ -191,6 +195,15 @@ env:
   CLOUDFLARE_IT_RECORD: ${{ inputs.cassette && 'true' || 'false' }}
 ```
 
+and the job adds one of its own, because `runner.temp` is only available at job level:
+
+```yaml
+jobs:
+  integration:
+    env:
+      CLOUDFLARE_IT_REPORT: ${{ runner.temp }}/integration-report.tsv
+```
+
 Job-level `env:` is what makes them visible as process environment variables to `dotnet test`.
 GitHub masks every secret value in all log output automatically, and the tests never print a
 credential either — `CloudflareIntegrationTest` logs the account id, zone names and CF-RAY values,
@@ -247,6 +260,34 @@ should not have a permanently red workflow.
 Results are uploaded as the `integration-results` artifact (a `.trx` you can open in Visual Studio
 or with `trx2junit`). A recording run also uploads `cassette-<name>` and, with *Commit the recorded
 cassette* ticked, pushes the file to the branch it ran on.
+
+### What a run reports back
+
+Three things keep a run readable without opening the raw log.
+
+1. **`Verify the credentials against the live API`** — before anything is restored, the workflow calls
+   `GET /user/tokens/verify` (or `GET /user` for the legacy global-key pair) with `curl` and fails the
+   job straight away if Cloudflare rejects the secret, quoting Cloudflare's own error code and
+   message. That collapses "25 tests failed with `9109`" into one line. The call is made outside the
+   library on purpose, so it is *not* captured in a cassette; if the runner cannot reach the API at
+   all, the step warns and lets the tests have their say.
+2. **`Summarise the run`** — parses the `.trx` into an outcome table on `$GITHUB_STEP_SUMMARY`, with
+   the message of every failing test underneath it.
+3. **The skip table** — xunit v2 cannot skip a test at run time, so a test with nothing to do ends
+   early and is reported as *passed*. To stop that looking like a success, the fixture appends one
+   line per skip to `CLOUDFLARE_IT_REPORT` and the summary renders them:
+
+   | Test | Why |
+   | --- | --- |
+   | `ReadOnlyIntegrationTests.Zones_can_be_listed_and_read` | no Cloudflare credentials found (…) |
+   | `WriteIntegrationTests.An_r2_bucket_can_be_created_and_removed` | `CLOUDFLARE_IT_ENABLE_WRITES` is not 'true'. |
+
+   If that table is not empty, a green tick means "there was nothing to verify", not "verified".
+
+The writer is `CFNet.TestKit.RunReport`, and its file format is pinned down by offline unit tests in
+`tests/CF.Net.UnitTests/Testing/RunReportTests.cs`. With `CLOUDFLARE_IT_REPORT` unset — the normal
+case at a terminal — it writes nothing anywhere, and a write that fails is swallowed rather than
+turning a passing test into a failing one.
 
 ---
 
@@ -367,12 +408,14 @@ credentials out of CI entirely.
 | Symptom | Cause | Fix |
 | --- | --- | --- |
 | Every test prints `SKIPPED: no Cloudflare credentials found` | the secrets are not reaching the process | secrets must be job-level `env:`, not `with:` on a step; `workflow_dispatch` from a fork has no secrets |
+| The job dies at `Verify the credentials against the live API` | Cloudflare itself rejected the secret | the step prints Cloudflare's error verbatim; fix the secret — this check exists so you do not have to read 25 test failures to find that out |
 | `9109 Authentication error [code 10000]` | token revoked, expired, or missing a permission | recreate the token; check the permission list above |
 | `9109` on one product only | the token lacks that specific permission | add it — permissions are per product area |
 | `10000` with a valid token, from CI only | client IP filtering on the token | remove the IP restriction for the CI token |
 | `7403 D1_DATABASE_NOT_FOUND` | wrong account id | `CLOUDFLARE_ACCOUNT_ID` must own the database |
 | `10007` on a zone you can see in the dashboard | the token's *Zone resources* scope excludes it | include the specific zone, or all zones |
 | Writes skip even though credentials are set | `CLOUDFLARE_IT_ENABLE_WRITES` is not exactly `true` | tick the workflow input, or export `true` |
+| The summary's skip table lists tests you expected to run | the secret or switch named in the *Why* column is missing | add it; the reason is the exact variable the test looked for |
 | No cassette file appears after a recording run | `CLOUDFLARE_IT_CASSETTE` is empty, or every test skipped | set the name, and check the credentials are actually present |
 | `CassetteMissException` during replay | the code asked Cloudflare something the recording never asked | re-record, or fix the call — this is the drift the cassette exists to catch |
 | Rate limited (429) after several runs | purge or list quotas | wait; the transport already honours `Retry-After` when retries are on |

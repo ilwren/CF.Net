@@ -188,6 +188,60 @@
           </StackPanel>
         </Border>
 
+        <Border Classes="card">
+          <StackPanel Orientation="Vertical" Spacing="10">
+            <TextBlock Classes="h2" Text="SSL for SaaS custom hostnames  -  /zones/{zone_id}/custom_hostnames" />
+            <WrapPanel Orientation="Horizontal">
+              <StackPanel Orientation="Vertical" Spacing="3" Margin="0,0,16,8">
+                <TextBlock Classes="hint" Text="Hostname to add" />
+                <TextBox Text="{Binding Hostname, Mode=TwoWay}" Width="260" PlaceholderText="shop.customer.com" />
+              </StackPanel>
+              <StackPanel Orientation="Vertical" Spacing="3" Margin="0,0,16,8">
+                <TextBlock Classes="hint" Text="Validation method" />
+                <ComboBox ItemsSource="{Binding DcvMethods}" SelectedItem="{Binding HostnameDcvMethod, Mode=TwoWay}" Width="120" />
+              </StackPanel>
+              <CheckBox IsChecked="{Binding HostnameWildcard, Mode=TwoWay}" Content="wildcard" VerticalAlignment="Center" Margin="0,0,16,8" />
+              <StackPanel Orientation="Vertical" Spacing="3" Margin="0,0,16,8">
+                <TextBlock Classes="hint" Text="Per page (5-1000)" />
+                <TextBox Text="{Binding HostnamePerPage, Mode=TwoWay}" Width="120" />
+              </StackPanel>
+            </WrapPanel>
+            <WrapPanel Orientation="Horizontal">
+              <StackPanel Orientation="Vertical" Spacing="3" Margin="0,0,16,8">
+                <TextBlock Classes="hint" Text="Hostname contains" />
+                <TextBox Text="{Binding HostnameContains, Mode=TwoWay}" Width="220" />
+              </StackPanel>
+              <StackPanel Orientation="Vertical" Spacing="3" Margin="0,0,16,8">
+                <TextBlock Classes="hint" Text="Status" />
+                <ComboBox ItemsSource="{Binding HostnameStatuses}" SelectedItem="{Binding HostnameStatus, Mode=TwoWay}" Width="200" />
+              </StackPanel>
+            </WrapPanel>
+            <WrapPanel Orientation="Horizontal">
+              <Button Classes="run" Content="List" Command="{Binding ListHostnamesCommand}" Margin="0,0,8,0" />
+              <Button Content="List every page" Command="{Binding ListAllHostnamesCommand}" />
+            </WrapPanel>
+            <WrapPanel Orientation="Horizontal">
+              <StackPanel Orientation="Vertical" Spacing="3" Margin="0,0,16,8">
+                <TextBlock Classes="hint" Text="Custom hostname id" />
+                <TextBox Text="{Binding HostnameId, Mode=TwoWay}" Width="300" PlaceholderText="copy it from a list result" />
+              </StackPanel>
+              <StackPanel Orientation="Vertical" Spacing="3" Margin="0,0,16,8">
+                <TextBlock Classes="hint" Text="Origin to route it to" />
+                <TextBox Text="{Binding HostnameOrigin, Mode=TwoWay}" Width="260" PlaceholderText="origin.example.com" />
+              </StackPanel>
+            </WrapPanel>
+            <WrapPanel Orientation="Horizontal">
+              <Button Classes="run" Content="Get" Command="{Binding GetHostnameCommand}" Margin="0,0,8,0" />
+              <Button Content="Create and ask for a certificate" Command="{Binding CreateHostnameCommand}" Margin="0,0,8,0" />
+              <Button Content="Retry validation" Command="{Binding RetryHostnameValidationCommand}" Margin="0,0,8,0" />
+              <Button Content="Set origin" Command="{Binding SetHostnameOriginCommand}" Margin="0,0,8,0" />
+              <Button Content="Delete" Command="{Binding DeleteHostnameCommand}" />
+            </WrapPanel>
+            <TextBlock Classes="hint" Text="Creating one of these does not give you a working certificate, it gives you a challenge: read the result and it names the TXT record or the HTTP token the customer has to put in place, and ssl.validation_records says exactly what the authority is waiting for. status tracks the hostname while ssl.status tracks the certificate, and they move on their own schedule - ssl.status is the one to poll. Retry validation is the PATCH that re-runs domain control validation, which is what an http hostname needs once its CNAME finally resolves, and there is no rename: a hostname can only be deleted and created again." TextWrapping="Wrap" />
+            <TextBlock Classes="hint" Text="The id filter and the three hostname filters exclude each other, and Cloudflare rejects a request that combines them, so this page only offers the contains one. Deleting removes the hostname and any certificate issued for it, so HTTPS for it stops." TextWrapping="Wrap" />
+          </StackPanel>
+        </Border>
+
       </StackPanel>
     </ScrollViewer>
 

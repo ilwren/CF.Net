@@ -411,7 +411,7 @@ public class ReadOnlyIntegrationTests : CloudflareIntegrationTest
             return;
         }
 
-        // This is the smoke test for the facade: a single client, nine services, all wired to the
+        // This is the smoke test for the facade: a single client, eleven services, all wired to the
         // same transport and options instance.
         Assert.NotNull(Client.User);
         Assert.NotNull(Client.Accounts);

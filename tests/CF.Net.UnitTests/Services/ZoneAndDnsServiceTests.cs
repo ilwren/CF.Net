@@ -2272,3 +2272,416 @@ public class SslCertificateAnalysisTests
         Assert.Null(certificate.AdditionalData);
     }
 }
+
+/// <summary>
+/// SSL for SaaS: the custom hostnames under <c>/zones/{zone_id}/custom_hostnames</c>.
+/// </summary>
+public class CustomHostnamesServiceTests
+{
+    private const string ListPath = "/zones/zone-5678/custom_hostnames";
+
+    private const string OnePath = "/zones/zone-5678/custom_hostnames/host-1";
+
+    private const string HostnameJson = """
+        {
+          "id": "host-1",
+          "hostname": "shop.customer.com",
+          "created_at": "2026-10-01T09:00:00Z",
+          "custom_metadata": { "customer_id": "42" },
+          "custom_origin_server": "origin.example.com",
+          "custom_origin_sni": ":request_host_header:",
+          "status": "pending",
+          "verification_errors": ["DNS record not found"],
+          "ownership_verification": {
+            "name": "_cf-custom-hostname.shop.customer.com",
+            "type": "txt",
+            "value": "810b7d5f"
+          },
+          "ownership_verification_http": {
+            "http_body": "38b0f2b9",
+            "http_url": "http://shop.customer.com/.well-known/cf-custom-hostname-challenge-host-1.txt"
+          },
+          "ssl": {
+            "id": "ssl-1",
+            "status": "pending_validation",
+            "method": "txt",
+            "type": "dv",
+            "wildcard": false,
+            "certificate_authority": "lets_encrypt",
+            "bundle_method": "ubiquitous",
+            "hosts": ["shop.customer.com"],
+            "issuer": "Let's Encrypt",
+            "serial_number": "0x123",
+            "signature": "SHA256WithRSA",
+            "custom_csr_id": "csr-1",
+            "expires_on": "2027-01-01T00:00:00Z",
+            "uploaded_on": "2026-10-01T09:00:00Z",
+            "settings": {
+              "early_hints": "on",
+              "http2": "off",
+              "min_tls_version": "1.2",
+              "tls_1_3": "on",
+              "ciphers": ["ECDHE-RSA-AES128-GCM-SHA256"]
+            },
+            "validation_records": [
+              {
+                "txt_name": "_acme-challenge.shop.customer.com",
+                "txt_value": "ca3-xyz",
+                "status": "pending",
+                "some_new_record_field": 7
+              }
+            ],
+            "validation_errors": [{ "message": "DNS record missing" }],
+            "unknown_ssl_field": true
+          },
+          "some_new_field": 11
+        }
+        """;
+
+    [Fact]
+    public async Task ListAsync_sends_the_documented_filters_including_the_dotted_hostname_ones()
+    {
+        using var harness = CloudflareHarness.Create();
+        harness.RespondWithPage($"[{HostnameJson}]", page: 1, totalPages: 1, count: 1, totalCount: 1);
+
+        var page = await harness.Client.CustomHostnames.ListAsync(new CustomHostnameListParameters
+        {
+            PerPage = 50,
+            Direction = CustomHostnameSortDirections.Descending,
+            HostnameContains = "shop",
+            Order = CustomHostnameSortOrders.SslStatus,
+            SslStatus = CustomHostnameSslStatuses.PendingValidation,
+            Wildcard = false,
+            Ssl = true,
+        });
+
+        Assert.Equal(HttpMethod.Get, harness.LastRequest.Method);
+        Assert.Equal(ListPath, harness.LastRequest.Path);
+        Assert.Equal(
+            "per_page=50&direction=desc&hostname.contain=shop&order=ssl_status&ssl_status=pending_validation&wildcard=false&ssl=1",
+            harness.LastRequest.Query);
+
+        Assert.Single(page.Items);
+        Assert.Equal("shop.customer.com", page.Items[0].Hostname);
+    }
+
+    [Fact]
+    public async Task The_ssl_filter_is_one_and_zero_on_the_wire_not_true_and_false()
+    {
+        using var harness = CloudflareHarness.Create();
+        harness.RespondWithPage("[]", page: 1, totalPages: 1, count: 0, totalCount: 0);
+        harness.RespondWithPage("[]", page: 1, totalPages: 1, count: 0, totalCount: 0);
+        harness.RespondWithPage("[]", page: 1, totalPages: 1, count: 0, totalCount: 0);
+
+        await harness.Client.CustomHostnames.ListAsync(new CustomHostnameListParameters { Ssl = true });
+        Assert.Equal("ssl=1", harness.LastRequest.Query);
+
+        await harness.Client.CustomHostnames.ListAsync(new CustomHostnameListParameters { Ssl = false });
+        Assert.Equal("ssl=0", harness.LastRequest.Query);
+
+        // Unset means the filter is not sent at all, rather than being sent as a default.
+        await harness.Client.CustomHostnames.ListAsync(new CustomHostnameListParameters());
+        Assert.Equal(string.Empty, harness.LastRequest.Query);
+    }
+
+    [Fact]
+    public async Task ListAllAsync_walks_the_pages_without_dropping_a_filter()
+    {
+        using var harness = CloudflareHarness.Create();
+        harness.RespondWithPage($"[{HostnameJson}]", page: 1, totalPages: 2, count: 1, totalCount: 2);
+        harness.RespondWithPage($"[{HostnameJson}]", page: 2, totalPages: 2, count: 1, totalCount: 2);
+
+        var hostnames = await harness.Client.CustomHostnames
+            .ListAllAsync(new CustomHostnameListParameters
+            {
+                PerPage = 1,
+                HostnameStatus = CustomHostnameStatuses.Pending,
+                CertificateAuthority = CustomHostnameCertificateAuthorities.LetsEncrypt,
+            })
+            .CollectAsync();
+
+        Assert.Equal(2, hostnames.Count);
+        Assert.Equal(2, harness.RequestCount);
+        Assert.Equal(
+            "per_page=1&certificate_authority=lets_encrypt&hostname_status=pending&page=1",
+            harness.Requests[0].Query);
+        Assert.Equal(
+            "per_page=1&certificate_authority=lets_encrypt&hostname_status=pending&page=2",
+            harness.Requests[1].Query);
+    }
+
+    [Fact]
+    public async Task GetAsync_reads_the_hostname_the_challenge_and_the_certificate_state()
+    {
+        using var harness = CloudflareHarness.Create();
+        harness.RespondWithResult(HostnameJson);
+
+        var hostname = await harness.Client.CustomHostnames.GetAsync("host-1");
+
+        Assert.Equal(HttpMethod.Get, harness.LastRequest.Method);
+        Assert.Equal(OnePath, harness.LastRequest.Path);
+        Assert.NotNull(hostname);
+        Assert.Equal("shop.customer.com", hostname!.Hostname);
+        Assert.Equal(CustomHostnameStatuses.Pending, hostname.Status);
+        Assert.Equal(new DateTimeOffset(2026, 10, 1, 9, 0, 0, TimeSpan.Zero), hostname.CreatedAt);
+        Assert.Equal("42", hostname.CustomMetadata!["customer_id"]);
+        Assert.Equal(":request_host_header:", hostname.CustomOriginSni);
+        Assert.Equal("DNS record not found", Assert.Single(hostname.VerificationErrors!));
+        Assert.Equal("shop.customer.com", hostname.ToString());
+
+        // Both verification routes are described, because either can be the one a customer can manage.
+        Assert.Equal("txt", hostname.OwnershipVerification!.Type);
+        Assert.Equal("_cf-custom-hostname.shop.customer.com", hostname.OwnershipVerification.Name);
+        Assert.Equal("810b7d5f", hostname.OwnershipVerification.Value);
+        Assert.Equal("38b0f2b9", hostname.OwnershipVerificationHttp!.HttpBody);
+
+        var ssl = hostname.Ssl!;
+        Assert.Equal(CustomHostnameSslStatuses.PendingValidation, ssl.Status);
+        Assert.Equal(CustomHostnameDcvMethods.Txt, ssl.Method);
+        Assert.Equal(CustomHostnameValidationTypes.DomainValidation, ssl.Type);
+        Assert.False(ssl.Wildcard);
+        Assert.Equal("pending_validation", ssl.ToString());
+        Assert.Equal("csr-1", ssl.CustomCsrId);
+        Assert.Equal(2027, ssl.ExpiresOn!.Value.Year);
+
+        var record = Assert.Single(ssl.ValidationRecords!);
+        Assert.Equal("_acme-challenge.shop.customer.com", record.TxtName);
+        Assert.Equal("ca3-xyz", record.TxtValue);
+        Assert.Equal("_acme-challenge.shop.customer.com", record.ToString());
+        Assert.Equal("DNS record missing", Assert.Single(ssl.ValidationErrors!)!.Message);
+
+        // Unknown fields survive at every level rather than being dropped.
+        Assert.Equal(11, hostname.AdditionalData!["some_new_field"].GetInt32());
+        Assert.True(ssl.AdditionalData!["unknown_ssl_field"].GetBoolean());
+        Assert.Equal(7, record.AdditionalData!["some_new_record_field"].GetInt32());
+    }
+
+    [Fact]
+    public async Task The_per_hostname_tls_settings_keep_the_names_the_schema_uses()
+    {
+        using var harness = CloudflareHarness.Create();
+        harness.RespondWithResult(HostnameJson);
+
+        var settings = (await harness.Client.CustomHostnames.GetAsync("host-1"))!.Ssl!.Settings!;
+
+        Assert.Equal("on", settings.EarlyHints);
+        Assert.Equal("off", settings.Http2);
+        Assert.Equal("1.2", settings.MinTlsVersion);
+        // tls_1_3 is the one field here whose JSON name is not what a naming policy would produce.
+        Assert.Equal("on", settings.Tls13);
+        Assert.Equal("ECDHE-RSA-AES128-GCM-SHA256", Assert.Single(settings.Ciphers!));
+    }
+
+    [Fact]
+    public async Task GetAsync_returns_null_when_the_zone_has_no_such_hostname()
+    {
+        using var harness = CloudflareHarness.Create();
+        harness.RespondWithError(HttpStatusCode.NotFound, 10007, "Invalid Custom Hostname identifier");
+
+        Assert.Null(await harness.Client.CustomHostnames.GetAsync("missing"));
+    }
+
+    [Fact]
+    public async Task CreateAsync_posts_the_hostname_and_the_certificate_configuration()
+    {
+        using var harness = CloudflareHarness.Create();
+        harness.RespondWithResult(HostnameJson);
+
+        await harness.Client.CustomHostnames.CreateAsync(new CreateCustomHostnameRequest
+        {
+            Hostname = "shop.customer.com",
+            CustomOriginServer = "origin.example.com",
+            CustomMetadata = new Dictionary<string, string> { ["customer_id"] = "42" },
+            Ssl = new CustomHostnameSslRequest
+            {
+                Method = CustomHostnameDcvMethods.Txt,
+                Type = CustomHostnameValidationTypes.DomainValidation,
+                CertificateAuthority = CustomHostnameCertificateAuthorities.LetsEncrypt,
+                Settings = new CustomHostnameSslSettings { MinTlsVersion = "1.2", Tls13 = "on" },
+            },
+        });
+
+        Assert.Equal(HttpMethod.Post, harness.LastRequest.Method);
+        Assert.Equal(ListPath, harness.LastRequest.Path);
+
+        var body = JsonDocument.Parse(harness.LastRequest.Body!);
+        Assert.Equal("shop.customer.com", body.RootElement.GetProperty("hostname").GetString());
+        Assert.Equal("origin.example.com", body.RootElement.GetProperty("custom_origin_server").GetString());
+        Assert.Equal("42", body.RootElement.GetProperty("custom_metadata").GetProperty("customer_id").GetString());
+
+        var ssl = body.RootElement.GetProperty("ssl");
+        Assert.Equal("txt", ssl.GetProperty("method").GetString());
+        Assert.Equal("dv", ssl.GetProperty("type").GetString());
+        Assert.Equal("lets_encrypt", ssl.GetProperty("certificate_authority").GetString());
+        Assert.Equal("1.2", ssl.GetProperty("settings").GetProperty("min_tls_version").GetString());
+        Assert.Equal("on", ssl.GetProperty("settings").GetProperty("tls_1_3").GetString());
+    }
+
+    [Fact]
+    public async Task The_convenience_create_asks_for_domain_validation_over_http_by_default()
+    {
+        using var harness = CloudflareHarness.Create();
+        harness.RespondWithResult(HostnameJson);
+
+        await harness.Client.CustomHostnames.CreateAsync("shop.customer.com");
+
+        var ssl = JsonDocument.Parse(harness.LastRequest.Body!).RootElement.GetProperty("ssl");
+        Assert.Equal(CustomHostnameDcvMethods.Http, ssl.GetProperty("method").GetString());
+        Assert.Equal(CustomHostnameValidationTypes.DomainValidation, ssl.GetProperty("type").GetString());
+        Assert.False(ssl.GetProperty("wildcard").GetBoolean());
+    }
+
+    [Fact]
+    public async Task CreateAsync_checks_the_request_before_sending_anything()
+    {
+        using var harness = CloudflareHarness.Create();
+
+        var noHostname = new CreateCustomHostnameRequest();
+        var emptyBundle = CreateCustomHostnameRequest.For(
+            "shop.customer.com",
+            new CustomHostnameSslRequest { CustomCertBundle = new List<CustomHostnameCertificatePair>() });
+        var hugeBundle = CreateCustomHostnameRequest.For(
+            "shop.customer.com",
+            new CustomHostnameSslRequest
+            {
+                CustomCertBundle = Enumerable
+                    .Repeat(CustomHostnameCertificatePair.Of("cert", "key"), CreateCustomHostnameRequest.MaxBundleSize + 1)
+                    .ToList(),
+            });
+        var halfAPair = CreateCustomHostnameRequest.For(
+            "shop.customer.com",
+            new CustomHostnameSslRequest
+            {
+                CustomCertBundle = new List<CustomHostnameCertificatePair> { new() { CustomCertificate = "cert" } },
+            });
+
+        Assert.Throws<CloudflareConfigurationException>(() => noHostname.EnsureValid());
+        Assert.Throws<CloudflareConfigurationException>(() => emptyBundle.EnsureValid());
+        Assert.Throws<CloudflareConfigurationException>(() => hugeBundle.EnsureValid());
+        Assert.Throws<CloudflareConfigurationException>(() => halfAPair.EnsureValid());
+
+        await Assert.ThrowsAsync<CloudflareConfigurationException>(
+            () => harness.Client.CustomHostnames.CreateAsync(noHostname));
+
+        // Nothing reached the transport: the checks are the point of them.
+        Assert.Equal(0, harness.RequestCount);
+    }
+
+    [Fact]
+    public async Task A_bundle_of_two_pairs_is_accepted_because_that_is_what_bundling_means()
+    {
+        using var harness = CloudflareHarness.Create();
+        harness.RespondWithResult(HostnameJson);
+
+        await harness.Client.CustomHostnames.CreateAsync(CreateCustomHostnameRequest.For(
+            "shop.customer.com",
+            new CustomHostnameSslRequest
+            {
+                CustomCertBundle = new List<CustomHostnameCertificatePair>
+                {
+                    CustomHostnameCertificatePair.Of("rsa-cert", "rsa-key"),
+                    CustomHostnameCertificatePair.Of("ecdsa-cert", "ecdsa-key"),
+                },
+            }));
+
+        var bundle = JsonDocument.Parse(harness.LastRequest.Body!).RootElement
+            .GetProperty("ssl").GetProperty("custom_cert_bundle");
+        Assert.Equal(2, bundle.GetArrayLength());
+        Assert.Equal("rsa-cert", bundle[0].GetProperty("custom_certificate").GetString());
+        Assert.Equal("ecdsa-key", bundle[1].GetProperty("custom_key").GetString());
+    }
+
+    [Fact]
+    public async Task UpdateAsync_patches_what_was_set_and_never_renames_the_hostname()
+    {
+        using var harness = CloudflareHarness.Create();
+        harness.RespondWithResult(HostnameJson);
+
+        var updated = await harness.Client.CustomHostnames.UpdateAsync(
+            "host-1",
+            new UpdateCustomHostnameRequest { CustomOriginServer = "new-origin.example.com" });
+
+        Assert.Equal(HttpMethod.Patch, harness.LastRequest.Method);
+        Assert.Equal(OnePath, harness.LastRequest.Path);
+        Assert.NotNull(updated);
+
+        var body = JsonDocument.Parse(harness.LastRequest.Body!).RootElement;
+        Assert.Equal("new-origin.example.com", body.GetProperty("custom_origin_server").GetString());
+        // There is no hostname field in the PATCH schema, so nothing here can rename it.
+        Assert.False(body.TryGetProperty("hostname", out _));
+    }
+
+    [Fact]
+    public async Task RetryValidationAsync_is_the_patch_that_completes_domain_control_validation()
+    {
+        using var harness = CloudflareHarness.Create();
+        harness.RespondWithResult(HostnameJson);
+
+        await harness.Client.CustomHostnames.RetryValidationAsync("host-1", CustomHostnameDcvMethods.Email);
+
+        Assert.Equal(HttpMethod.Patch, harness.LastRequest.Method);
+        Assert.Equal(OnePath, harness.LastRequest.Path);
+        Assert.Equal(
+            "{\"ssl\":{\"method\":\"email\",\"type\":\"dv\",\"wildcard\":false}}",
+            harness.LastRequest.Body);
+        Assert.Equal("retry validation with email", UpdateCustomHostnameRequest.ToRetryValidation("email").ToString());
+    }
+
+    [Fact]
+    public async Task DeleteAsync_sends_a_delete_with_no_body()
+    {
+        using var harness = CloudflareHarness.Create();
+        harness.RespondWithResult("null");
+
+        await harness.Client.CustomHostnames.DeleteAsync("host-1");
+
+        Assert.Equal(HttpMethod.Delete, harness.LastRequest.Method);
+        Assert.Equal(OnePath, harness.LastRequest.Path);
+        Assert.True(string.IsNullOrEmpty(harness.LastRequest.Body));
+    }
+
+    [Fact]
+    public async Task The_zone_can_be_overridden_per_call()
+    {
+        using var harness = CloudflareHarness.Create();
+        harness.RespondWithResult(HostnameJson);
+
+        await harness.Client.CustomHostnames.GetAsync("host-1", zoneId: "zone-other");
+
+        Assert.Equal("/zones/zone-other/custom_hostnames/host-1", harness.LastRequest.Path);
+    }
+
+    [Fact]
+    public void The_enumerations_carry_every_value_the_schema_defines()
+    {
+        Assert.Equal(16, CustomHostnameStatuses.All.Count);
+        Assert.Equal(21, CustomHostnameSslStatuses.All.Count);
+        Assert.Equal(3, CustomHostnameDcvMethods.All.Count);
+        Assert.Equal(CustomHostnameValidationTypes.DomainValidation, Assert.Single(CustomHostnameValidationTypes.All));
+        Assert.Equal(2, CustomHostnameSortOrders.All.Count);
+        Assert.Equal(2, CustomHostnameSortDirections.All.Count);
+
+        // DigiCert can issue a custom hostname's certificate but is not accepted as a list filter, and the
+        // advanced certificate pack authorities are a different set again: no DigiCert there either.
+        Assert.Equal(4, CustomHostnameCertificateAuthorities.All.Count);
+        Assert.Contains(CustomHostnameCertificateAuthorities.DigiCert, CustomHostnameCertificateAuthorities.All);
+        Assert.Equal(3, CustomHostnameCertificateAuthorities.Filterable.Count);
+        Assert.DoesNotContain(CustomHostnameCertificateAuthorities.DigiCert, CustomHostnameCertificateAuthorities.Filterable);
+        Assert.DoesNotContain(CustomHostnameCertificateAuthorities.DigiCert, SslCertificateAuthorities.All);
+    }
+
+    [Fact]
+    public void The_requests_describe_themselves_without_repeating_a_certificate()
+    {
+        Assert.Equal("shop.customer.com", CreateCustomHostnameRequest.For("shop.customer.com").ToString());
+        Assert.Equal("txt", CustomHostnameSslRequest.ForValidation("txt").ToString());
+        Assert.Equal(
+            "uploaded certificate",
+            CustomHostnameSslRequest.WithUploadedCertificate("-----BEGIN CERTIFICATE-----", "key").ToString());
+        Assert.Equal("ssl settings", new CustomHostnameSslRequest().ToString());
+        Assert.Equal("custom hostname settings", new UpdateCustomHostnameRequest().ToString());
+        Assert.Equal("certificate and key", CustomHostnameCertificatePair.Of("cert", "key").ToString());
+        Assert.Equal(string.Empty, new CustomHostname().ToString());
+        Assert.Equal("_acme-challenge", new CustomHostnameSslValidationRecord { Cname = "_acme-challenge" }.ToString());
+    }
+}

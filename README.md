@@ -85,14 +85,16 @@ Console.WriteLine($"{zones.Count} of {zones.TotalCount} zones");
 
 `CloudflareClient.CreateFromEnvironment()` does the same thing from environment variables, and `CloudflareClientFactory` is available when you need several clients over one set of defaults.
 
-### The nine services
+### The eleven services
 
 | Property | Interface | Covers |
 | --- | --- | --- |
 | `client.User` | `IUserService` | token verification, the authenticated user, connectivity check |
 | `client.Accounts` | `IAccountsService` | account discovery |
 | `client.Zones` | `IZonesService` | zones, activation checks, cache purge |
-| `client.DnsRecords` | `IDnsRecordsService` | DNS records, including typed SRV/LOC/MX data |
+| `client.DnsRecords` | `IDnsRecordsService` | DNS records, including typed SRV/LOC/MX data, zone file export and import |
+| `client.Ssl` | `ISslService` | certificate packs, Universal SSL, validation details, the two SSL enrolment settings, certificate analysis |
+| `client.CustomHostnames` | `ICustomHostnamesService` | SSL for SaaS: custom hostnames, their certificates and the challenges that validate them |
 | `client.Workers` | `IWorkersScriptsService` | scripts, module content, script settings, deployments, `workers.dev` subdomain |
 | `client.Pages` | `IPagesProjectsService` | projects, deployments, custom domains |
 | `client.D1` | `ID1DatabaseService` | databases, SQL queries, batches, backups |
@@ -146,7 +148,7 @@ builder.Services.AddCloudflare(options =>
 | `AddCloudflareHttpClient(configure?, httpClientName?, configureClient?)` | route through `IHttpClientFactory` |
 | `AddCloudflareClientFactory(configure?)` | several clients over shared defaults |
 
-Any of these registers `ICloudflareClient`, `CloudflareClient`, `ICloudflareTransport`, `ICloudflareClientFactory` and all nine service interfaces, so you can inject exactly the surface you need:
+Any of these registers `ICloudflareClient`, `CloudflareClient`, `ICloudflareTransport`, `ICloudflareClientFactory` and all eleven service interfaces, so you can inject exactly the surface you need:
 
 ```csharp
 public sealed class DnsProvisioner(IDnsRecordsService dns, IZonesService zones)

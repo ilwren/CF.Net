@@ -426,7 +426,7 @@ Always safe. They run whenever credentials are present.
 | `D1_databases_can_be_listed_and_queried` | `/d1/database`, plus `SELECT 1` and `FirstColumn<int>` |
 | `Kv_namespaces_can_be_listed` | `/storage/kv/namespaces` |
 | `R2_buckets_can_be_listed` | `/r2/buckets`, including the `{buckets:[…]}` unwrap |
-| `Every_product_area_is_reachable_through_the_client_facade` | all nine services wired to one transport |
+| `Every_product_area_is_reachable_through_the_client_facade` | all eleven services wired to one transport |
 | `An_insufficiently_scoped_token_is_reported_as_an_authentication_failure` | 403/404 map onto `IsAuthenticationFailure` / `IsNotFound` |
 
 ### `WriteIntegrationTests`

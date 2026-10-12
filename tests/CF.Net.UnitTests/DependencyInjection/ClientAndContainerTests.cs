@@ -318,6 +318,7 @@ public class CloudflareClientTests
         Assert.IsAssignableFrom<IKvService>(client.Kv);
         Assert.IsAssignableFrom<IR2Service>(client.R2);
         Assert.IsAssignableFrom<ISslService>(client.Ssl);
+        Assert.IsAssignableFrom<ICustomHostnamesService>(client.CustomHostnames);
         Assert.IsAssignableFrom<IUserService>(client.User);
         Assert.IsAssignableFrom<IAccountsService>(client.Accounts);
     }
@@ -508,6 +509,7 @@ public class ServiceCollectionExtensionsTests
         Assert.Same(client.Kv, provider.GetRequiredService<IKvService>());
         Assert.Same(client.R2, provider.GetRequiredService<IR2Service>());
         Assert.Same(client.Ssl, provider.GetRequiredService<ISslService>());
+        Assert.Same(client.CustomHostnames, provider.GetRequiredService<ICustomHostnamesService>());
         Assert.Same(client.User, provider.GetRequiredService<IUserService>());
         Assert.Same(client.Accounts, provider.GetRequiredService<IAccountsService>());
         Assert.Same(client.Transport, provider.GetRequiredService<ICloudflareTransport>());

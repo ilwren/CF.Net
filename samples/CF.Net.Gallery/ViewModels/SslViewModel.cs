@@ -3,12 +3,22 @@ using CFNet.Models.Ssl;
 namespace CFNet.Gallery.ViewModels;
 
 /// <summary>
-/// SSL: certificate packs, what it takes to get one issued, Universal SSL and the two enrolment settings
-/// Cloudflare files under SSL but serves from the zone settings path.
+/// SSL: certificate packs, what it takes to get one issued, Universal SSL, the two enrolment settings
+/// Cloudflare files under SSL but serves from the zone settings path, and the SSL for SaaS custom hostnames
+/// that sit beside them.
 /// </summary>
 public sealed class SslViewModel : ModuleViewModelBase
 {
     private string _zoneOverride = string.Empty;
+
+    private string _hostnameId = string.Empty;
+    private string _hostname = string.Empty;
+    private string _hostnameDcvMethod = CustomHostnameDcvMethods.Http;
+    private bool _hostnameWildcard;
+    private string _hostnameContains = string.Empty;
+    private string _hostnameStatus = string.Empty;
+    private string _hostnamePerPage = "20";
+    private string _hostnameOrigin = string.Empty;
 
     private string _listDeploy = string.Empty;
     private string _listStatus = string.Empty;
@@ -66,6 +76,13 @@ public sealed class SslViewModel : ModuleViewModelBase
         SetAutomaticCommand = new RelayCommand(SetAutomaticAsync);
         AutomaticAutoCommand = new RelayCommand(() => EnableAutomaticAsync());
         AutomaticCustomCommand = new RelayCommand(() => DisableAutomaticAsync());
+        ListHostnamesCommand = new RelayCommand(ListHostnamesAsync);
+        ListAllHostnamesCommand = new RelayCommand(ListAllHostnamesAsync);
+        GetHostnameCommand = new RelayCommand(GetHostnameAsync);
+        CreateHostnameCommand = new RelayCommand(CreateHostnameAsync);
+        RetryHostnameValidationCommand = new RelayCommand(RetryHostnameValidationAsync);
+        SetHostnameOriginCommand = new RelayCommand(SetHostnameOriginAsync);
+        DeleteHostnameCommand = new RelayCommand(DeleteHostnameAsync);
     }
 
     /// <inheritdoc />
@@ -121,6 +138,58 @@ public sealed class SslViewModel : ModuleViewModelBase
 
     /// <summary>Automatic SSL/TLS enrolment values.</summary>
     public IReadOnlyList<string> AutomaticModes { get; } = SslAutomaticModes.All;
+
+    /// <summary>Lists the SSL for SaaS custom hostnames of the zone.</summary>
+    public RelayCommand ListHostnamesCommand { get; }
+
+    /// <summary>Walks every page of them.</summary>
+    public RelayCommand ListAllHostnamesCommand { get; }
+
+    /// <summary>Reads one, with its challenge and certificate state.</summary>
+    public RelayCommand GetHostnameCommand { get; }
+
+    /// <summary>Adds one and asks for a certificate.</summary>
+    public RelayCommand CreateHostnameCommand { get; }
+
+    /// <summary>Asks Cloudflare to try domain control validation again.</summary>
+    public RelayCommand RetryHostnameValidationCommand { get; }
+
+    /// <summary>Points one at a different origin.</summary>
+    public RelayCommand SetHostnameOriginCommand { get; }
+
+    /// <summary>Removes one, and its certificate.</summary>
+    public RelayCommand DeleteHostnameCommand { get; }
+
+    /// <summary>Id of the custom hostname the single-hostname calls operate on.</summary>
+    public string HostnameId { get => _hostnameId; set => SetProperty(ref _hostnameId, value); }
+
+    /// <summary>Hostname to add, on a domain the customer controls.</summary>
+    public string Hostname { get => _hostname; set => SetProperty(ref _hostname, value); }
+
+    /// <summary>Validation method to ask for.</summary>
+    public string HostnameDcvMethod { get => _hostnameDcvMethod; set => SetProperty(ref _hostnameDcvMethod, value); }
+
+    /// <summary>Whether the certificate should cover a wildcard.</summary>
+    public bool HostnameWildcard { get => _hostnameWildcard; set => SetProperty(ref _hostnameWildcard, value); }
+
+    /// <summary>Substring filter, sent as <c>hostname.contain</c>.</summary>
+    public string HostnameContains { get => _hostnameContains; set => SetProperty(ref _hostnameContains, value); }
+
+    /// <summary>Activation status filter; blank sends none.</summary>
+    public string HostnameStatus { get => _hostnameStatus; set => SetProperty(ref _hostnameStatus, value); }
+
+    /// <summary>Items per page, 5 to 1000 on this endpoint.</summary>
+    public string HostnamePerPage { get => _hostnamePerPage; set => SetProperty(ref _hostnamePerPage, value); }
+
+    /// <summary>Origin to route the hostname to.</summary>
+    public string HostnameOrigin { get => _hostnameOrigin; set => SetProperty(ref _hostnameOrigin, value); }
+
+    /// <summary>The validation methods a custom hostname can use - no <c>cname</c> among them.</summary>
+    public IReadOnlyList<string> DcvMethods { get; } = CustomHostnameDcvMethods.All;
+
+    /// <summary>The activation statuses the list can be filtered by, plus blank for "any".</summary>
+    public IReadOnlyList<string> HostnameStatuses { get; } =
+        new[] { string.Empty }.Concat(CustomHostnameStatuses.All).ToList();
 
     /// <summary>Zone id used by every call on this page; blank means the one from the credentials page.</summary>
     public string ZoneOverride { get => _zoneOverride; set => SetProperty(ref _zoneOverride, value); }
@@ -336,6 +405,62 @@ public sealed class SslViewModel : ModuleViewModelBase
 
     private Task DisableAutomaticAsync() => RunAsync("Opt out of Automatic SSL/TLS", async () =>
         await Client.Ssl.DisableAutomaticSslAsync(Zone));
+
+    private Task ListHostnamesAsync() => RunAsync("List custom hostnames", async () =>
+        await Client.CustomHostnames.ListAsync(new CustomHostnameListParameters
+        {
+            PerPage = OptionalInt(HostnamePerPage),
+            HostnameContains = Blank(HostnameContains),
+            HostnameStatus = Blank(HostnameStatus),
+        }, Zone));
+
+    private Task ListAllHostnamesAsync() => RunAsync("List every custom hostname", async () =>
+    {
+        var hostnames = new List<CustomHostname>();
+        await foreach (var hostname in Client.CustomHostnames.ListAllAsync(new CustomHostnameListParameters
+        {
+            PerPage = OptionalInt(HostnamePerPage),
+            HostnameContains = Blank(HostnameContains),
+            HostnameStatus = Blank(HostnameStatus),
+        }, Zone))
+        {
+            hostnames.Add(hostname);
+        }
+
+        return hostnames;
+    });
+
+    private Task GetHostnameAsync() => RunAsync("Get custom hostname", async () =>
+        await Client.CustomHostnames.GetAsync(RequireHostnameId(), Zone));
+
+    private Task CreateHostnameAsync() => RunAsync("Create custom hostname", async () =>
+        await Client.CustomHostnames.CreateAsync(
+            RequireHostname(),
+            HostnameDcvMethod,
+            HostnameWildcard,
+            Zone));
+
+    private Task RetryHostnameValidationAsync() => RunAsync("Retry custom hostname validation", async () =>
+        await Client.CustomHostnames.RetryValidationAsync(RequireHostnameId(), HostnameDcvMethod, Zone));
+
+    private Task SetHostnameOriginAsync() => RunAsync("Set the custom hostname's origin", async () =>
+        await Client.CustomHostnames.UpdateAsync(
+            RequireHostnameId(),
+            new UpdateCustomHostnameRequest
+            {
+                CustomOriginServer = Blank(HostnameOrigin)
+                    ?? throw new ArgumentException("Enter the origin to route this hostname to."),
+            },
+            Zone));
+
+    private Task DeleteHostnameAsync() => RunVoidAsync("Delete custom hostname", () =>
+        Client.CustomHostnames.DeleteAsync(RequireHostnameId(), Zone));
+
+    private string RequireHostnameId() =>
+        Blank(HostnameId) ?? throw new ArgumentException("Enter a custom hostname id - list them first.");
+
+    private string RequireHostname() =>
+        Blank(Hostname) ?? throw new ArgumentException("Enter the hostname to add, for example shop.customer.com.");
 
     private string RequirePackId() =>
         Blank(PackId) ?? throw new ArgumentException("Enter a certificate pack UUID.");

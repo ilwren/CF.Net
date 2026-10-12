@@ -179,8 +179,51 @@ put `geo_restrictions` in `AdditionalData` until the field names were confirmed,
 typed.
 
 ⛔ The origin TLS settings that constrain Auto-Origin TLS KEX (`origin_tls_compliance_modes`,
-`origin_tls_client_auth/settings`) and SSL for SaaS custom hostnames - both separate resources rather than part
-of `ssl`.
+`origin_tls_client_auth/settings`) - a separate resource rather than part of `ssl`. SSL for SaaS custom
+hostnames are a separate resource too, and have their own section below.
+
+## SSL for SaaS (custom hostnames)
+
+`ICustomHostnamesService` — `client.CustomHostnames`. Hostnames on other people's domains that CNAME into a
+zone and get their certificates from Cloudflare: `/zones/{zone_id}/custom_hostnames`.
+
+| Method | Endpoint | Notes |
+| --- | --- | --- |
+| `ListAsync(CustomHostnameListParameters?, zoneId)` | `GET /zones/{zone_id}/custom_hostnames` | filters: `id`, `certificate_authority`, `custom_origin_server`, `direction` (`asc`/`desc`), `hostname.contain` / `hostname.exact` / `hostname.startsWith`, `hostname_status` (16 values), `order` (`ssl`/`ssl_status`), `ssl` (**`1`/`0`**, not `true`/`false`), `ssl_status` (21 values), `wildcard`, `page`, `per_page` (5–1000). `id` and the three hostname filters are mutually exclusive, and Cloudflare rejects a request that combines them |
+| `ListAllAsync(...)` | `GET …/custom_hostnames` | walks the pages and copies all twelve filters onto every call, so a filter cannot be dropped halfway through |
+| `GetAsync(customHostnameId, zoneId)` | `GET …/custom_hostnames/{custom_hostname_id}` | `null` on 404 |
+| `CreateAsync(CreateCustomHostnameRequest, zoneId)` | `POST …/custom_hostnames` | body `{hostname, custom_metadata?, custom_origin_server?, custom_origin_sni?, ssl?}`, checked locally first: the hostname is required and `custom_cert_bundle` holds one or two complete pairs |
+| `CreateAsync(hostname, dcvMethod = "http", wildcard = false, zoneId)` | `POST …/custom_hostnames` | the common case - a Cloudflare-issued certificate, sent as `{"method":…,"type":"dv","wildcard":…}` |
+| `UpdateAsync(customHostnameId, UpdateCustomHostnameRequest, zoneId)` | `PATCH …/custom_hostnames/{custom_hostname_id}` | `custom_metadata`, `custom_origin_server`, `custom_origin_sni`, `ssl`. **There is no `hostname` field here** - a custom hostname cannot be renamed, only deleted and created again |
+| `RetryValidationAsync(customHostnameId, dcvMethod = "http", zoneId)` | `PATCH …/custom_hostnames/{custom_hostname_id}` | the same endpoint with the body already built: `{"ssl":{"method":…,"type":"dv","wildcard":false}}` |
+| `DeleteAsync(customHostnameId, zoneId)` | `DELETE …/custom_hostnames/{custom_hostname_id}` | removes the hostname **and any certificate issued for it**, so HTTPS for it stops |
+
+**Two calls, one lifecycle.** Creating a hostname does not produce a working certificate; it produces a
+challenge. The response carries `ownership_verification` (a TXT record) and `ownership_verification_http`
+(a token to serve over HTTP), plus `ssl.validation_records` naming exactly what the authority is waiting for
+and `ssl.validation_errors` for what already went wrong. `status` tracks the hostname and `ssl.status` tracks
+the certificate, and they move independently - `ssl.status` is the one to poll, walking
+`initializing → pending_validation → pending_issuance → pending_deployment → active`, with the `*_timed_out`
+values where it stops if nobody answers the challenge.
+
+**PATCH does double duty.** Sending SSL configuration that matches what is already there tells Cloudflare to
+run domain control validation again. That is how an `http` hostname finishes validating once its CNAME
+finally resolves, and how a hostname moves from one validation method to another - `RetryValidationAsync` is
+that call with the body built for you.
+
+**Three asymmetries worth knowing.** `digicert` can issue a custom hostname's certificate but is not accepted
+as a `certificate_authority` *filter*, and is not in the advanced-certificate-pack authority set either, so
+the three sets differ and are modelled separately: `CustomHostnameCertificateAuthorities.All`,
+`.Filterable`, and `SslCertificateAuthorities.All`. In the same query string, the `ssl` filter wants `1` and
+`0` while `wildcard` wants `true` and `false`. And the DCV methods here are `http`, `txt`, `email` - no
+`cname`, unlike the certificate-pack validation methods - with `http` recommended rather than `txt`.
+
+**`custom_cert_bundle` needs one RSA and one ECDSA certificate.** That cannot be checked without parsing the
+certificates, so the library checks what it can - one or two pairs, each with both halves - and leaves the
+algorithm requirement to Cloudflare.
+
+⛔ `custom_hostnames/fallback_origin`, the zone-wide origin these hostnames fall back to, is the one
+subresource here still unwrapped.
 
 ## Users and accounts
 

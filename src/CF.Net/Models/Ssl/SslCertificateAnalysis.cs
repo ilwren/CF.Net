@@ -50,5 +50,5 @@ public sealed class AnalyzeSslCertificateRequest
 
     /// <inheritdoc />
     public override string ToString() =>
-        Certificate is null ? "(no certificate)" : $"certificate, {BundleMethod ?? "default bundle"}";
+        Certificate is null ? "(no certificate)" : $"certificate, {BundleMethod ?? "default"} bundle";
 }

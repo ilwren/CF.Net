@@ -600,6 +600,36 @@ public class PagesProjectsServiceTests
     }
 
     [Fact]
+    public async Task ListAsync_retries_without_paging_when_pages_rejects_the_list_options()
+    {
+        using var harness = CloudflareHarness.Create();
+        harness.RespondWithError(
+            HttpStatusCode.BadRequest,
+            8000024,
+            "Invalid list options provided. Review the `page` or `per_page` parameter.");
+        harness.RespondWithPage("[{\"id\":\"p-1\",\"name\":\"site\"}]", page: 1, totalPages: 1, count: 1, totalCount: 1);
+
+        var page = await harness.Client.Pages.ListAsync(new PagesProjectListParameters { PerPage = 20 });
+
+        Assert.Equal(2, harness.RequestCount);
+        Assert.Equal("?page=1&per_page=20", harness.Requests[0].Query);
+        Assert.Equal(string.Empty, harness.Requests[1].Query);
+        Assert.Equal("site", Assert.Single(page.Items).Name);
+    }
+
+    [Fact]
+    public async Task ListAsync_does_not_retry_a_refusal_that_is_not_about_list_options()
+    {
+        using var harness = CloudflareHarness.Create();
+        harness.RespondWithError(HttpStatusCode.Forbidden, 10000, "Authentication error");
+
+        await Assert.ThrowsAsync<CloudflareApiException>(
+            () => harness.Client.Pages.ListAsync(new PagesProjectListParameters { PerPage = 20 }));
+
+        Assert.Equal(1, harness.RequestCount);
+    }
+
+    [Fact]
     public async Task ListAsync_sends_no_query_at_all_when_nothing_was_asked_for()
     {
         using var harness = CloudflareHarness.Create();

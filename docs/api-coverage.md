@@ -138,7 +138,7 @@ list, tails, observability configuration, and Workers AI.
 
 | Method | Endpoint | Notes |
 | --- | --- | --- |
-| `ListAsync(PagesProjectListParameters?, accountId)` | `GET /accounts/{account_id}/pages/projects` | `page`, `per_page`, `search` |
+| `ListAsync(PagesProjectListParameters?, accountId)` | `GET /accounts/{account_id}/pages/projects` | sends `page`, `per_page` (always paired — Pages answers a bare page size with `8000024`) and `search`; retries once with no query at all when Cloudflare answers `8000024 Invalid list options provided`, which it does for some accounts even though the schema documents both paging parameters. `search` is not in the published schema and is only sent when set |
 | `ListAllAsync(...)` | `GET …/pages/projects` | walks every page |
 | `GetAsync(projectName, accountId)` | `GET …/pages/projects/{project_name}` | `null` on 404 |
 | `CreateAsync(string projectName, string productionBranch, accountId)` | `POST …/pages/projects` | |

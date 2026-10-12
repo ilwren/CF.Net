@@ -306,20 +306,10 @@ public class ReadOnlyIntegrationTests : CloudflareIntegrationTest
             return;
         }
 
-        CloudflarePage<PagesProject> projects;
-        try
-        {
-            projects = await Client.Pages.ListAsync(new PagesProjectListParameters { PerPage = 20 });
-        }
-        catch (CloudflareApiException exception) when (exception.HasErrorCode(8000024))
-        {
-            // Pages rejects paging parameters it does not like instead of ignoring them. Retrying bare
-            // says whether the endpoint works at all, which is the difference between a library bug in
-            // the query string and an account that simply has no Pages projects.
-            Log($"pages list rejected the paging parameters: {exception.Message}");
-            projects = await Client.Pages.ListAsync();
-            Warn("GET /accounts/{account_id}/pages/projects rejected page/per_page with 8000024, but answered without them. The paging parameters are the problem, not the account.");
-        }
+        // Paging this endpoint is what Cloudflare answers with 8000024 on some accounts; the service
+        // retries bare when that happens, and the run report shows both calls, so a reader can see
+        // whether the fallback was needed.
+        var projects = await Client.Pages.ListAsync(new PagesProjectListParameters { PerPage = 20 });
 
         Log($"pages projects: {projects.Count} of {projects.TotalCount}");
         foreach (var project in projects.Items)

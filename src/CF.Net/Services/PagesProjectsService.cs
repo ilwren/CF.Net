@@ -179,9 +179,29 @@ public sealed class PagesProjectsService : CloudflareService, IPagesProjectsServ
         var request = Apply(CloudflareRequest.Get($"{AccountPath(account)}/pages/projects"), parameters);
         request.OperationName = "List Pages Projects";
 
-        var response = await Transport.SendAsync<List<PagesProject>>(request, cancellationToken).ConfigureAwait(false);
-        return response.ToPage();
+        try
+        {
+            var response = await Transport.SendAsync<List<PagesProject>>(request, cancellationToken).ConfigureAwait(false);
+            return response.ToPage();
+        }
+        catch (Exceptions.CloudflareApiException rejection)
+            when (parameters is not null && rejection.HasErrorCode(RejectsListOptions))
+        {
+            // Observed against the live API: some accounts are answered with 8000024 "Invalid list options
+            // provided. Review the `page` or `per_page` parameter" for the very paging parameters the
+            // published schema documents for this endpoint. The identical call without them succeeds, so
+            // retry once bare instead of failing a list Cloudflare is willing to serve. A refusal about
+            // anything else is left to the caller.
+            var bare = CloudflareRequest.Get($"{AccountPath(account)}/pages/projects");
+            bare.OperationName = "List Pages Projects";
+
+            var response = await Transport.SendAsync<List<PagesProject>>(bare, cancellationToken).ConfigureAwait(false);
+            return response.ToPage();
+        }
     }
+
+    /// <summary>The Cloudflare error code Pages uses to reject query parameters it will not apply.</summary>
+    private const int RejectsListOptions = 8000024;
 
     /// <inheritdoc />
     public async IAsyncEnumerable<PagesProject> ListAllAsync(

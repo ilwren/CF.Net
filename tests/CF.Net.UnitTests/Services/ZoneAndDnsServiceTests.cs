@@ -3021,8 +3021,10 @@ public class CustomHostnameFallbackOriginTests
             UpdateCustomHostnameFallbackOriginRequest.For("origin.example.com").ToString());
         Assert.Equal("(no origin)", new UpdateCustomHostnameFallbackOriginRequest().ToString());
         Assert.Equal("(no fallback origin)", new CustomHostnameFallbackOrigin().ToString());
+        // An origin Cloudflare reported no status for reads as unknown rather than being left out, the way
+        // UniversalSslSettings treats a missing enabled flag.
         Assert.Equal(
-            "fallback.example.com",
+            "fallback.example.com (unknown)",
             new CustomHostnameFallbackOrigin { Origin = "fallback.example.com" }.ToString());
         Assert.Equal(
             "pending_deletion",

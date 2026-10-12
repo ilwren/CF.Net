@@ -576,7 +576,8 @@ public sealed class UpdateCustomHostnameRequest
 /// which is unusual enough to be worth spelling out.
 /// </para>
 /// <para>
-/// <see cref="PerPage"/> runs from 5 to 1000 here, which is a much wider range than most list endpoints.
+/// <see cref="CloudflarePagedParameters.PerPage"/> runs from 5 to 1000 here, a much wider range than most
+/// list endpoints.
 /// </para>
 /// </remarks>
 public sealed class CustomHostnameListParameters : CloudflarePagedParameters

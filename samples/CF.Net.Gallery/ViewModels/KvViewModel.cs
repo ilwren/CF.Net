@@ -28,6 +28,7 @@ public sealed class KvViewModel : ModuleViewModelBase
         : base(gallery)
     {
         ListNamespacesCommand = new RelayCommand(ListNamespacesAsync);
+        ListAllNamespacesCommand = new RelayCommand(ListAllNamespacesAsync);
         GetNamespaceByTitleCommand = new RelayCommand(GetNamespaceByTitleAsync);
         GetNamespaceCommand = new RelayCommand(GetNamespaceAsync);
         CreateNamespaceCommand = new RelayCommand(CreateNamespaceAsync);
@@ -121,6 +122,24 @@ public sealed class KvViewModel : ModuleViewModelBase
 
     /// <summary>Writes many keys in one call.</summary>
     public RelayCommand BulkWriteCommand { get; }
+
+    /// <summary>Walks every page of namespaces.</summary>
+    public RelayCommand ListAllNamespacesCommand { get; }
+
+    private Task ListAllNamespacesAsync() => RunAsync("List every KV namespace", async () =>
+    {
+        var namespaces = new List<KvNamespace>();
+        await foreach (var ns in Client.Kv.ListAllNamespacesAsync(new KvNamespaceListParameters
+        {
+            PerPage = OptionalInt(ListPerPage),
+            Search = Blank(ListSearch),
+        }))
+        {
+            namespaces.Add(ns);
+        }
+
+        return namespaces;
+    });
 
     private Task ListNamespacesAsync() => RunAsync("List KV namespaces", async () =>
         await Client.Kv.ListNamespacesAsync(new KvNamespaceListParameters

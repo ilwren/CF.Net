@@ -34,6 +34,7 @@
             </WrapPanel>
             <WrapPanel Orientation="Horizontal">
               <Button Classes="run" Content="List" Command="{Binding ListNamespacesCommand}" Margin="0,0,8,0" />
+              <Button Content="List every page" Command="{Binding ListAllNamespacesCommand}" Margin="0,0,8,0" />
               <Button Content="Find by title" Command="{Binding GetNamespaceByTitleCommand}" Margin="0,0,8,0" />
               <Button Content="Get" Command="{Binding GetNamespaceCommand}" Margin="0,0,8,0" />
               <Button Content="Create" Command="{Binding CreateNamespaceCommand}" Margin="0,0,8,0" />

@@ -81,7 +81,7 @@ through `DnsRecord.Data` and `DnsRecord.GetData<T>()`.
 
 ## SSL certificate packs
 
-`ISslCertificatesService` — `client.Ssl`
+`ISslService` — `client.Ssl`
 
 | Method | Endpoint | Notes |
 | --- | --- | --- |
@@ -93,6 +93,8 @@ through `DnsRecord.Data` and `DnsRecord.GetData<T>()`.
 | `SetCloudflareBrandingAsync(certificatePackId, enabled, zoneId)` | `PATCH …/certificate_packs/{certificate_pack_id}` | sends `{"cloudflare_branding":true|false}` - `false` is sent explicitly, because omitting the field would leave the setting alone |
 | `RestartValidationAsync(certificatePackId, zoneId)` | `PATCH …/certificate_packs/{certificate_pack_id}` | sends `{}`; only a validation operation for a pack in `validation_timed_out`, and the challenge still has to be answered afterwards |
 | `DeleteAsync(certificatePackId, zoneId)` | `DELETE …/ssl/certificate_packs/{certificate_pack_id}` | Advanced Certificate Manager packs only; returns the `id` Cloudflare echoes back |
+| `GetUniversalSettingsAsync(zoneId)` | `GET /zones/{zone_id}/ssl/universal/settings` | one boolean, `enabled` |
+| `SetUniversalSslAsync(enabled, zoneId)` | `PATCH …/ssl/universal/settings` | body `{"enabled":true|false}` - `false` is sent explicitly, because an empty PATCH would leave the setting alone |
 
 Permissions are `SSL and Certificates Read` to list and read, `SSL and Certificates Write` to delete.
 
@@ -118,9 +120,17 @@ release does not model can still be sent through the request's `AdditionalData`.
 `SslCertificatePackStatuses` also names `pending_issuance` and `pending_deployment`, the two steps between an
 answered challenge and a certificate being served.
 
-⛔ The quota (`GET …/certificate_packs/quota`), universal SSL settings
-(`/zones/{zone_id}/ssl/universal/settings`), DCV delegation and validation method
-(`/zones/{zone_id}/ssl/verification`), auto-origin TLS KEX and the SSL/TLS recommendation.
+**Turning Universal SSL off is not a cosmetic change.** Cloudflare removes the zone's active universal
+certificates from the edge and stops ordering new ones, so unless an advanced certificate pack or an uploaded
+custom certificate covers the hostname, HTTPS simply stops working - and HSTS, Always Use HTTPS,
+Opportunistic Encryption, Onion Routing and any page rule redirecting to HTTPS turn that into a hard failure
+instead of a fallback to HTTP. `UniversalSslSettings` keeps `Enabled` nullable and reports `unknown` when
+Cloudflare omits it, so "off" and "not answered" are never the same thing.
+
+⛔ The quota (`GET …/certificate_packs/quota` - the published index describes its result only as
+`{ advanced }`, so the inner shape is not documented where this library can check it), DCV delegation and
+validation method (`/zones/{zone_id}/ssl/verification`), auto-origin TLS KEX, automatic SSL/TLS enrolment and
+the SSL/TLS recommendation.
 
 ## Users and accounts
 

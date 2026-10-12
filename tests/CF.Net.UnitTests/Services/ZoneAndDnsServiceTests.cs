@@ -1456,3 +1456,94 @@ public class SslCertificatePackUpdateTests
         Assert.Equal("backup_issued", SslCertificatePackStatuses.BackupIssued);
     }
 }
+
+public class UniversalSslSettingsTests
+{
+    private const string SettingsPath = "/client/v4/zones/zone-5678/ssl/universal/settings";
+
+    [Fact]
+    public async Task GetUniversalSettingsAsync_reads_the_switch()
+    {
+        using var harness = CloudflareHarness.Create();
+        harness.RespondWithResult("{\"enabled\":true}");
+
+        var settings = await harness.Client.Ssl.GetUniversalSettingsAsync();
+
+        Assert.Equal(HttpMethod.Get, harness.LastRequest.Method);
+        Assert.Equal(SettingsPath, harness.LastRequest.Path);
+        Assert.Equal(string.Empty, harness.LastRequest.Query);
+        Assert.True(settings.Enabled);
+        Assert.True(settings.IsEnabled);
+        Assert.Equal("enabled", settings.ToString());
+    }
+
+    [Fact]
+    public async Task GetUniversalSettingsAsync_reports_a_zone_that_turned_it_off()
+    {
+        using var harness = CloudflareHarness.Create();
+        harness.RespondWithResult("{\"enabled\":false}");
+
+        var settings = await harness.Client.Ssl.GetUniversalSettingsAsync();
+
+        Assert.False(settings.Enabled);
+        Assert.False(settings.IsEnabled);
+        Assert.Equal("disabled", settings.ToString());
+    }
+
+    [Fact]
+    public async Task GetUniversalSettingsAsync_says_unknown_when_cloudflare_omits_the_switch()
+    {
+        using var harness = CloudflareHarness.Create();
+        harness.RespondWithResult("{}");
+
+        var settings = await harness.Client.Ssl.GetUniversalSettingsAsync();
+
+        Assert.Null(settings.Enabled);
+        Assert.False(settings.IsEnabled);
+        Assert.Equal("unknown", settings.ToString());
+        Assert.Equal("unknown", new UniversalSslSettings().ToString());
+    }
+
+    [Fact]
+    public async Task SetUniversalSslAsync_sends_the_switch_it_was_given()
+    {
+        using var harness = CloudflareHarness.Create();
+        harness.RespondWithResult("{\"enabled\":false}");
+
+        await harness.Client.Ssl.SetUniversalSslAsync(false);
+
+        Assert.Equal(HttpMethod.Patch, harness.LastRequest.Method);
+        Assert.Equal(SettingsPath, harness.LastRequest.Path);
+        // false has to be in the body: an empty PATCH would leave the setting alone.
+        Assert.Equal("{\"enabled\":false}", harness.LastRequest.Body);
+    }
+
+    [Fact]
+    public async Task SetUniversalSslAsync_can_turn_it_back_on()
+    {
+        using var harness = CloudflareHarness.Create();
+        harness.RespondWithResult("{\"enabled\":true}");
+
+        var settings = await harness.Client.Ssl.SetUniversalSslAsync(true, "zone-other");
+
+        Assert.Equal("/client/v4/zones/zone-other/ssl/universal/settings", harness.LastRequest.Path);
+        Assert.Equal("{\"enabled\":true}", harness.LastRequest.Body);
+        Assert.True(settings.IsEnabled);
+    }
+
+    [Fact]
+    public async Task Universal_settings_without_a_result_payload_raise()
+    {
+        using var harness = CloudflareHarness.Create();
+        harness
+            .RespondWithResult("null")
+            .RespondWithResult("null");
+
+        var get = await Assert.ThrowsAsync<CloudflareApiException>(() => harness.Client.Ssl.GetUniversalSettingsAsync());
+        var set = await Assert.ThrowsAsync<CloudflareApiException>(() => harness.Client.Ssl.SetUniversalSslAsync(true));
+
+        Assert.Contains("without a result payload", get.Message, StringComparison.Ordinal);
+        Assert.Contains("without a result payload", set.Message, StringComparison.Ordinal);
+        Assert.Equal(2, harness.RequestCount);
+    }
+}

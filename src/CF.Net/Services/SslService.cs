@@ -5,17 +5,18 @@ using CFNet.Models.Ssl;
 namespace CFNet.Services;
 
 /// <summary>
-/// SSL certificate packs of a zone: <c>/zones/{zone_id}/ssl/certificate_packs</c>.
+/// SSL for a zone: the certificate packs under <c>/zones/{zone_id}/ssl/certificate_packs</c> and the
+/// Universal SSL switch under <c>/zones/{zone_id}/ssl/universal/settings</c>.
 /// </summary>
 /// <remarks>
-/// Listing and reading need the <c>SSL and Certificates Read</c> permission (or <c>Write</c>); deleting an
-/// Advanced Certificate Manager pack needs <c>SSL and Certificates Write</c>. Not wrapped by this release:
-/// ordering a pack (<c>POST …/certificate_packs/order</c>), restarting validation or changing branding
-/// (<c>PATCH …/certificate_packs/{certificate_pack_id}</c>), the quota (<c>GET …/certificate_packs/quota</c>),
-/// universal SSL settings (<c>/zones/{zone_id}/ssl/universal/settings</c>) and DCV delegation
-/// (<c>/zones/{zone_id}/ssl/verification</c>).
+/// Listing and reading need the <c>SSL and Certificates Read</c> permission (or <c>Write</c>); ordering,
+/// changing and deleting packs need <c>SSL and Certificates Write</c>. Not wrapped by this release: the
+/// certificate pack quota (<c>GET …/certificate_packs/quota</c>, whose result the published index only
+/// describes as <c>{ advanced }</c>), DCV delegation and validation method
+/// (<c>/zones/{zone_id}/ssl/verification</c>), auto-origin TLS KEX, automatic SSL/TLS enrolment and the
+/// SSL/TLS recommendation.
 /// </remarks>
-public interface ISslCertificatesService
+public interface ISslService
 {
     /// <summary>Lists the certificate packs of a zone, one page at a time.</summary>
     /// <param name="parameters">Optional <c>deploy</c>, <c>status</c> and paging.</param>
@@ -123,6 +124,32 @@ public interface ISslCertificatesService
         string? zoneId = null,
         CancellationToken cancellationToken = default);
 
+    /// <summary>Reads the Universal SSL switch via <c>GET /zones/{zone_id}/ssl/universal/settings</c>.</summary>
+    /// <param name="zoneId">Zone id; falls back to the configured default when null.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>The settings, whose <see cref="UniversalSslSettings.Enabled"/> may be null if Cloudflare omits it.</returns>
+    /// <remarks>Needs <c>SSL and Certificates Read</c>.</remarks>
+    Task<UniversalSslSettings> GetUniversalSettingsAsync(
+        string? zoneId = null,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>Turns Universal SSL on or off via <c>PATCH /zones/{zone_id}/ssl/universal/settings</c>.</summary>
+    /// <param name="enabled">Whether Universal SSL should be on.</param>
+    /// <param name="zoneId">Zone id; falls back to the configured default when null.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>The settings as Cloudflare reports them afterwards.</returns>
+    /// <remarks>
+    /// Needs <c>SSL and Certificates Write</c>. Turning it <em>off</em> is not a cosmetic change: Cloudflare
+    /// removes the zone's active universal certificates from the edge and stops ordering new ones, so unless
+    /// an advanced certificate pack or an uploaded custom certificate covers the hostname, HTTPS stops
+    /// working for visitors - and settings such as HSTS, Always Use HTTPS, Opportunistic Encryption, Onion
+    /// Routing and page rules that redirect to HTTPS will make that a hard error instead of a fallback.
+    /// </remarks>
+    Task<UniversalSslSettings> SetUniversalSslAsync(
+        bool enabled,
+        string? zoneId = null,
+        CancellationToken cancellationToken = default);
+
     /// <summary>Deletes an Advanced Certificate Manager pack via <c>DELETE /zones/{zone_id}/ssl/certificate_packs/{certificate_pack_id}</c>.</summary>
     /// <param name="certificatePackId">The pack id.</param>
     /// <param name="zoneId">Zone id; falls back to the configured default when null.</param>
@@ -139,11 +166,11 @@ public interface ISslCertificatesService
 }
 
 /// <inheritdoc />
-public sealed class SslCertificatesService : CloudflareService, ISslCertificatesService
+public sealed class SslService : CloudflareService, ISslService
 {
     /// <summary>Creates the service.</summary>
     /// <param name="transport">The transport to execute requests through.</param>
-    public SslCertificatesService(ICloudflareTransport transport)
+    public SslService(ICloudflareTransport transport)
         : base(transport)
     {
     }
@@ -265,6 +292,35 @@ public sealed class SslCertificatesService : CloudflareService, ISslCertificates
         string? zoneId = null,
         CancellationToken cancellationToken = default) =>
         UpdateAsync(certificatePackId, UpdateSslCertificatePackRequest.ToRestartValidation(), zoneId, cancellationToken);
+
+    /// <inheritdoc />
+    public async Task<UniversalSslSettings> GetUniversalSettingsAsync(
+        string? zoneId = null,
+        CancellationToken cancellationToken = default)
+    {
+        var zone = ResolveZoneId(zoneId);
+        var request = CloudflareRequest.Get($"{ZonePath(zone)}/ssl/universal/settings");
+        request.OperationName = "Get Universal SSL Settings";
+
+        var response = await Transport.SendAsync<UniversalSslSettings>(request, cancellationToken).ConfigureAwait(false);
+        return response.EnsureResult();
+    }
+
+    /// <inheritdoc />
+    public async Task<UniversalSslSettings> SetUniversalSslAsync(
+        bool enabled,
+        string? zoneId = null,
+        CancellationToken cancellationToken = default)
+    {
+        var zone = ResolveZoneId(zoneId);
+        var request = CloudflareRequest.Patch(
+            $"{ZonePath(zone)}/ssl/universal/settings",
+            new UniversalSslSettings { Enabled = enabled });
+        request.OperationName = enabled ? "Enable Universal SSL" : "Disable Universal SSL";
+
+        var response = await Transport.SendAsync<UniversalSslSettings>(request, cancellationToken).ConfigureAwait(false);
+        return response.EnsureResult();
+    }
 
     /// <inheritdoc />
     public async Task<string?> DeleteAsync(

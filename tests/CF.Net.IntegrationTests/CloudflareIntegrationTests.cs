@@ -50,13 +50,22 @@ public class ReadOnlyIntegrationTests : CloudflareIntegrationTest
 
         if (string.IsNullOrWhiteSpace(ApiToken))
         {
-            Log("SKIPPED: the /user/tokens/verify endpoint only applies to API tokens.");
+            Log("SKIPPED: the token verify endpoints only apply to API tokens.");
             return;
         }
 
-        var verification = await Client.User.VerifyTokenAsync();
+        if (IsAccountOwnedToken && !SkipWithoutAccount())
+        {
+            return;
+        }
 
-        Log($"status={verification.Status} id={verification.Id}");
+        // An account-owned token is a service principal, so verify it where Cloudflare answers for it.
+        var endpoint = IsAccountOwnedToken ? "accounts/{account_id}/tokens/verify" : "user/tokens/verify";
+        var verification = IsAccountOwnedToken
+            ? await Client.User.VerifyAccountTokenAsync()
+            : await Client.User.VerifyTokenAsync();
+
+        Log($"status={verification.Status} id={verification.Id} endpoint={endpoint}");
         Assert.True(verification.IsActive);
     }
 
@@ -64,6 +73,13 @@ public class ReadOnlyIntegrationTests : CloudflareIntegrationTest
     public async Task The_authenticated_user_can_be_read()
     {
         if (!SkipWithoutCredentials())
+        {
+            return;
+        }
+
+        if (!SkipUnless(
+                !IsAccountOwnedToken,
+                "GET /user is user-scoped: an account-owned token (cfat_) acts as a service principal rather than as a person, so Cloudflare rejects it here. Configure a user token (cfut_) to exercise this one."))
         {
             return;
         }

@@ -355,6 +355,26 @@ jobs:
                   lines += [f'**{cell(test)}**', '', '```', (message or '(no message)')[:1200], '```', '']
               lines.append('</details>')
 
+          # Annotations are the only per-test detail this run publishes that is readable through the
+          # GitHub API without downloading the job log, so they repeat what the summary says. GitHub
+          # keeps at most 10 of each level per step, so the remainder collapses into one extra line
+          # rather than vanishing. A percent sign or a newline in a message would otherwise end the
+          # annotation early, hence the escaping.
+          def annotation(level, message):
+              safe = message.replace('%', '%25').replace(chr(13), '%0D').replace(chr(10), '%0A')
+              print('::' + level + '::' + safe)
+
+          if total:
+              tally = ', '.join(outcome + '=' + str(counts[outcome]) for outcome in sorted(counts))
+              annotation('notice', 'Integration suite: ' + tally + ' (total ' + str(total) + ')')
+          for test, message in failures[:10]:
+              annotation('error', str(test) + ': ' + (message or '(no message)')[:400])
+          if len(failures) > 10:
+              annotation('error', 'and ' + str(len(failures) - 10) + ' more failing test(s), listed in the job summary')
+          for test, reason in skipped[:10]:
+              annotation('notice', 'SKIPPED ' + str(test) + ': ' + str(reason)[:300])
+          if len(skipped) > 10:
+              annotation('notice', 'and ' + str(len(skipped) - 10) + ' more skipped test(s), listed in the job summary')
           text = '\n'.join(lines)
           print(text)
           summary = os.environ.get('GITHUB_STEP_SUMMARY')

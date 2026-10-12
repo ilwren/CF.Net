@@ -194,6 +194,16 @@ public abstract class CloudflareIntegrationTest : IDisposable
     /// <summary>Logs a Cloudflare call and its outcome, so a failing run shows the CF-RAY to quote.</summary>
     protected void Log(string message) => Output.WriteLine(message);
 
+    /// <summary>
+    /// True when the configured token is account-owned (<c>cfat_...</c>). Cloudflare verifies those at
+    /// <c>GET /accounts/{account_id}/tokens/verify</c> and rejects them at the user-scoped endpoints -
+    /// <c>GET /user</c> and <c>GET /user/tokens/verify</c> - with <c>1000 Invalid API Token</c>, so a
+    /// test that has to use one of those opts out instead of failing.
+    /// </summary>
+    protected bool IsAccountOwnedToken =>
+        ApiToken is not null &&
+        ApiToken.StartsWith(CloudflareDefaults.TokenPrefixes.AccountApiToken, StringComparison.Ordinal);
+
     /// <summary>Problems already reported, so 25 tests do not print the same warning 25 times.</summary>
     private static readonly HashSet<string> ReportedProblems = new(StringComparer.Ordinal);
 

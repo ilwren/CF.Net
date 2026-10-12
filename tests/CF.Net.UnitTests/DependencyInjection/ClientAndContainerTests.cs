@@ -94,6 +94,9 @@ public class UserServiceTests
     {
         using var harness = CloudflareHarness.Create();
         harness.RespondWithError(HttpStatusCode.Unauthorized, 10000, "Invalid Authentication");
+        // A user-scoped rejection is also retried against the account endpoint, which refuses too; the
+        // original rejection is the one that gets reported.
+        harness.RespondWithError(HttpStatusCode.Forbidden, 1000, "Invalid API Token");
 
         var check = await harness.Client.CheckConnectionAsync();
 
@@ -101,6 +104,7 @@ public class UserServiceTests
         Assert.Equal(HttpStatusCode.Unauthorized, check.StatusCode);
         Assert.Equal(10000, check.ErrorCode);
         Assert.Contains("Invalid Authentication", check.Message, StringComparison.Ordinal);
+        Assert.Equal(2, harness.RequestCount);
     }
 
     [Fact]
@@ -132,6 +136,99 @@ public class UserServiceTests
 
         Assert.False(check.IsSuccess);
         Assert.True(check.IsTimeout);
+        Assert.Equal(1, harness.RequestCount);
+    }
+
+    [Fact]
+    public async Task VerifyAccountTokenAsync_uses_the_account_scoped_verify_endpoint()
+    {
+        using var harness = CloudflareHarness.Create();
+        harness.RespondWithResult("{\"id\":\"t-2\",\"status\":\"active\"}");
+
+        var verification = await harness.Client.User.VerifyAccountTokenAsync();
+
+        Assert.Equal($"/client/v4/accounts/{CloudflareHarness.TestAccountId}/tokens/verify", harness.LastRequest.Path);
+        Assert.True(verification.IsActive);
+    }
+
+    [Fact]
+    public async Task VerifyAccountTokenAsync_accepts_an_explicit_account_id()
+    {
+        using var harness = CloudflareHarness.Create();
+        harness.RespondWithResult("{\"id\":\"t-3\",\"status\":\"active\"}");
+
+        await harness.Client.User.VerifyAccountTokenAsync("acct-other");
+
+        Assert.Equal("/client/v4/accounts/acct-other/tokens/verify", harness.LastRequest.Path);
+    }
+
+    [Fact]
+    public async Task VerifyAccountTokenAsync_needs_an_account_id()
+    {
+        using var harness = CloudflareHarness.Create(options => options.AccountId = null);
+        harness.RespondWithResult("{\"id\":\"t-4\",\"status\":\"active\"}");
+
+        var exception = await Assert.ThrowsAsync<CloudflareConfigurationException>(
+            () => harness.Client.User.VerifyAccountTokenAsync());
+
+        Assert.NotEmpty(exception.Problems);
+    }
+
+    [Fact]
+    public async Task CheckConnectionAsync_verifies_an_account_owned_token_without_trying_the_user_endpoint()
+    {
+        using var harness = CloudflareHarness.Create(options => options.ApiToken = "cfat_0123456789012345678901234567890123456789");
+        harness.RespondWithResult("{\"id\":\"t-5\",\"status\":\"active\"}");
+
+        var check = await harness.Client.CheckConnectionAsync();
+
+        Assert.True(check.IsSuccess);
+        Assert.Contains("Account-owned", check.Message, StringComparison.Ordinal);
+        Assert.Equal($"/client/v4/accounts/{CloudflareHarness.TestAccountId}/tokens/verify", harness.LastRequest.Path);
+        Assert.Equal(1, harness.RequestCount);
+    }
+
+    [Fact]
+    public async Task CheckConnectionAsync_falls_back_to_the_account_endpoint_when_the_user_one_rejects_the_token()
+    {
+        // Tokens issued before 2026 carry no prefix, so the user-scoped rejection is the only hint that
+        // the credential is account-owned. Without the fallback this reports "invalid token" for a
+        // secret that works.
+        using var harness = CloudflareHarness.Create();
+        harness.RespondWithError(HttpStatusCode.Forbidden, 1000, "Invalid API Token");
+        harness.RespondWithResult("{\"id\":\"t-6\",\"status\":\"active\"}");
+
+        var check = await harness.Client.CheckConnectionAsync();
+
+        Assert.True(check.IsSuccess);
+        Assert.Equal(2, harness.RequestCount);
+        Assert.Contains("account-owned", check.Message, StringComparison.Ordinal);
+        Assert.Equal($"/client/v4/accounts/{CloudflareHarness.TestAccountId}/tokens/verify", harness.LastRequest.Path);
+    }
+
+    [Fact]
+    public async Task CheckConnectionAsync_still_reports_the_rejection_when_both_endpoints_refuse_the_token()
+    {
+        using var harness = CloudflareHarness.Create();
+        harness.RespondWithError(HttpStatusCode.Forbidden, 1000, "Invalid API Token");
+        harness.RespondWithError(HttpStatusCode.Forbidden, 1000, "Invalid API Token");
+
+        var check = await harness.Client.CheckConnectionAsync();
+
+        Assert.False(check.IsSuccess);
+        Assert.Equal(2, harness.RequestCount);
+        Assert.Contains("Invalid API Token", check.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task CheckConnectionAsync_does_not_fall_back_without_an_account_id()
+    {
+        using var harness = CloudflareHarness.Create(options => options.AccountId = null);
+        harness.RespondWithError(HttpStatusCode.Forbidden, 1000, "Invalid API Token");
+
+        var check = await harness.Client.CheckConnectionAsync();
+
+        Assert.False(check.IsSuccess);
         Assert.Equal(1, harness.RequestCount);
     }
 

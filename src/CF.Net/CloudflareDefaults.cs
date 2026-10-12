@@ -49,4 +49,34 @@ public static class CloudflareDefaults
         /// <summary>Cloudflare request id, useful when opening a support ticket.</summary>
         public const string CfRay = "CF-RAY";
     }
+
+    /// <summary>
+    /// The prefixes Cloudflare puts on the credentials it issues, which is how secret scanners - and
+    /// this library - tell one kind of credential from another.
+    /// </summary>
+    /// <remarks>
+    /// Credentials created since 2026 carry one of these prefixes followed by 40 characters and a
+    /// checksum. Earlier credentials are unprefixed: a 40-character alphanumeric API token, or a 37-45
+    /// character lowercase hexadecimal Global API Key. Nothing here can therefore identify an older
+    /// credential, and a prefix is a hint rather than a guarantee.
+    /// </remarks>
+    public static class TokenPrefixes
+    {
+        /// <summary>
+        /// A user-owned API token. It acts as the user who created it, and is verified by
+        /// <c>GET /user/tokens/verify</c>.
+        /// </summary>
+        public const string UserApiToken = "cfut_";
+
+        /// <summary>
+        /// An account-owned API token: a service principal that outlives the person who created it,
+        /// which is why it is the better choice for CI. It is verified by
+        /// <c>GET /accounts/{account_id}/tokens/verify</c>, and the user-scoped endpoints -
+        /// <c>GET /user</c> and <c>GET /user/tokens/verify</c> - reject it.
+        /// </summary>
+        public const string AccountApiToken = "cfat_";
+
+        /// <summary>The Global API Key: account-wide, cannot be scoped, and needs the account e-mail.</summary>
+        public const string GlobalApiKey = "cfk_";
+    }
 }

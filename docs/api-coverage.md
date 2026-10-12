@@ -66,11 +66,17 @@ through `DnsRecord.Data` and `DnsRecord.GetData<T>()`.
 
 | Method | Endpoint | Notes |
 | --- | --- | --- |
-| `User.VerifyTokenAsync()` | `GET /user/tokens/verify` | |
-| `User.GetAsync()` | `GET /user` | |
-| `User.CheckConnectionAsync()` *(also on `ICloudflareClient`)* | `GET /user/tokens/verify` or `GET /user` | never throws; reports scheme, status, `ErrorCode`, `IsTimeout`, elapsed |
+| `User.VerifyTokenAsync()` | `GET /user/tokens/verify` | for a **user-owned** token (`cfut_...`); answers `1000 Invalid API Token` for an account-owned one |
+| `User.VerifyAccountTokenAsync(string? accountId)` | `GET /accounts/{account_id}/tokens/verify` | for an **account-owned** token (`cfat_...`), the service principal CI should use |
+| `User.GetAsync()` | `GET /user` | user-scoped, so an account-owned token cannot read it |
+| `User.CheckConnectionAsync()` *(also on `ICloudflareClient`)* | `GET /user/tokens/verify`, `GET /accounts/{account_id}/tokens/verify`, or `GET /user` | never throws; picks the verify endpoint from the token prefix and falls back to the account one when the user-scoped call is rejected; reports scheme, status, `ErrorCode`, `IsTimeout`, elapsed |
 | `Accounts.ListAsync(AccountListParameters?)` | `GET /accounts` | `page`, `per_page`, `name` |
 | `Accounts.GetAsync(string? accountId)` | `GET /accounts/{account_id}` | returns `null` on 403/404 |
+
+`CloudflareClientOptions.HasAccountOwnedToken` says whether the configured token is a `cfat_` one, and
+`CloudflareDefaults.TokenPrefixes` names the three prefixes Cloudflare issues (`cfut_`, `cfat_`, `cfk_`).
+Credentials created before 2026 carry no prefix, so a prefix check can only ever be a hint - which is why
+`CheckConnectionAsync` retries against the account endpoint rather than trusting the prefix alone.
 
 ## Workers
 

@@ -47,6 +47,22 @@ public class CloudflareClientOptionsTests
         Assert.Equal(expected != CloudflareAuthenticationMode.None, options.HasCredentials);
     }
 
+    [Theory]
+    [InlineData("cfat_0123456789012345678901234567890123456789", true)]
+    [InlineData("cfut_0123456789012345678901234567890123456789", false)]
+    [InlineData("cfk_0123456789012345678901234567890123456789", false)]
+    [InlineData("0123456789abcdef0123456789abcdef01234567", false)]
+    [InlineData(" CFat_0123456789012345678901234567890123456789", false)]
+    [InlineData(null, false)]
+    public void HasAccountOwnedToken_only_matches_the_account_owned_prefix(
+        string? token,
+        bool expected)
+    {
+        // A pre-2026 token carries no prefix, so an unprefixed one cannot be recognised here - that is
+        // why CheckConnectionAsync also falls back when the user-scoped endpoint rejects a credential.
+        Assert.Equal(expected, new CloudflareClientOptions { ApiToken = token }.HasAccountOwnedToken);
+    }
+
     [Fact]
     public void Validate_reports_every_problem_at_once()
     {

@@ -21,6 +21,19 @@ public interface IUserService
     /// </remarks>
     Task<CloudflareTokenVerification> VerifyTokenAsync(CancellationToken cancellationToken = default);
 
+    /// <summary>
+    /// Verifies an account-owned token via <c>GET /accounts/{account_id}/tokens/verify</c>.
+    /// </summary>
+    /// <param name="accountId">The account that owns the token; defaults to the configured account id.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>The verification result.</returns>
+    /// <remarks>
+    /// This is the endpoint that answers for a <c>cfat_...</c> token. The user-scoped
+    /// <see cref="VerifyTokenAsync"/> rejects those with <c>1000 Invalid API Token</c>;
+    /// <see cref="CheckConnectionAsync"/> picks between the two on its own.
+    /// </remarks>
+    Task<CloudflareTokenVerification> VerifyAccountTokenAsync(string? accountId = null, CancellationToken cancellationToken = default);
+
     /// <summary>Fetches the authenticated user via <c>GET /user</c>.</summary>
     /// <param name="cancellationToken">Cancellation token.</param>
     Task<CloudflareUser> GetAsync(CancellationToken cancellationToken = default);
@@ -49,6 +62,16 @@ public sealed class UserService : CloudflareService, IUserService
     {
         var request = CloudflareRequest.Get("user/tokens/verify");
         request.OperationName = "Verify API Token";
+
+        var response = await Transport.SendAsync<CloudflareTokenVerification>(request, cancellationToken).ConfigureAwait(false);
+        return response.Result ?? new CloudflareTokenVerification();
+    }
+
+    /// <inheritdoc />
+    public async Task<CloudflareTokenVerification> VerifyAccountTokenAsync(string? accountId = null, CancellationToken cancellationToken = default)
+    {
+        var request = CloudflareRequest.Get($"{AccountPath(ResolveAccountId(accountId))}/tokens/verify");
+        request.OperationName = "Verify Account API Token";
 
         var response = await Transport.SendAsync<CloudflareTokenVerification>(request, cancellationToken).ConfigureAwait(false);
         return response.Result ?? new CloudflareTokenVerification();
@@ -85,16 +108,45 @@ public sealed class UserService : CloudflareService, IUserService
             // it is not applicable, so fall back to reading the user object.
             if (Options.AuthenticationMode == CloudflareAuthenticationMode.ApiToken)
             {
-                var verification = await VerifyTokenAsync(cancellationToken).ConfigureAwait(false);
-                return new CloudflareConnectionCheck
+                // An account-owned token is a service principal, and the user-scoped endpoint rejects
+                // it, so go straight to the account endpoint when the prefix says that is what we have.
+                if (Options.HasAccountOwnedToken && HasAccountId)
                 {
-                    IsSuccess = verification.IsActive,
-                    Method = CloudflareAuthenticationMode.ApiToken,
-                    Message = verification.IsActive
-                        ? "API token is active."
-                        : $"API token is not active (status '{verification.Status ?? "unknown"}').",
-                    Elapsed = DateTimeOffset.UtcNow - start,
-                };
+                    return await CheckAccountTokenAsync(start, cancellationToken).ConfigureAwait(false);
+                }
+
+                try
+                {
+                    var verification = await VerifyTokenAsync(cancellationToken).ConfigureAwait(false);
+                    return new CloudflareConnectionCheck
+                    {
+                        IsSuccess = verification.IsActive,
+                        Method = CloudflareAuthenticationMode.ApiToken,
+                        Message = verification.IsActive
+                            ? "API token is active."
+                            : $"API token is not active (status '{verification.Status ?? "unknown"}').",
+                        Elapsed = DateTimeOffset.UtcNow - start,
+                    };
+                }
+                catch (Exceptions.CloudflareApiException rejection) when (rejection.IsAuthenticationFailure && HasAccountId)
+                {
+                    // Worth one more try: a token issued before 2026 has no prefix, so an account-owned
+                    // credential can look like a user one. Reporting "invalid token" without asking the
+                    // account endpoint sends people off to recreate a secret that was never broken.
+                    var accountCheck = await CheckAccountTokenAsync(start, cancellationToken).ConfigureAwait(false);
+                    if (accountCheck.IsSuccess)
+                    {
+                        return new CloudflareConnectionCheck
+                        {
+                            IsSuccess = true,
+                            Method = accountCheck.Method,
+                            Message = accountCheck.Message + " The user-scoped endpoint rejected this token, so it is account-owned.",
+                            Elapsed = accountCheck.Elapsed,
+                        };
+                    }
+
+                    throw;
+                }
             }
 
             var user = await GetAsync(cancellationToken).ConfigureAwait(false);
@@ -130,6 +182,26 @@ public sealed class UserService : CloudflareService, IUserService
                 Elapsed = DateTimeOffset.UtcNow - start,
             };
         }
+    }
+
+    /// <summary>True when an account id is available to verify an account-owned token against.</summary>
+    private bool HasAccountId => !string.IsNullOrWhiteSpace(Options.AccountId);
+
+    /// <summary>Verifies through the account-scoped endpoint and reports the outcome.</summary>
+    /// <param name="start">When the check began, for <see cref="CloudflareConnectionCheck.Elapsed"/>.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    private async Task<CloudflareConnectionCheck> CheckAccountTokenAsync(DateTimeOffset start, CancellationToken cancellationToken)
+    {
+        var verification = await VerifyAccountTokenAsync(cancellationToken: cancellationToken).ConfigureAwait(false);
+        return new CloudflareConnectionCheck
+        {
+            IsSuccess = verification.IsActive,
+            Method = CloudflareAuthenticationMode.ApiToken,
+            Message = verification.IsActive
+                ? "Account-owned API token is active."
+                : $"Account-owned API token is not active (status '{verification.Status ?? "unknown"}').",
+            Elapsed = DateTimeOffset.UtcNow - start,
+        };
     }
 }
 

@@ -98,6 +98,21 @@ public sealed class CloudflareClientOptions
     public bool HasCredentials => AuthenticationMode != CloudflareAuthenticationMode.None;
 
     /// <summary>
+    /// True when <see cref="ApiToken"/> is an account-owned token (<c>cfat_...</c>), which acts as a
+    /// service principal rather than as a user.
+    /// </summary>
+    /// <remarks>
+    /// The user-scoped endpoints reject those tokens with <c>1000 Invalid API Token</c> - an error that
+    /// reads like a bad secret and is not one. Verification goes through
+    /// <c>GET /accounts/{account_id}/tokens/verify</c> instead, which is what
+    /// <c>IUserService.CheckConnectionAsync</c> does automatically when this is true. Tokens issued
+    /// before 2026 carry no prefix, so a false negative is possible and the fallback still applies.
+    /// </remarks>
+    public bool HasAccountOwnedToken =>
+        ApiToken is not null &&
+        ApiToken.StartsWith(CloudflareDefaults.TokenPrefixes.AccountApiToken, StringComparison.Ordinal);
+
+    /// <summary>
     /// Produces a copy that can be modified without affecting the instance registered in DI.
     /// </summary>
     public CloudflareClientOptions Clone()

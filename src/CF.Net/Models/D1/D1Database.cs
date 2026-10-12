@@ -276,6 +276,42 @@ public sealed class D1QueryResult
 
         return default;
     }
+
+    /// <summary>
+    /// Reads the rows a <c>/raw</c> query returns, where each row is a JSON array of column values
+    /// instead of an object. Rows from the ordinary <c>/query</c> endpoint are objects and are skipped,
+    /// so this returns an empty list for them.
+    /// </summary>
+    /// <remarks>
+    /// The raw endpoint trades column names for speed, so pair the values with the column order of the
+    /// statement you sent: <c>SELECT id, label FROM items</c> yields <c>[id, label]</c> for each row.
+    /// </remarks>
+    public IReadOnlyList<IReadOnlyList<JsonElement>> RowArrays()
+    {
+        if (Results is not { Count: > 0 } rows)
+        {
+            return Array.Empty<IReadOnlyList<JsonElement>>();
+        }
+
+        var arrays = new List<IReadOnlyList<JsonElement>>(rows.Count);
+        foreach (var row in rows)
+        {
+            if (row.ValueKind != JsonValueKind.Array)
+            {
+                continue;
+            }
+
+            var values = new List<JsonElement>();
+            foreach (var value in row.EnumerateArray())
+            {
+                values.Add(value);
+            }
+
+            arrays.Add(values);
+        }
+
+        return arrays;
+    }
 }
 
 /// <summary>Execution statistics reported by D1 alongside query results.</summary>

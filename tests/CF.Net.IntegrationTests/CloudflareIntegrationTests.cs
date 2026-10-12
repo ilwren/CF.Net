@@ -346,6 +346,16 @@ public class ReadOnlyIntegrationTests : CloudflareIntegrationTest
         Log($"query rows={result.RowCount} duration={result.Meta?.Duration} served_by={result.Meta?.ServedByColo}");
         Assert.Equal(1, result.RowCount);
         Assert.Equal(1, result.FirstColumn<int>("answer"));
+
+        // The raw endpoint answers the same statement with each row as an array of values.
+        var raw = await Client.D1.QueryRawAsync(first.Uuid!, "SELECT 1 AS answer");
+        var rawRows = raw.RowArrays();
+
+        Log($"raw rows={raw.RowCount} arrays={rawRows.Count} duration={raw.Meta?.Duration} served_by={raw.Meta?.ServedByColo}");
+        Assert.Equal(1, raw.RowCount);
+
+        var values = Assert.Single(rawRows);
+        Assert.Equal(1, Assert.Single(values).GetInt32());
     }
 
     [Fact]

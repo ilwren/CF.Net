@@ -77,10 +77,20 @@ public interface IR2Service
 
     /// <summary>Changes the default storage class of an existing bucket.</summary>
     /// <param name="bucketName">Bucket name.</param>
-    /// <param name="storageClass">The new default storage class. Existing objects keep their class.</param>
+    /// <param name="storageClass">
+    /// The new default storage class, sent as the <c>cf-r2-storage-class</c> header. Existing objects keep
+    /// their class, and an individual upload may still override the bucket default.
+    /// </param>
     /// <param name="jurisdiction">Optional jurisdiction header value.</param>
     /// <param name="accountId">Account id; falls back to the configured default when null.</param>
     /// <param name="cancellationToken">Cancellation token.</param>
+    /// <remarks>
+    /// <c>PATCH /accounts/{account_id}/r2/buckets/{bucket_name}</c> takes no body: the published schema
+    /// documents the storage class and the jurisdiction as headers, so this sends
+    /// <c>cf-r2-storage-class</c> (plus <c>cf-r2-jurisdiction</c> when one is given) and nothing else.
+    /// It needs an API token - the legacy global key scheme is not listed for R2 - and the
+    /// <c>R2 Write</c> permission.
+    /// </remarks>
     Task<R2Bucket> UpdateBucketAsync(
         string bucketName,
         R2StorageClass storageClass,
@@ -225,9 +235,16 @@ public sealed class R2Service : CloudflareService, IR2Service
         string? accountId = null,
         CancellationToken cancellationToken = default)
     {
+        if (!CloudflareEnumConverter<R2StorageClass>.TryToWire(storageClass, out var wire) || wire is null)
+        {
+            throw new Exceptions.CloudflareConfigurationException(
+                $"'{storageClass}' is not a storage class Cloudflare accepts. Use Standard or InfrequentAccess.");
+        }
+
         var path = BucketPath(ResolveAccountId(accountId), bucketName);
-        var httpRequest = CloudflareRequest.Put(path, new UpdateR2BucketRequest(storageClass));
+        var httpRequest = CloudflareRequest.Patch(path);
         httpRequest.OperationName = "Update R2 Bucket";
+        httpRequest.WithHeader(CloudflareDefaults.Headers.R2StorageClass, wire);
         ApplyJurisdiction(httpRequest, jurisdiction);
 
         var response = await Transport.SendAsync<R2Bucket>(httpRequest, cancellationToken).ConfigureAwait(false);

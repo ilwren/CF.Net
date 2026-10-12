@@ -43,6 +43,12 @@ public static class CloudflareDefaults
         /// <summary>Selects the R2 jurisdiction (data residency boundary) for a request.</summary>
         public const string R2Jurisdiction = "cf-r2-jurisdiction";
 
+        /// <summary>
+        /// Carries the new default storage class of <c>PATCH /accounts/{account_id}/r2/buckets/{bucket_name}</c>,
+        /// which takes no request body.
+        /// </summary>
+        public const string R2StorageClass = "cf-r2-storage-class";
+
         /// <summary>Returned by the KV API carrying the JSON metadata of a stored value.</summary>
         public const string KvMetadata = "CF-KV-Metadata";
 
@@ -78,5 +84,35 @@ public static class CloudflareDefaults
 
         /// <summary>The Global API Key: account-wide, cannot be scoped, and needs the account e-mail.</summary>
         public const string GlobalApiKey = "cfk_";
+    }
+
+    /// <summary>R2 endpoints that are not part of the v4 REST API but belong to the same account.</summary>
+    public static class R2
+    {
+        /// <summary>Domain that hosts every account's S3-compatible endpoint.</summary>
+        public const string S3HostSuffix = "r2.cloudflarestorage.com";
+
+        /// <summary>
+        /// Builds the S3-compatible endpoint of an account: <c>https://{account_id}.r2.cloudflarestorage.com</c>.
+        /// </summary>
+        /// <param name="accountId">The account id.</param>
+        /// <returns>The absolute endpoint URL, with no trailing slash.</returns>
+        /// <remarks>
+        /// R2 object data lives behind this endpoint, and so does everything the v4 API does not cover -
+        /// bucket CORS rules (<c>PutBucketCors</c> / <c>GetBucketCors</c>) in particular, which Cloudflare
+        /// only exposes through the S3 API. It authenticates with AWS Signature Version 4 using the R2
+        /// access key id and secret from the dashboard, not with a Cloudflare API token, so this library
+        /// builds the URL but does not sign requests for it: point an S3 SDK or the AWS CLI at it.
+        /// </remarks>
+        /// <exception cref="ArgumentException"><paramref name="accountId"/> is null or whitespace.</exception>
+        public static string S3Endpoint(string accountId)
+        {
+            if (string.IsNullOrWhiteSpace(accountId))
+            {
+                throw new ArgumentException("An account id is needed to build the R2 S3 endpoint.", nameof(accountId));
+            }
+
+            return $"https://{accountId.Trim()}.{S3HostSuffix}";
+        }
     }
 }

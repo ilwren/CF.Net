@@ -1,4 +1,5 @@
 using System.Net;
+using System.Text.Json;
 using CFNet.Exceptions;
 using CFNet.Models.Common;
 using CFNet.Models.D1;
@@ -798,7 +799,8 @@ public class R2ServiceTests
         harness.RespondWithResult("{\"name\":\"eu-assets\"}");
         await harness.Client.R2.UpdateBucketAsync("eu-assets", R2StorageClass.InfrequentAccess, R2Jurisdiction.Us);
         Assert.Equal("us", harness.LastRequest.Header("cf-r2-jurisdiction"));
-        Assert.Equal("{\"storageClass\":\"InfrequentAccess\"}", harness.LastRequest.Body);
+        Assert.Equal("InfrequentAccess", harness.LastRequest.Header("cf-r2-storage-class"));
+        Assert.Null(harness.LastRequest.Body);
 
         harness.RespondWithResult("null");
         await harness.Client.R2.DeleteBucketAsync("eu-assets", R2Jurisdiction.Default);
@@ -817,16 +819,41 @@ public class R2ServiceTests
     }
 
     [Fact]
-    public async Task UpdateBucketAsync_only_changes_the_storage_class()
+    public async Task UpdateBucketAsync_patches_with_the_storage_class_in_a_header_and_no_body()
+    {
+        using var harness = CloudflareHarness.Create();
+        harness.RespondWithResult("{\"name\":\"assets\",\"storage_class\":\"InfrequentAccess\"}");
+
+        var bucket = await harness.Client.R2.UpdateBucketAsync("assets", R2StorageClass.InfrequentAccess);
+
+        Assert.Equal(HttpMethod.Patch, harness.LastRequest.Method);
+        Assert.EndsWith("/r2/buckets/assets", harness.LastRequest.Path, StringComparison.Ordinal);
+        Assert.Equal("InfrequentAccess", harness.LastRequest.Header("cf-r2-storage-class"));
+        // The published schema documents headers and no request body for this endpoint.
+        Assert.Null(harness.LastRequest.Body);
+        Assert.Equal(R2StorageClass.InfrequentAccess, bucket.StorageClass);
+    }
+
+    [Fact]
+    public async Task UpdateBucketAsync_sends_the_standard_storage_class_as_cloudflare_spells_it()
     {
         using var harness = CloudflareHarness.Create();
         harness.RespondWithResult("{\"name\":\"assets\"}");
 
-        await harness.Client.R2.UpdateBucketAsync("assets", R2StorageClass.InfrequentAccess);
+        await harness.Client.R2.UpdateBucketAsync("assets", R2StorageClass.Standard);
 
-        Assert.Equal(HttpMethod.Put, harness.LastRequest.Method);
-        Assert.EndsWith("/r2/buckets/assets", harness.LastRequest.Path, StringComparison.Ordinal);
-        Assert.Equal("{\"storageClass\":\"InfrequentAccess\"}", harness.LastRequest.Body);
+        Assert.Equal("Standard", harness.LastRequest.Header("cf-r2-storage-class"));
+    }
+
+    [Fact]
+    public async Task UpdateBucketAsync_rejects_a_storage_class_cloudflare_does_not_accept()
+    {
+        using var harness = CloudflareHarness.Create();
+
+        await Assert.ThrowsAsync<CloudflareConfigurationException>(
+            () => harness.Client.R2.UpdateBucketAsync("assets", R2StorageClass.Unknown));
+
+        Assert.Equal(0, harness.RequestCount);
     }
 
     [Fact]
@@ -977,5 +1004,172 @@ public class D1DatabaseConfigurationTests
         var database = Assert.Single(page.Items);
         Assert.Equal("disabled", database.ReadReplication?.Mode);
         Assert.False(database.ReadReplication!.IsAuto);
+    }
+}
+
+
+public class D1RawQueryTests
+{
+    [Fact]
+    public async Task QueryRawAsync_posts_to_the_raw_endpoint_and_reads_the_array_rows()
+    {
+        using var harness = CloudflareHarness.Create();
+        harness.RespondWithResult(
+            """[{"results":[[1,"alpha"],[2,"beta"]],"success":true,"meta":{"duration":0.5,"rows_read":2,"served_by_colo":"LHR"}}]""");
+
+        var result = await harness.Client.D1.QueryRawAsync("db-1", "SELECT id, label FROM items");
+
+        Assert.Equal(HttpMethod.Post, harness.LastRequest.Method);
+        Assert.Equal(
+            $"/client/v4/accounts/{CloudflareHarness.TestAccountId}/d1/database/db-1/raw",
+            harness.LastRequest.Path);
+        Assert.Equal("{\"sql\":\"SELECT id, label FROM items\"}", harness.LastRequest.Body);
+
+        Assert.Equal(2, result.RowCount);
+        Assert.True(result.Success);
+        Assert.Equal(0.5, result.Meta!.Duration!.Value);
+        Assert.Equal("LHR", result.Meta.ServedByColo);
+
+        var rows = result.RowArrays();
+        Assert.Equal(2, rows.Count);
+        Assert.Equal(2, rows[0].Count);
+        Assert.Equal(1, rows[0][0].GetInt32());
+        Assert.Equal("alpha", rows[0][1].GetString());
+        Assert.Equal("beta", rows[1][1].GetString());
+
+        // A raw response carries no column names, so the object-shaped helpers find nothing.
+        Assert.Equal(0, result.FirstColumn<int>("id"));
+    }
+
+    [Fact]
+    public async Task QueryRawAsync_binds_parameters_like_the_query_endpoint_does()
+    {
+        using var harness = CloudflareHarness.Create();
+        harness.RespondWithResult("""[{"results":[[7]],"success":true}]""");
+
+        await harness.Client.D1.QueryRawAsync(
+            "db-1",
+            "SELECT id FROM items WHERE label = ?",
+            new object?[] { "alpha" });
+
+        Assert.Contains("\"params\":[\"alpha\"]", harness.LastRequest.Body, StringComparison.Ordinal);
+        Assert.EndsWith("/d1/database/db-1/raw", harness.LastRequest.Path, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task BatchRawAsync_sends_one_batch_body_to_the_raw_endpoint()
+    {
+        using var harness = CloudflareHarness.Create();
+        harness.RespondWithResult("""[{"results":[[1]],"success":true},{"results":[],"success":true}]""");
+
+        var results = await harness.Client.D1.BatchRawAsync(
+            "db-1",
+            new[] { new D1Query("SELECT 1"), new D1Query("DELETE FROM items") });
+
+        Assert.Equal(2, results.Count);
+        Assert.Equal(
+            "{\"batch\":[{\"sql\":\"SELECT 1\"},{\"sql\":\"DELETE FROM items\"}]}",
+            harness.LastRequest.Body);
+        Assert.EndsWith("/d1/database/db-1/raw", harness.LastRequest.Path, StringComparison.Ordinal);
+        Assert.Empty(results[1].RowArrays());
+    }
+
+    [Fact]
+    public async Task BatchRawAsync_rejects_an_empty_batch_before_calling_out()
+    {
+        using var harness = CloudflareHarness.Create();
+
+        await Assert.ThrowsAsync<CloudflareConfigurationException>(
+            () => harness.Client.D1.BatchRawAsync("db-1", Array.Empty<D1Query>()));
+
+        Assert.Equal(0, harness.RequestCount);
+    }
+
+    [Fact]
+    public async Task BatchRawAsync_rejects_an_entry_without_sql()
+    {
+        using var harness = CloudflareHarness.Create();
+
+        await Assert.ThrowsAsync<CloudflareConfigurationException>(
+            () => harness.Client.D1.BatchRawAsync("db-1", new[] { new D1Query("SELECT 1"), new D1Query("  ") }));
+
+        Assert.Equal(0, harness.RequestCount);
+    }
+
+    [Fact]
+    public async Task ExecuteRawAsync_applies_the_same_request_validation_as_ExecuteAsync()
+    {
+        using var harness = CloudflareHarness.Create();
+
+        var request = new D1QueryRequest
+        {
+            Sql = "SELECT 1",
+            Batch = new List<D1Query> { new D1Query("SELECT 2") },
+        };
+
+        await Assert.ThrowsAsync<CloudflareConfigurationException>(
+            () => harness.Client.D1.ExecuteRawAsync("db-1", request));
+
+        Assert.Equal(0, harness.RequestCount);
+    }
+
+    [Fact]
+    public async Task ExecuteRawAsync_returns_nothing_when_cloudflare_sends_a_null_result()
+    {
+        using var harness = CloudflareHarness.Create();
+        harness.RespondWithResult("null");
+
+        var results = await harness.Client.D1.ExecuteRawAsync("db-1", D1QueryRequest.Single("SELECT 1"));
+
+        Assert.Empty(results);
+        Assert.EndsWith("/raw", harness.LastRequest.Path, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void RowArrays_skips_the_object_rows_an_ordinary_query_returns()
+    {
+        using var document = JsonDocument.Parse("""[{"id":1,"label":"alpha"}]""");
+        var result = new D1QueryResult { Results = document.RootElement.EnumerateArray().ToList() };
+
+        Assert.Equal(1, result.RowCount);
+        Assert.Empty(result.RowArrays());
+        Assert.Equal(1, result.FirstColumn<int>("id"));
+    }
+
+    [Fact]
+    public void RowArrays_is_empty_when_there_are_no_rows()
+    {
+        Assert.Empty(new D1QueryResult().RowArrays());
+        Assert.Empty(new D1QueryResult { Results = new List<JsonElement>() }.RowArrays());
+    }
+}
+
+public class R2S3EndpointTests
+{
+    [Fact]
+    public void The_s3_endpoint_is_built_from_the_account_id()
+    {
+        Assert.Equal("r2.cloudflarestorage.com", CloudflareDefaults.R2.S3HostSuffix);
+        Assert.Equal(
+            "https://acct-1234.r2.cloudflarestorage.com",
+            CloudflareDefaults.R2.S3Endpoint("acct-1234"));
+    }
+
+    [Fact]
+    public void The_endpoint_has_no_trailing_slash_and_surrounding_whitespace_is_trimmed()
+    {
+        var endpoint = CloudflareDefaults.R2.S3Endpoint("  acct-1234 ");
+
+        Assert.Equal("https://acct-1234.r2.cloudflarestorage.com", endpoint);
+        Assert.False(endpoint.EndsWith("/", StringComparison.Ordinal));
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData("   ")]
+    public void A_missing_account_id_is_rejected(string? accountId)
+    {
+        Assert.Throws<ArgumentException>(() => CloudflareDefaults.R2.S3Endpoint(accountId!));
     }
 }

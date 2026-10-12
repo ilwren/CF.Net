@@ -97,6 +97,52 @@ public interface ID1DatabaseService
         string? accountId = null,
         CancellationToken cancellationToken = default);
 
+    /// <summary>
+    /// Runs a single SQL statement through <c>POST .../d1/database/{database_id}/raw</c>, which returns
+    /// each row as an array of column values instead of an object.
+    /// </summary>
+    /// <param name="databaseId">Database id (UUID).</param>
+    /// <param name="sql">The SQL statement.</param>
+    /// <param name="parameters">Values bound to the <c>?</c> placeholders, in order.</param>
+    /// <param name="accountId">Account id; falls back to the configured default when null.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>The single result element Cloudflare returns for a one-statement query.</returns>
+    /// <remarks>
+    /// Same request body and permissions as <see cref="QueryAsync"/> (<c>D1 Read</c> or <c>D1 Write</c>);
+    /// Cloudflare documents it as the performance-optimised version of <c>/query</c>. Read the rows with
+    /// <see cref="D1QueryResult.RowArrays"/> - <see cref="D1QueryResult.Rows{T}"/> and
+    /// <see cref="D1QueryResult.FirstColumn{T}"/> need column names and therefore return nothing here.
+    /// </remarks>
+    Task<D1QueryResult> QueryRawAsync(
+        string databaseId,
+        string sql,
+        IReadOnlyList<object?>? parameters = null,
+        string? accountId = null,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>Runs several SQL statements in one <c>/raw</c> call.</summary>
+    /// <param name="databaseId">Database id (UUID).</param>
+    /// <param name="queries">The statements, in order.</param>
+    /// <param name="accountId">Account id; falls back to the configured default when null.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>One result element per statement, each with array-shaped rows.</returns>
+    Task<IReadOnlyList<D1QueryResult>> BatchRawAsync(
+        string databaseId,
+        IEnumerable<D1Query> queries,
+        string? accountId = null,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>Sends a pre-built query request to the <c>/raw</c> endpoint.</summary>
+    /// <param name="databaseId">Database id (UUID).</param>
+    /// <param name="request">The request; validated locally first.</param>
+    /// <param name="accountId">Account id; falls back to the configured default when null.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    Task<IReadOnlyList<D1QueryResult>> ExecuteRawAsync(
+        string databaseId,
+        D1QueryRequest request,
+        string? accountId = null,
+        CancellationToken cancellationToken = default);
+
     /// <summary>Lists available backups.</summary>
     /// <param name="databaseId">Database id (UUID).</param>
     /// <param name="parameters">Optional paging.</param>
@@ -326,7 +372,53 @@ public sealed class D1DatabaseService : CloudflareService, ID1DatabaseService
         string databaseId,
         IEnumerable<D1Query> queries,
         string? accountId = null,
+        CancellationToken cancellationToken = default) =>
+        ExecuteAsync(databaseId, D1QueryRequest.BatchOf(ValidateBatch(queries)), accountId, cancellationToken);
+
+    /// <inheritdoc />
+    public Task<IReadOnlyList<D1QueryResult>> ExecuteAsync(
+        string databaseId,
+        D1QueryRequest request,
+        string? accountId = null,
+        CancellationToken cancellationToken = default) =>
+        ExecuteCoreAsync(databaseId, request, "query", "Query D1 Database", accountId, cancellationToken);
+
+    /// <inheritdoc />
+    public async Task<D1QueryResult> QueryRawAsync(
+        string databaseId,
+        string sql,
+        IReadOnlyList<object?>? parameters = null,
+        string? accountId = null,
         CancellationToken cancellationToken = default)
+    {
+        Require(sql, nameof(sql));
+
+        var results = await ExecuteRawAsync(
+            databaseId,
+            D1QueryRequest.Single(sql, parameters),
+            accountId,
+            cancellationToken).ConfigureAwait(false);
+
+        return results.FirstOrDefault() ?? new D1QueryResult { Success = false };
+    }
+
+    /// <inheritdoc />
+    public Task<IReadOnlyList<D1QueryResult>> BatchRawAsync(
+        string databaseId,
+        IEnumerable<D1Query> queries,
+        string? accountId = null,
+        CancellationToken cancellationToken = default) =>
+        ExecuteRawAsync(databaseId, D1QueryRequest.BatchOf(ValidateBatch(queries)), accountId, cancellationToken);
+
+    /// <inheritdoc />
+    public Task<IReadOnlyList<D1QueryResult>> ExecuteRawAsync(
+        string databaseId,
+        D1QueryRequest request,
+        string? accountId = null,
+        CancellationToken cancellationToken = default) =>
+        ExecuteCoreAsync(databaseId, request, "raw", "Query D1 Database (raw)", accountId, cancellationToken);
+
+    private static List<D1Query> ValidateBatch(IEnumerable<D1Query> queries)
     {
         ArgumentNullException.ThrowIfNull(queries);
 
@@ -344,22 +436,23 @@ public sealed class D1DatabaseService : CloudflareService, ID1DatabaseService
             }
         }
 
-        return ExecuteAsync(databaseId, D1QueryRequest.BatchOf(list), accountId, cancellationToken);
+        return list;
     }
 
-    /// <inheritdoc />
-    public async Task<IReadOnlyList<D1QueryResult>> ExecuteAsync(
+    private async Task<IReadOnlyList<D1QueryResult>> ExecuteCoreAsync(
         string databaseId,
         D1QueryRequest request,
-        string? accountId = null,
-        CancellationToken cancellationToken = default)
+        string segment,
+        string operationName,
+        string? accountId,
+        CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(request);
         request.Validate();
 
         var path = DatabasePath(ResolveAccountId(accountId), databaseId);
-        var httpRequest = CloudflareRequest.Post($"{path}/query", request);
-        httpRequest.OperationName = "Query D1 Database";
+        var httpRequest = CloudflareRequest.Post($"{path}/{segment}", request);
+        httpRequest.OperationName = operationName;
 
         var response = await Transport.SendAsync<List<D1QueryResult>>(httpRequest, cancellationToken).ConfigureAwait(false);
         return response.Result is { } results ? results : Array.Empty<D1QueryResult>();

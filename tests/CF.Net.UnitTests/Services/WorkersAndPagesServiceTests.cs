@@ -1165,3 +1165,73 @@ public class PagesDeploymentRollbackTests
         Assert.Contains("/pages/projects/a%2Fb/deployments/d%2F2/rollback", harness.LastRequest.Uri!.OriginalString, StringComparison.Ordinal);
     }
 }
+
+
+public class WorkerDomainFilterTests
+{
+    private static string DomainsOfTwoWorkers() =>
+        """
+        [
+          {"id":"d-1","hostname":"app.example.com","service":"my-worker","enabled":true,"zone_name":"example.com"},
+          {"id":"d-2","hostname":"beta.example.com","service":"other-worker","enabled":true,"zone_name":"example.com"},
+          {"id":"d-3","hostname":"api.example.com","service":"My-Worker","enabled":false,"zone_name":"example.com"}
+        ]
+        """;
+
+    [Fact]
+    public async Task ListDomainsForWorkerAsync_keeps_only_the_attachments_of_that_worker()
+    {
+        using var harness = CloudflareHarness.Create();
+        harness.RespondWithResult(DomainsOfTwoWorkers());
+
+        var domains = await harness.Client.Workers.ListDomainsForWorkerAsync("my-worker");
+
+        // The v4 API only exposes the account-level collection, so the filter runs on one list call.
+        Assert.Equal(1, harness.RequestCount);
+        Assert.Equal(
+            $"/client/v4/accounts/{CloudflareHarness.TestAccountId}/workers/domains",
+            harness.LastRequest.Path);
+
+        Assert.Equal(2, domains.Count);
+        Assert.Equal(new[] { "d-1", "d-3" }, domains.Select(domain => domain.Id).ToArray());
+        Assert.Equal("api.example.com", domains[1].Hostname);
+    }
+
+    [Fact]
+    public async Task ListDomainsForWorkerAsync_returns_nothing_for_a_worker_without_domains()
+    {
+        using var harness = CloudflareHarness.Create();
+        harness.RespondWithResult(DomainsOfTwoWorkers());
+
+        var domains = await harness.Client.Workers.ListDomainsForWorkerAsync("missing-worker");
+
+        Assert.Empty(domains);
+        Assert.Equal(1, harness.RequestCount);
+    }
+
+    [Fact]
+    public async Task ListDomainsForWorkerAsync_passes_the_account_id_through_to_the_list_call()
+    {
+        using var harness = CloudflareHarness.Create();
+        harness.RespondWithResult(DomainsOfTwoWorkers());
+
+        var domains = await harness.Client.Workers.ListDomainsForWorkerAsync("other-worker", "acct-9999");
+
+        Assert.Contains("/accounts/acct-9999/workers/domains", harness.LastRequest.Path, StringComparison.Ordinal);
+        Assert.Equal("d-2", Assert.Single(domains).Id);
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData("   ")]
+    public async Task ListDomainsForWorkerAsync_needs_a_worker_name(string? workerName)
+    {
+        using var harness = CloudflareHarness.Create();
+
+        await Assert.ThrowsAsync<CloudflareConfigurationException>(
+            () => harness.Client.Workers.ListDomainsForWorkerAsync(workerName!));
+
+        Assert.Equal(0, harness.RequestCount);
+    }
+}

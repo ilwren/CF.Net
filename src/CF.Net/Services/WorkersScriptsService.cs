@@ -159,6 +159,21 @@ public interface IWorkersScriptsService
     /// </remarks>
     Task<IReadOnlyList<WorkerDomain>> ListDomainsAsync(string? accountId = null, CancellationToken cancellationToken = default);
 
+    /// <summary>Lists the custom domains attached to one Worker.</summary>
+    /// <param name="workerName">Worker (script) name, compared case insensitively with <see cref="WorkerDomain.Service"/>.</param>
+    /// <param name="accountId">Account id; falls back to the configured default when null.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>Every attachment whose <c>service</c> is that Worker, in the order Cloudflare returned them.</returns>
+    /// <remarks>
+    /// The v4 API has no script-scoped domain endpoint: <c>/accounts/{account_id}/workers/domains</c> is the
+    /// only one and it returns every attachment in the account, so this lists once and filters locally.
+    /// Call <see cref="ListDomainsAsync"/> directly when you need the whole account anyway.
+    /// </remarks>
+    Task<IReadOnlyList<WorkerDomain>> ListDomainsForWorkerAsync(
+        string workerName,
+        string? accountId = null,
+        CancellationToken cancellationToken = default);
+
     /// <summary>Fetches one custom domain via <c>GET /accounts/{account_id}/workers/domains/{domain_id}</c>.</summary>
     /// <param name="domainId">The attachment id, as listed by <see cref="ListDomainsAsync"/>.</param>
     /// <param name="accountId">Account id; falls back to the configured default when null.</param>
@@ -544,6 +559,20 @@ public sealed class WorkersScriptsService : CloudflareService, IWorkersScriptsSe
 
         var response = await Transport.SendAsync<List<WorkerDomain>>(request, cancellationToken).ConfigureAwait(false);
         return response.Result ?? new List<WorkerDomain>();
+    }
+
+    /// <inheritdoc />
+    public async Task<IReadOnlyList<WorkerDomain>> ListDomainsForWorkerAsync(
+        string workerName,
+        string? accountId = null,
+        CancellationToken cancellationToken = default)
+    {
+        var name = Require(workerName, nameof(workerName));
+        var domains = await ListDomainsAsync(accountId, cancellationToken).ConfigureAwait(false);
+
+        return domains
+            .Where(domain => string.Equals(domain.Service, name, StringComparison.OrdinalIgnoreCase))
+            .ToList();
     }
 
     /// <inheritdoc />

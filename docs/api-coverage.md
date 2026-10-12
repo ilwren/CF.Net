@@ -119,6 +119,7 @@ Credentials created before 2026 carry no prefix, so a prefix check can only ever
 | `AttachDomainAsync(AttachWorkerDomainRequest, accountId)` | `PUT …/workers/domains` | a PUT to the collection is how Cloudflare spells "attach"; `EnsureValid()` refuses a domain that routes nothing (hostname routing off **and** preview routing off) |
 | `AttachDomainAsync(hostname, workerName, zoneId, accountId)` | `PUT …/workers/domains` | convenience; `zoneId` falls back to the configured zone |
 | `DeleteDomainAsync(domainId, accountId)` | `DELETE …/workers/domains/{domain_id}` | detaches |
+| `ListDomainsForWorkerAsync(workerName, accountId)` | `GET /accounts/{account_id}/workers/domains` | convenience filter, not an endpoint: lists the account collection once and keeps the attachments whose `service` is that Worker (case-insensitive) |
 
 Binding types modelled: `kv_namespace`, `r2_bucket`, `plain_text`, `secret_text`, `service`,
 `vpc_service`, `do_namespace`, `d1_database_binding`, `queue`, `analytics_engine`, `assets`,
@@ -127,6 +128,11 @@ Binding types modelled: `kv_namespace`, `r2_bucket`, `plain_text`, `secret_text`
 
 `WorkerDomain` carries `id`, `cert_id`, `enabled`, `previews_enabled`, `hostname`, `service`, `zone_id`,
 `zone_name` and the deprecated `environment`.
+
+Custom domains are an **account-level** collection only — the published schema has no
+`…/workers/scripts/{script_name}/domains` endpoint and documents no query parameters for the list either, so
+"which domains does this Worker serve" is answered by filtering locally (`ListDomainsForWorkerAsync`) rather
+than by a server-side query.
 
 ⛔ The newer JSON-only flow (`POST /workers/workers` → `…/versions` → `…/deployments`), static asset
 upload sessions, Workers for Platforms dispatch namespaces, cron triggers, query filters on the domain
@@ -178,6 +184,9 @@ Functions routes, and the `pages/projects/{name}/bookmarks` family.
 | `QueryAsync(databaseId, sql, parameters, accountId)` | `POST …/d1/database/{database_id}/query` | body `{sql, params}` — there is **no** `action` field |
 | `BatchAsync(databaseId, IEnumerable<D1Query>, accountId)` | `POST …/query` | body `{batch:[{sql,params}, …]}`, transactional |
 | `ExecuteAsync(databaseId, D1QueryRequest, accountId)` | `POST …/query` | send a prebuilt request verbatim |
+| `QueryRawAsync(databaseId, sql, parameters, accountId)` | `POST …/d1/database/{database_id}/raw` | same body and permissions as `/query`; Cloudflare's performance-optimised variant returns each row as an **array** of column values — read them with `RowArrays()` |
+| `BatchRawAsync(databaseId, IEnumerable<D1Query>, accountId)` | `POST …/raw` | one `{batch:[{sql,params}, …]}` body |
+| `ExecuteRawAsync(databaseId, D1QueryRequest, accountId)` | `POST …/raw` | send a prebuilt request verbatim |
 | `ListBackupsAsync(databaseId, D1BackupListParameters?, accountId)` | `GET …/d1/database/{database_id}/backup` | |
 | `GetBackupAsync(databaseId, backupId, accountId)` | `GET …/backup/{backup_id}` | `null` on 404 |
 | `RestoreBackupAsync(databaseId, backupId, accountId)` | `POST …/backup/{backup_id}/restore` | destructive |
@@ -188,7 +197,20 @@ Functions routes, and the `pages/projects/{name}/bookmarks` family.
 `D1QueryResult` exposes `Results` (raw `JsonElement` rows), `Success`, `Meta` and the ergonomics
 `Rows<T>()`, `FirstColumn<T>(name)` and `RowCount`. `D1QueryMeta` carries `changes`, `duration`,
 `last_row_id`, `rows_read`, `rows_written`, `size_after`, `changed_db`, `served_by_colo`,
-`served_by_primary`, `served_by_region` and `timings.sql_duration_ms`.
+`served_by_primary`, `served_by_region` and `timings.sql_duration_ms`, plus `RowArrays()` for the raw
+endpoint.
+
+`RowArrays()` and the object-shaped helpers are mutually exclusive: `/query` returns every row as a JSON
+object, so `Rows<T>()` and `FirstColumn<T>(name)` work and `RowArrays()` is empty; `/raw` returns every row
+as a JSON array in the column order of the statement you sent, so `RowArrays()` works and the named helpers
+find nothing.
+
+Still unwrapped, deliberately: `POST …/d1/database/{database_id}/export` — body
+`{output_format:"polling", current_bookmark?, dump_options?{no_data?, no_schema?, tables?[]}}`, result
+`{at_bookmark, error, messages, …}` — and its `…/import` counterpart. An export has to be polled until it
+finishes (and keeps being polled, or Cloudflare cancels it) and the dump is then downloaded from the URL it
+returns, so they need a polling helper rather than a one-shot method; the shapes above are what the published
+schema documents today.
 
 ## KV
 
@@ -230,7 +252,7 @@ the past are rejected locally.
 | `GetBucketAsync(bucketName, R2Jurisdiction?, accountId)` | `GET …/r2/buckets/{bucket_name}` | `null` on 404 |
 | `CreateBucketAsync(string name, R2LocationHint?, R2StorageClass?, R2Jurisdiction?, accountId)` | `POST …/r2/buckets` | body uses **camelCase**: `name`, `locationHint`, `storageClass` |
 | `CreateBucketAsync(CreateR2BucketRequest, accountId)` | `POST …/r2/buckets` | |
-| `UpdateBucketAsync(bucketName, R2StorageClass, R2Jurisdiction?, accountId)` | `PUT …/r2/buckets/{bucket_name}` | only `storageClass` is changeable |
+| `UpdateBucketAsync(bucketName, R2StorageClass, R2Jurisdiction?, accountId)` | `PATCH …/r2/buckets/{bucket_name}` | no body: the storage class travels in the **`cf-r2-storage-class`** header. Only the default storage class is changeable, and it applies to objects uploaded afterwards |
 | `DeleteBucketAsync(bucketName, R2Jurisdiction?, accountId)` | `DELETE …/r2/buckets/{bucket_name}` | |
 
 Jurisdiction-restricted buckets are addressed with the **`cf-r2-jurisdiction`** request header
@@ -243,8 +265,16 @@ takes a selector for exactly this case, so callers still get a normal page.
 Response fields are snake_case (`creation_date`, `storage_class`, `location`) while request fields
 are camelCase (`locationHint`, `storageClass`); each property carries its own `[JsonPropertyName]`.
 
+**Bucket CORS is not part of the v4 API.** The published R2 schema has exactly five methods — list, get,
+create, patch and delete — and no CORS resource. Cloudflare configures CORS through the S3-compatible
+endpoint instead (`PutBucketCors` / `GetBucketCors`), which speaks AWS Signature Version 4 with the R2 access
+key id and secret from the dashboard rather than a Cloudflare API token. `CloudflareDefaults.R2.S3Endpoint(accountId)`
+builds that URL — `https://{account_id}.r2.cloudflarestorage.com` — so an S3 SDK or the AWS CLI can be pointed
+at it; this library does not sign S3 requests.
+
 ⛔ Object upload/download (those go through the S3-compatible endpoint or a signed URL, not the v4
-JSON API), bucket policies, CORS, lifecycle rules, super slurp, and R2 data catalog.
+JSON API), bucket CORS (S3 API only, see above), bucket policies, lifecycle rules, super slurp, and R2 data
+catalog.
 
 ---
 

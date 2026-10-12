@@ -87,34 +87,6 @@ public sealed class CreateR2BucketRequest
 }
 
 /// <summary>
-/// Body of <c>PUT /accounts/{account_id}/r2/buckets/{bucket_name}</c>. Only the default storage class
-/// of an existing bucket may be changed; location and jurisdiction are fixed at creation time.
-/// </summary>
-public sealed class UpdateR2BucketRequest
-{
-    /// <summary>Creates a request.</summary>
-    /// <param name="storageClass">The new default storage class.</param>
-    public UpdateR2BucketRequest(R2StorageClass storageClass)
-    {
-        StorageClass = storageClass;
-    }
-
-    /// <summary>Parameterless constructor for deserialisation.</summary>
-    [System.Text.Json.Serialization.JsonConstructor]
-    public UpdateR2BucketRequest()
-    {
-    }
-
-    /// <summary>New default storage class. Applies only to objects uploaded afterwards.</summary>
-    [JsonPropertyName("storageClass")]
-    public R2StorageClass? StorageClass { get; set; }
-
-    /// <summary>Jurisdiction, sent as the <c>cf-r2-jurisdiction</c> header.</summary>
-    [JsonIgnore]
-    public R2Jurisdiction? Jurisdiction { get; set; }
-}
-
-/// <summary>
 /// Wrapper for the <c>result</c> of <c>GET /accounts/{account_id}/r2/buckets</c>, which nests the
 /// array under a <c>buckets</c> property.
 /// </summary>

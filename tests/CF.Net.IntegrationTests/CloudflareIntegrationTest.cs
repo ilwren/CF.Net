@@ -90,6 +90,8 @@ public abstract class CloudflareIntegrationTest : IDisposable
         ZoneId = zoneId;
         WritesEnabled = writes;
         CredentialSource = source;
+
+        WarnAboutCredentialShapes();
     }
 
     /// <summary>xunit output sink.</summary>
@@ -191,6 +193,58 @@ public abstract class CloudflareIntegrationTest : IDisposable
 
     /// <summary>Logs a Cloudflare call and its outcome, so a failing run shows the CF-RAY to quote.</summary>
     protected void Log(string message) => Output.WriteLine(message);
+
+    /// <summary>Problems already reported, so 25 tests do not print the same warning 25 times.</summary>
+    private static readonly HashSet<string> ReportedProblems = new(StringComparer.Ordinal);
+
+    /// <summary>Guards <see cref="ReportedProblems"/>, which xunit's parallel collections share.</summary>
+    private static readonly object ReportedGate = new();
+
+    /// <summary>
+    /// Says so when a configured credential has the wrong shape. A malformed value would otherwise
+    /// surface as an authentication failure in every test, which sends you hunting through the token's
+    /// permissions instead of looking at the copy/paste that actually caused it.
+    /// </summary>
+    /// <remarks>
+    /// Shape only - whether a credential works is Cloudflare's call, and
+    /// <c>The_configured_credentials_are_accepted</c> asks it. Absent values are not reported here
+    /// either; the skip messages already name those.
+    /// </remarks>
+    private void WarnAboutCredentialShapes()
+    {
+        Warn(CredentialFormat.ExplainId(
+            AccountId,
+            "CLOUDFLARE_ACCOUNT_ID",
+            "Find it in the dashboard on any domain's Overview page, in the API section, or press Ctrl/Cmd+K and choose 'Copy account ID'."));
+        Warn(CredentialFormat.ExplainId(
+            ZoneId,
+            "CLOUDFLARE_ZONE_ID",
+            "Find it in the dashboard on that domain's Overview page, in the API section near the bottom."));
+        Warn(CredentialFormat.ExplainApiToken(ApiToken));
+        Warn(CredentialFormat.ExplainGlobalApiKey(GlobalApiKey));
+        Warn(CredentialFormat.ExplainEmail(ApiEmail));
+    }
+
+    /// <summary>Reports a problem once per process, to the test output and to the run report.</summary>
+    /// <param name="problem">The message, or <see langword="null"/> when there is nothing to say.</param>
+    private void Warn(string? problem)
+    {
+        if (problem is null)
+        {
+            return;
+        }
+
+        lock (ReportedGate)
+        {
+            if (!ReportedProblems.Add(problem))
+            {
+                return;
+            }
+        }
+
+        Output.WriteLine($"WARNING: {problem}");
+        RunReport.Record(RunReportOutcome.Info, "configuration", problem);
+    }
 
     /// <summary>True when this run answers from a recorded cassette instead of calling Cloudflare.</summary>
     protected bool IsReplay => IntegrationCassette.Mode == CassetteMode.Replay;

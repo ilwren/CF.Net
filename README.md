@@ -340,13 +340,18 @@ Add a **Zone resource** for the specific zone you want to test against, and an *
 
 GitHub → your repository → **Settings** → **Secrets and variables** → **Actions** → **New repository secret**:
 
-| Secret | Required | Notes |
+| Secret | Required | What to put in it |
 | --- | --- | --- |
-| `CLOUDFLARE_API_TOKEN` | yes | the token from step 1 |
-| `CLOUDFLARE_ACCOUNT_ID` | yes | dashboard → account → *Account ID* in the right-hand sidebar |
-| `CLOUDFLARE_ZONE_ID` | yes | dashboard → the zone → *Zone ID* in the right-hand sidebar |
-| `CLOUDFLARE_API_EMAIL` | no | only to exercise the legacy global-key path |
-| `CLOUDFLARE_GLOBAL_API_KEY` | no | only to exercise the legacy global-key path |
+| `CLOUDFLARE_API_TOKEN` | yes | the token secret from step 1, shown **once** after *Create Token* — `cfut_…` (yours) or `cfat_…` (the account's); pre-2026 tokens are 40 unprefixed characters |
+| `CLOUDFLARE_ACCOUNT_ID` | yes | 32 hexadecimal characters — any domain's **Overview** → **API** section, or `Ctrl`/`Cmd`+`K` → *Copy account ID* |
+| `CLOUDFLARE_ZONE_ID` | yes | 32 hexadecimal characters — that domain's **Overview** → **API** section → **Zone ID** |
+| `CLOUDFLARE_API_EMAIL` | no | the address the Cloudflare account logs in with (legacy path only) |
+| `CLOUDFLARE_GLOBAL_API_KEY` | no | **My Profile** → **API Tokens** → the **API Keys** tab → *View* — `cfk_…`, or a pre-2026 37-45 character hex key |
+
+Both ids can also be read back through the API (`GET /accounts`, `GET /zones`) when the token is
+allowed to list them; the dashboard always works. Neither is an account *name* and neither is a
+dashboard URL. A value with the wrong shape is reported by name — in the test output and in the CI
+summary — instead of surfacing as twenty authentication failures.
 
 Secrets are injected into the workflow as environment variables, which is exactly what `CloudflareClientOptions.FromEnvironment()` and the test fixture read:
 

@@ -34,6 +34,76 @@ what the tests do once they have them.
 These are the same variables `CloudflareClientOptions.FromEnvironment()` reads, and the same ones
 `.github/workflows/integration.yml` injects — so there is no separate CI-only configuration path.
 
+### Where each value comes from
+
+**`CLOUDFLARE_API_TOKEN`** — the secret of an API token, created under
+[dash.cloudflare.com/profile/api-tokens](https://dash.cloudflare.com/profile/api-tokens) →
+**Create Token** → *Custom token*; [section 3](#3-creating-a-properly-scoped-token) walks through the
+permissions. It is shown **once**, on the page after *Create Token* — lose it and you roll the token
+and copy the new one. Shape: `cfut_` for a token owned by your user, or `cfat_` for one owned by the
+*account* (usually the better choice for CI, because it does not depend on one person's user), each
+followed by 40 characters and a checksum. Tokens issued before 2026 are unprefixed 40-character
+alphanumeric strings and still work.
+
+Check one without running anything:
+
+```bash
+curl -sS "https://api.cloudflare.com/client/v4/user/tokens/verify" \
+  -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN"
+# {"result":{"id":"...","status":"active"},"success":true,"errors":[],
+#  "messages":[{"code":10000,"message":"This API Token is valid and active"}]}
+```
+
+**`CLOUDFLARE_ACCOUNT_ID`** — 32 hexadecimal characters, for example
+`023e105f4ecef8ad9ca31a8372d0c353`. Not the account *name*, and not a whole dashboard URL (the first
+path segment of `dash.cloudflare.com/<id>` is the account id, but pasting the URL is the classic
+mistake). Three ways to copy it:
+
+1. any domain's **Overview** page → the **API** section near the bottom → copy next to **Account ID**;
+2. anywhere in the dashboard press `Ctrl`/`Cmd`+`K` → type *Copy account ID*;
+3. **Workers & Pages** → **Account Details** → copy next to **Account ID**.
+
+**`CLOUDFLARE_ZONE_ID`** — also 32 hexadecimal characters, and specific to one domain: the zone the
+DNS and cache-purge tests run against. Domain **Overview** → the **API** section → copy next to
+**Zone ID**; the same panel shows the account id. The token also needs that zone in its *Zone
+Resources*, or the id is right and every call still returns `10007`.
+
+**`CLOUDFLARE_API_EMAIL`** — the address the Cloudflare account logs in with. Only used on the legacy
+path, where it becomes the `X-Auth-Email` header that Cloudflare matches the key against.
+
+**`CLOUDFLARE_GLOBAL_API_KEY`** —
+[dash.cloudflare.com/profile/api-tokens](https://dash.cloudflare.com/profile/api-tokens) → the **API
+Keys** tab → **Global API Key** → *View*, which asks for your password and second factor. Shape
+`cfk_` plus 40 characters and a checksum, or a pre-2026 37-45 character lowercase hexadecimal key.
+Account-wide and impossible to scope, which is why the suite treats it as the alternative.
+
+**Reading the ids back through the API.** With a token allowed to list them:
+
+```bash
+curl -sS "https://api.cloudflare.com/client/v4/accounts?per_page=50" \
+  -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
+  | jq -r '.result[] | "\(.id)  \(.name)"'
+
+curl -sS "https://api.cloudflare.com/client/v4/zones?per_page=50" \
+  -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
+  | jq -r '.result[] | "\(.id)  \(.name)  \(.status)"'
+```
+
+An empty `result` there means the token lacks a permission that lists accounts or zones (`Account
+Settings — Read`, `Zone — Read`), not that you have none. The dashboard is always right, so when in
+doubt copy from there.
+
+**A wrong shape is reported, not guessed at.** `CFNet.TestKit.CredentialFormat` looks at each value as
+the fixture reads it and prints one warning per problem — a quoted paste, a dashboard URL, an account
+name where an id belongs, an API token sitting in the global-key variable — and the CI summary repeats
+it. Shape only, and a credential is never echoed: whether it actually works is Cloudflare's answer,
+and `The_configured_credentials_are_accepted` asks for it.
+
+> **Never commit a credential.** GitHub scans every commit for Cloudflare credentials, and on a public
+> repository Cloudflare verifies the checksum and **revokes the token automatically**. That is why
+> `credentials.local.json` is git-ignored, why `credentials.example.json` ships with placeholders, and
+> why a cassette redacts every credential header on its way to disk.
+
 **Not everyone wants to export variables in every shell.** A git-ignored
 `tests/CF.Net.IntegrationTests/credentials.local.json` works too, and environment variables still win,
 so a CI secret can never be shadowed by a stray local file:
@@ -160,6 +230,20 @@ bad token.
 
 For read-only runs you can drop every `Edit` permission — the `ReadOnlyIntegrationTests` class will
 still exercise everything it can.
+
+**Resources are as important as permissions.** Under *Account Resources* include the account you are
+testing; under *Zone Resources* include that one zone (or *All zones*). A token with the right
+permissions but no zone resource returns `10007 Route not found` for a zone you can see perfectly well
+in the dashboard, which reads like a bug in the client and is not.
+
+**Account-owned tokens.** *Manage Account* → **API Tokens** creates a token owned by the account
+(`cfat_…`) rather than by your user. For CI that is usually the better choice: it does not stop working
+when somebody leaves, and it is easier to hand over. Not every endpoint accepts one — Cloudflare
+publishes a compatibility matrix — and the two tests that read `/user` will tell you if yours does not.
+
+**Creating it programmatically.** `GET /user/tokens/permission_groups` lists every permission with the
+id the API wants, and `POST /user/tokens` creates the token. Useful when the token itself has to be
+provisioned by automation; the secret is returned once, in that response.
 
 > Never use the **Global API Key** in CI. It is account-wide, cannot be scoped, and rotating it
 > invalidates every other integration at once. CF.Net supports it because real systems still depend

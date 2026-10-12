@@ -1,3 +1,4 @@
+using System.Reflection;
 using CFNet.Exceptions;
 using CFNet.Http;
 using CFNet.Models.Common;
@@ -442,6 +443,59 @@ public class ReadOnlyIntegrationTests : CloudflareIntegrationTest
     }
 
     [Fact]
+    public async Task Zone_settings_can_be_listed_and_read_back_one_at_a_time()
+    {
+        if (!SkipWithoutZone())
+        {
+            return;
+        }
+
+        var settings = await RunZoneScopedAsync(() => Client.Zones.ListSettingsAsync());
+        if (settings is null)
+        {
+            return;
+        }
+
+        Log($"zone settings: {settings.Count}");
+        foreach (var setting in settings.OrderBy(setting => setting.Id, StringComparer.Ordinal))
+        {
+            Log($"  {setting.Id,-36} = {setting.Value?.GetRawText(),-28} editable={setting.Editable}");
+        }
+
+        Assert.NotEmpty(settings);
+        Assert.All(settings, setting => Assert.False(string.IsNullOrWhiteSpace(setting.Id)));
+
+        // Reading one at a time is what Cloudflare points at now that the list endpoint is deprecated.
+        var first = settings[0];
+        var single = await RunZoneScopedAsync(() => Client.Zones.GetSettingAsync(first.Id!));
+        Assert.NotNull(single);
+        Assert.Equal(first.Id, single!.Id);
+        Log($"read back {single.Id} = {single.Value?.GetRawText()}");
+
+        // Which settings a zone has depends on its plan, so a constant this zone did not report is worth
+        // saying out loud rather than failing on: it is either misspelled or not on this plan.
+        var reported = settings.Select(setting => setting.Id).ToHashSet(StringComparer.Ordinal);
+        var missing = DeclaredZoneSettingIds().Where(id => !reported.Contains(id)).ToList();
+        Warn(missing.Count == 0
+            ? null
+            : "ZoneSettingIds constants this zone did not report: " + string.Join(", ", missing) +
+              ". Either the id is misspelled or the zone's plan does not have that setting.");
+    }
+
+    /// <summary>
+    /// Every id <see cref="ZoneSettingIds"/> declares, read by reflection so the list cannot drift as
+    /// constants are added.
+    /// </summary>
+    /// <returns>The declared setting ids.</returns>
+    private static IEnumerable<string> DeclaredZoneSettingIds() =>
+        typeof(ZoneSettingIds)
+            .GetFields(BindingFlags.Public | BindingFlags.Static)
+            .Where(field => field.IsLiteral && field.FieldType == typeof(string))
+            .Select(field => field.GetRawConstantValue() as string)
+            .Where(id => !string.IsNullOrWhiteSpace(id))
+            .Select(id => id!);
+
+    [Fact]
     public async Task An_insufficiently_scoped_token_is_reported_as_an_authentication_failure()
     {
         if (!SkipWithoutCredentials())
@@ -449,18 +503,19 @@ public class ReadOnlyIntegrationTests : CloudflareIntegrationTest
             return;
         }
 
-        // A zone id that is a well formed but definitely not ours: Cloudflare answers 403/404 rather
-        // than leaking whether it exists.
-        try
-        {
-            var zone = await Client.Zones.GetAsync("11111111111111111111111111111111");
-            Log($"unexpectedly resolved to {zone?.Name}");
-        }
-        catch (CloudflareApiException exception)
-        {
-            Log($"status={(int?)exception.StatusCode} code={exception.ErrorCode} ray={exception.RayId}");
-            Assert.True(exception.IsNotFound || exception.IsAuthenticationFailure || exception.IsValidationFailure);
-        }
+        // A zone id that is well formed but definitely not ours. A lookup answers null for it, because
+        // Cloudflare reports an unreadable zone and a missing one the same way; a collection read inside
+        // it still throws, which is what this test is about.
+        var zone = await Client.Zones.GetAsync("11111111111111111111111111111111");
+        Log($"lookup of a zone that is not ours: {(zone is null ? "null, as expected" : zone.Name)}");
+
+        var exception = await Assert.ThrowsAsync<CloudflareApiException>(
+            () => Client.DnsRecords.ListAsync(new DnsRecordListParameters { PerPage = 5 }, "11111111111111111111111111111111"));
+
+        Log($"status={(int?)exception.StatusCode} code={exception.ErrorCode} ray={exception.RayId}");
+        Assert.True(
+            exception.IsNotFound || exception.IsAuthenticationFailure || exception.IsValidationFailure,
+            $"Expected a specific refusal, got {exception.StatusCode}/{exception.ErrorCode}: {exception.Message}");
     }
 }
 
@@ -757,5 +812,56 @@ public class WriteIntegrationTests : CloudflareIntegrationTest
             PurgeCacheRequest.ForFiles(new[] { $"https://{zone!.Name}/cf-net-integration-probe" }));
 
         Log($"purge_time={result.PurgeTime}");
+    }
+
+    [Fact]
+    public async Task A_zone_setting_can_be_changed_and_changed_back()
+    {
+        if (!SkipWithoutZone() || !SkipWithoutWritePermission())
+        {
+            return;
+        }
+
+        // Always Online is a switch every plan has, and turning it on while the origin is up changes
+        // nothing about traffic, which makes it the least destructive setting to write to.
+        var before = await RunZoneScopedAsync(() => Client.Zones.GetSettingAsync(ZoneSettingIds.AlwaysOnline));
+        if (before is null)
+        {
+            Warn($"The zone does not report a '{ZoneSettingIds.AlwaysOnline}' setting, so there is nothing to write to.");
+            return;
+        }
+
+        if (before.Editable == false)
+        {
+            SkipUnless(false, $"Cloudflare reports {ZoneSettingIds.AlwaysOnline} as editable=false on this zone's plan, so it cannot be changed.");
+            return;
+        }
+
+        Log($"{ZoneSettingIds.AlwaysOnline} before={before.Value?.GetRawText()}");
+        var target = !before.IsOn;
+
+        ZoneSetting? changed;
+        try
+        {
+            changed = await Client.Zones.SetSettingOnOffAsync(ZoneSettingIds.AlwaysOnline, target);
+        }
+        catch (CloudflareApiException exception) when (exception.IsAuthenticationFailure)
+        {
+            SkipUnless(false, $"The token cannot write zone settings ({exception.ErrorCode}). Add 'Zone Settings Write' to it. {exception.Message}");
+            return;
+        }
+
+        try
+        {
+            Assert.NotNull(changed);
+            Assert.Equal(target, changed!.IsOn);
+            Log($"{ZoneSettingIds.AlwaysOnline} after={changed.Value?.GetRawText()}");
+        }
+        finally
+        {
+            // Put the zone back the way it was, whether or not the assertions above held.
+            var restored = await Client.Zones.SetSettingOnOffAsync(ZoneSettingIds.AlwaysOnline, before.IsOn);
+            Log($"{ZoneSettingIds.AlwaysOnline} restored={restored?.Value?.GetRawText()}");
+        }
     }
 }

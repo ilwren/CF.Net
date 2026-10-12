@@ -374,7 +374,7 @@ Actions → Integration → Run workflow → [ ] Allow tests that create and del
 
 The workflow first reports which credential scheme it found. With none, it emits a warning and finishes green, because there is nothing to verify.
 
-With credentials it verifies them against the live API **before building anything** — one `curl` to `/user/tokens/verify` (or `/user` for the legacy pair) — so an expired, revoked or under-scoped secret fails the job with Cloudflare's own error code and message instead of turning 25 tests red. The **Run workflow** form also takes an optional `filter` (`FullyQualifiedName~R2`, appended to `Category=Integration&`) to narrow a run, and a `cassette` name to record one.
+With credentials it verifies them against the live API **before building anything** — one `curl` to `/user/tokens/verify`, and to `/accounts/{account_id}/tokens/verify` for an account-owned `cfat_` token, which the user-scoped endpoint rejects (or `/user` for the legacy pair) — so an expired, revoked or under-scoped secret fails the job with Cloudflare's own error code and message instead of turning 25 tests red. The **Run workflow** form also takes an optional `filter` (`FullyQualifiedName~R2`, appended to `Category=Integration&`) to narrow a run, and a `cassette` name to record one.
 
 ### What a run reports back
 

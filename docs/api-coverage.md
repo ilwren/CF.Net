@@ -19,7 +19,7 @@ Status legend: ✅ wrapped · ⛔ deliberately out of scope for this phase.
 | --- | --- | --- |
 | `ListAsync(ZoneListParameters?)` | `GET /zones` | `page`, `per_page`, `name`, `status`, `account.id`, `order`, `direction`, `match` |
 | `ListAllAsync(ZoneListParameters?)` | `GET /zones` | `IAsyncEnumerable<Zone>`, walks every page |
-| `GetAsync(string? zoneId)` | `GET /zones/{zone_id}` | returns `null` on 404 |
+| `GetAsync(string? zoneId)` | `GET /zones/{zone_id}` | returns `null` on 404 **and** on 403 — an unknown zone id is answered with 403/9109, and a zone outside the token's Zone Resources with 403/10000 |
 | `GetByNameAsync(string name)` | `GET /zones?name=` | filters client-side for an exact match |
 | `CreateAsync(string name, string type)` | `POST /zones` | `type` ∈ `full`, `partial`, `secondary`, `internal` |
 | `CreateAsync(CreateZoneRequest)` | `POST /zones` | |
@@ -29,8 +29,24 @@ Status legend: ✅ wrapped · ⛔ deliberately out of scope for this phase.
 | `RunActivationCheckAsync(string? zoneId)` | `POST /zones/{zone_id}/activation_check` | |
 | `PurgeCacheAsync(PurgeCacheRequest, string? zoneId)` | `POST /zones/{zone_id}/purge_cache` | `purge_everything`, `files`, `tags`, `hosts`, `prefixes`, `ignore_tags` |
 
-⛔ Zone settings (`/zones/{id}/settings/*`), SSL, firewall rules, page rules, rate limits, WAF,
-Load balancing, Waiting Room, Turnstile — separate phases.
+### Zone settings
+
+| Method | Endpoint | Notes |
+| --- | --- | --- |
+| `ListSettingsAsync(string? zoneId)` | `GET /zones/{zone_id}/settings` | deprecated by Cloudflare, but the only way to see which settings a plan has and what shape each value takes |
+| `GetSettingAsync(string settingId, string? zoneId)` | `GET /zones/{zone_id}/settings/{setting_id}` | `null` when the zone has no such setting |
+| `UpdateSettingAsync(string settingId, UpdateZoneSettingRequest, string? zoneId)` | `PATCH /zones/{zone_id}/settings/{setting_id}` | body is `{"value":…}` **or** `{"enabled":bool}`; `EnsureValid()` rejects neither and both |
+| `SetSettingValueAsync(string settingId, object? value, string? zoneId)` | `PATCH /zones/{zone_id}/settings/{setting_id}` | convenience: a string, number, object or array value |
+| `SetSettingOnOffAsync(string settingId, bool on, string? zoneId)` | `PATCH /zones/{zone_id}/settings/{setting_id}` | sends `"on"`/`"off"`, which is how most switches are spelled |
+| `UpdateSettingsAsync(IEnumerable<ZoneSettingChange>, string? zoneId)` | `PATCH /zones/{zone_id}/settings` | deprecated; the body is an **array** of `{id, value}`, not an object keyed by id |
+
+`ZoneSetting` carries `Id`, `Value` (raw JSON, because Cloudflare's value type differs per setting),
+`Editable`, `ModifiedOn`, plus `AsString()`/`AsNumber()`/`AsBoolean()`/`IsOn` for the common shapes.
+`ZoneSettingIds` declares only the ids that appear in Cloudflare's published schema — every method takes
+the id as a string, so any setting can be addressed. `ZoneSettingValues.On`/`.Off` are the switch literals.
+
+⛔ SSL certificate packs, firewall rules, page rules, rate limits, WAF custom rules, Load balancing,
+Waiting Room, Turnstile — separate phases.
 
 ## DNS records
 

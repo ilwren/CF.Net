@@ -797,3 +797,207 @@ public class DnsRecordsServiceTests
         Assert.Equal(0, harness.RequestCount);
     }
 }
+
+
+public class ZoneSettingsTests
+{
+    [Fact]
+    public async Task ListSettingsAsync_reads_every_setting_the_zone_has()
+    {
+        using var harness = CloudflareHarness.Create();
+        harness.RespondWithResult("""
+        [
+          {"id":"always_online","value":"on","editable":true,"modified_on":"2026-05-13T23:14:19.472617Z"},
+          {"id":"advanced_ddos","value":"off","editable":false},
+          {"id":"browser_cache_ttl","value":14400,"editable":true},
+          {"id":"ipv6","value":true,"editable":true},
+          {"id":"aegis","value":{"enabled":true,"pool_id":"pool-1"},"editable":true}
+        ]
+        """);
+
+        var settings = await harness.Client.Zones.ListSettingsAsync();
+
+        Assert.Equal($"/client/v4/zones/{CloudflareHarness.TestZoneId}/settings", harness.LastRequest.Path);
+        Assert.Equal(5, settings.Count);
+
+        var alwaysOnline = settings.Single(setting => setting.Id == ZoneSettingIds.AlwaysOnline);
+        Assert.Equal("on", alwaysOnline.AsString());
+        Assert.True(alwaysOnline.IsOn);
+        Assert.True(alwaysOnline.Editable);
+        Assert.Equal(new DateTimeOffset(2026, 5, 13, 23, 14, 19, TimeSpan.Zero).AddTicks(4726170), alwaysOnline.ModifiedOn);
+
+        Assert.False(settings.Single(setting => setting.Id == ZoneSettingIds.AdvancedDdos).IsOn);
+        Assert.False(settings.Single(setting => setting.Id == ZoneSettingIds.AdvancedDdos).Editable);
+        Assert.Equal(14400, settings.Single(setting => setting.Id == "browser_cache_ttl").AsNumber());
+        Assert.True(settings.Single(setting => setting.Id == "ipv6").IsOn);
+
+        // A setting whose value is an object stays reachable through the raw element.
+        var aegis = settings.Single(setting => setting.Id == ZoneSettingIds.Aegis);
+        Assert.Equal("pool-1", aegis.Value!.Value.GetProperty("pool_id").GetString());
+    }
+
+    [Fact]
+    public async Task ListSettingsAsync_reads_a_number_that_cloudflare_sent_as_a_string()
+    {
+        using var harness = CloudflareHarness.Create();
+        harness.RespondWithResult("""[{"id":"browser_cache_ttl","value":"7200"}]""");
+
+        var settings = await harness.Client.Zones.ListSettingsAsync();
+
+        Assert.Equal(7200, Assert.Single(settings).AsNumber());
+    }
+
+    [Fact]
+    public async Task GetSettingAsync_scopes_the_call_to_one_setting()
+    {
+        using var harness = CloudflareHarness.Create();
+        harness.RespondWithResult("""{"id":"security_level","value":"medium","editable":true}""");
+
+        var setting = await harness.Client.Zones.GetSettingAsync("security_level");
+
+        Assert.Equal($"/client/v4/zones/{CloudflareHarness.TestZoneId}/settings/security_level", harness.LastRequest.Path);
+        Assert.Equal("medium", setting!.AsString());
+    }
+
+    [Fact]
+    public async Task GetSettingAsync_returns_null_for_a_setting_the_zone_does_not_have()
+    {
+        using var harness = CloudflareHarness.Create();
+        harness.RespondWithError(HttpStatusCode.NotFound, 1001, "Unknown setting");
+
+        var setting = await harness.Client.Zones.GetSettingAsync("not_a_setting");
+
+        Assert.Null(setting);
+    }
+
+    [Fact]
+    public async Task GetSettingAsync_percent_encodes_the_setting_id()
+    {
+        using var harness = CloudflareHarness.Create();
+        harness.RespondWithResult("""{"id":"a/b"}""");
+
+        await harness.Client.Zones.GetSettingAsync("a/b");
+
+        // Uri.AbsolutePath decodes %2F, so the encoding has to be checked on the Uri itself.
+        Assert.Contains("/settings/a%2Fb", harness.LastRequest.Uri!.OriginalString, StringComparison.Ordinal);
+        Assert.Contains("/settings/a%2Fb", harness.LastRequest.Uri.AbsoluteUri, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task SetSettingOnOffAsync_sends_the_on_off_value_cloudflare_expects()
+    {
+        using var harness = CloudflareHarness.Create();
+        harness.RespondWithResult("""{"id":"always_online","value":"off"}""");
+
+        await harness.Client.Zones.SetSettingOnOffAsync(ZoneSettingIds.AlwaysOnline, on: false);
+
+        Assert.Equal(HttpMethod.Patch, harness.LastRequest.Method);
+        Assert.Equal($"/client/v4/zones/{CloudflareHarness.TestZoneId}/settings/always_online", harness.LastRequest.Path);
+        Assert.Equal("{\"value\":\"off\"}", harness.LastRequest.Body);
+    }
+
+    [Fact]
+    public async Task SetSettingValueAsync_sends_a_number_and_an_object_verbatim()
+    {
+        using var harness = CloudflareHarness.Create();
+        harness.RespondWithResult("""{"id":"browser_cache_ttl","value":7200}""");
+
+        await harness.Client.Zones.SetSettingValueAsync("browser_cache_ttl", 7200);
+        Assert.Equal("{\"value\":7200}", harness.LastRequest.Body);
+
+        harness.RespondWithResult("""{"id":"aegis","value":{"enabled":true,"pool_id":"pool-2"}}""");
+        await harness.Client.Zones.SetSettingValueAsync(
+            ZoneSettingIds.Aegis,
+            new Dictionary<string, object?> { ["enabled"] = true, ["pool_id"] = "pool-2" });
+
+        Assert.Equal($"/client/v4/zones/{CloudflareHarness.TestZoneId}/settings/aegis", harness.LastRequest.Path);
+        Assert.Equal("{\"value\":{\"enabled\":true,\"pool_id\":\"pool-2\"}}", harness.LastRequest.Body);
+    }
+
+    [Fact]
+    public async Task UpdateSettingAsync_can_send_the_enabled_flag_shape_instead()
+    {
+        using var harness = CloudflareHarness.Create();
+        harness.RespondWithResult("""{"id":"ssl_recommender","value":true}""");
+
+        await harness.Client.Zones.UpdateSettingAsync("ssl_recommender", UpdateZoneSettingRequest.OfEnabled(true));
+
+        Assert.Equal("{\"enabled\":true}", harness.LastRequest.Body);
+    }
+
+    [Fact]
+    public async Task UpdateSettingAsync_rejects_a_body_that_carries_neither_shape()
+    {
+        using var harness = CloudflareHarness.Create();
+
+        var exception = await Assert.ThrowsAsync<CloudflareConfigurationException>(
+            () => harness.Client.Zones.UpdateSettingAsync("always_online", new UpdateZoneSettingRequest()));
+
+        Assert.Contains("Value", exception.Message, StringComparison.Ordinal);
+        Assert.Equal(0, harness.RequestCount);
+    }
+
+    [Fact]
+    public void UpdateSettingAsync_rejects_a_body_that_mixes_both_shapes()
+    {
+        var request = new UpdateZoneSettingRequest { Value = "on", Enabled = true };
+
+        var exception = Assert.Throws<CloudflareConfigurationException>(request.EnsureValid);
+
+        Assert.Contains("not both", exception.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task UpdateSettingsAsync_sends_an_array_of_id_and_value_not_an_object()
+    {
+        using var harness = CloudflareHarness.Create();
+        harness.RespondWithResult("""
+        [{"id":"always_online","value":"on"},{"id":"browser_cache_ttl","value":14400}]
+        """);
+
+        var updated = await harness.Client.Zones.UpdateSettingsAsync(new[]
+        {
+            ZoneSettingChange.OnOff(ZoneSettingIds.AlwaysOnline, on: true),
+            ZoneSettingChange.Of("browser_cache_ttl", 14400),
+        });
+
+        Assert.Equal(HttpMethod.Patch, harness.LastRequest.Method);
+        Assert.Equal($"/client/v4/zones/{CloudflareHarness.TestZoneId}/settings", harness.LastRequest.Path);
+        Assert.Equal("[{\"id\":\"always_online\",\"value\":\"on\"},{\"id\":\"browser_cache_ttl\",\"value\":14400}]", harness.LastRequest.Body);
+        Assert.Equal(2, updated.Count);
+    }
+
+    [Fact]
+    public async Task UpdateSettingsAsync_rejects_an_empty_batch_before_calling_cloudflare()
+    {
+        using var harness = CloudflareHarness.Create();
+
+        await Assert.ThrowsAsync<CloudflareConfigurationException>(
+            () => harness.Client.Zones.UpdateSettingsAsync(Array.Empty<ZoneSettingChange>()));
+
+        Assert.Equal(0, harness.RequestCount);
+    }
+
+    [Fact]
+    public async Task UpdateSettingsAsync_rejects_a_change_with_no_setting_id()
+    {
+        using var harness = CloudflareHarness.Create();
+
+        var exception = await Assert.ThrowsAsync<CloudflareConfigurationException>(
+            () => harness.Client.Zones.UpdateSettingsAsync(new[] { new ZoneSettingChange { Value = "on" } }));
+
+        Assert.Contains("Id", exception.Message, StringComparison.Ordinal);
+        Assert.Equal(0, harness.RequestCount);
+    }
+
+    [Fact]
+    public async Task Settings_calls_use_an_explicit_zone_id_when_one_is_given()
+    {
+        using var harness = CloudflareHarness.Create();
+        harness.RespondWithResult("[]");
+
+        await harness.Client.Zones.ListSettingsAsync("zone-other");
+
+        Assert.Equal("/client/v4/zones/zone-other/settings", harness.LastRequest.Path);
+    }
+}

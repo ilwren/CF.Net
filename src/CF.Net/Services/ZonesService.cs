@@ -77,6 +77,70 @@ public interface IZonesService
     /// <param name="zoneId">Zone id; falls back to the configured default when null.</param>
     /// <param name="cancellationToken">Cancellation token.</param>
     Task<PurgeCacheResult> PurgeCacheAsync(PurgeCacheRequest request, string? zoneId = null, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Lists every setting a zone has via <c>GET /zones/{zone_id}/settings</c>.
+    /// </summary>
+    /// <param name="zoneId">Zone id; falls back to the configured default when null.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>One entry per setting, each carrying its id, current value and editability.</returns>
+    /// <remarks>
+    /// Cloudflare marks this endpoint deprecated in favour of reading one setting at a time, but it is
+    /// still the only way to discover which settings a zone has and what shape each value takes -
+    /// which settings exist depends on the plan. It is also the cheapest way to snapshot a zone before
+    /// changing anything.
+    /// </remarks>
+    Task<IReadOnlyList<ZoneSetting>> ListSettingsAsync(string? zoneId = null, CancellationToken cancellationToken = default);
+
+    /// <summary>Fetches one setting via <c>GET /zones/{zone_id}/settings/{setting_id}</c>.</summary>
+    /// <param name="settingId">Setting id, for example <see cref="ZoneSettingIds.AlwaysOnline"/>.</param>
+    /// <param name="zoneId">Zone id; falls back to the configured default when null.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>The setting, or <c>null</c> when the zone has no setting by that id.</returns>
+    Task<ZoneSetting?> GetSettingAsync(string settingId, string? zoneId = null, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Changes one setting via <c>PATCH /zones/{zone_id}/settings/{setting_id}</c>.
+    /// </summary>
+    /// <param name="settingId">Setting id.</param>
+    /// <param name="request">The body: a value, or an enabled flag for the settings that take one.</param>
+    /// <param name="zoneId">Zone id; falls back to the configured default when null.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>The setting as Cloudflare reports it after the change.</returns>
+    /// <exception cref="Exceptions.CloudflareConfigurationException">The body carries neither a value nor a flag, or both.</exception>
+    Task<ZoneSetting?> UpdateSettingAsync(string settingId, UpdateZoneSettingRequest request, string? zoneId = null, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Changes one setting to a value, the common case of <see cref="UpdateSettingAsync"/>.
+    /// </summary>
+    /// <param name="settingId">Setting id.</param>
+    /// <param name="value">Value to set: a string such as <c>"on"</c>, a number, an object or an array.</param>
+    /// <param name="zoneId">Zone id; falls back to the configured default when null.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>The setting as Cloudflare reports it after the change.</returns>
+    Task<ZoneSetting?> SetSettingValueAsync(string settingId, object? value, string? zoneId = null, CancellationToken cancellationToken = default);
+
+    /// <summary>Switches a setting on or off, sending the <c>"on"</c>/<c>"off"</c> value Cloudflare expects.</summary>
+    /// <param name="settingId">Setting id.</param>
+    /// <param name="on">True for <c>"on"</c>, false for <c>"off"</c>.</param>
+    /// <param name="zoneId">Zone id; falls back to the configured default when null.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>The setting as Cloudflare reports it after the change.</returns>
+    Task<ZoneSetting?> SetSettingOnOffAsync(string settingId, bool on, string? zoneId = null, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Changes several settings in one call via <c>PATCH /zones/{zone_id}/settings</c>.
+    /// </summary>
+    /// <param name="changes">The settings to change, each with its id and value.</param>
+    /// <param name="zoneId">Zone id; falls back to the configured default when null.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>The settings Cloudflare reports after the change.</returns>
+    /// <remarks>
+    /// The body is an array of <c>{id, value}</c> objects, not an object keyed by setting id - the shape
+    /// is easy to get wrong. Cloudflare marks this endpoint deprecated, and applies it all-or-nothing.
+    /// </remarks>
+    /// <exception cref="Exceptions.CloudflareConfigurationException">No changes were supplied, or one has no id.</exception>
+    Task<IReadOnlyList<ZoneSetting>> UpdateSettingsAsync(IEnumerable<ZoneSettingChange> changes, string? zoneId = null, CancellationToken cancellationToken = default);
 }
 
 /// <inheritdoc />
@@ -247,6 +311,88 @@ public sealed class ZonesService : CloudflareService, IZonesService
 
         var response = await Transport.SendAsync<PurgeCacheResult>(httpRequest, cancellationToken).ConfigureAwait(false);
         return response.Result ?? new PurgeCacheResult();
+    }
+
+    /// <inheritdoc />
+    public async Task<IReadOnlyList<ZoneSetting>> ListSettingsAsync(string? zoneId = null, CancellationToken cancellationToken = default)
+    {
+        var id = ResolveZoneId(zoneId);
+        var request = CloudflareRequest.Get($"{ZonePath(id)}/settings");
+        request.OperationName = "List Zone Settings";
+
+        var response = await Transport.SendAsync<List<ZoneSetting>>(request, cancellationToken).ConfigureAwait(false);
+        return response.Result ?? new List<ZoneSetting>();
+    }
+
+    /// <inheritdoc />
+    public async Task<ZoneSetting?> GetSettingAsync(string settingId, string? zoneId = null, CancellationToken cancellationToken = default)
+    {
+        var id = ResolveZoneId(zoneId);
+        var setting = Require(settingId, nameof(settingId));
+
+        var request = CloudflareRequest.Get($"{ZonePath(id)}/settings/{CloudflareUrl.EncodeSegment(setting)}")
+            .Tolerate(System.Net.HttpStatusCode.NotFound);
+        request.OperationName = "Get Zone Setting";
+
+        var response = await Transport.SendAsync<ZoneSetting>(request, cancellationToken).ConfigureAwait(false);
+        return response.Result;
+    }
+
+    /// <inheritdoc />
+    public Task<ZoneSetting?> SetSettingValueAsync(string settingId, object? value, string? zoneId = null, CancellationToken cancellationToken = default) =>
+        UpdateSettingAsync(settingId, UpdateZoneSettingRequest.OfValue(value), zoneId, cancellationToken);
+
+    /// <inheritdoc />
+    public Task<ZoneSetting?> SetSettingOnOffAsync(string settingId, bool on, string? zoneId = null, CancellationToken cancellationToken = default) =>
+        UpdateSettingAsync(settingId, UpdateZoneSettingRequest.OfOnOff(on), zoneId, cancellationToken);
+
+    /// <inheritdoc />
+    public async Task<ZoneSetting?> UpdateSettingAsync(
+        string settingId,
+        UpdateZoneSettingRequest request,
+        string? zoneId = null,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        request.EnsureValid();
+
+        var id = ResolveZoneId(zoneId);
+        var setting = Require(settingId, nameof(settingId));
+
+        var httpRequest = CloudflareRequest.Patch($"{ZonePath(id)}/settings/{CloudflareUrl.EncodeSegment(setting)}", request);
+        httpRequest.OperationName = "Update Zone Setting";
+
+        var response = await Transport.SendAsync<ZoneSetting>(httpRequest, cancellationToken).ConfigureAwait(false);
+        return response.Result;
+    }
+
+    /// <inheritdoc />
+    public async Task<IReadOnlyList<ZoneSetting>> UpdateSettingsAsync(
+        IEnumerable<ZoneSettingChange> changes,
+        string? zoneId = null,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(changes);
+
+        var batch = changes.ToList();
+        if (batch.Count == 0)
+        {
+            throw new Exceptions.CloudflareConfigurationException(
+                "A bulk zone setting edit needs at least one change; there is nothing for Cloudflare to apply otherwise.");
+        }
+
+        foreach (var change in batch)
+        {
+            ArgumentNullException.ThrowIfNull(change);
+            change.EnsureValid();
+        }
+
+        var id = ResolveZoneId(zoneId);
+        var request = CloudflareRequest.Patch($"{ZonePath(id)}/settings", batch);
+        request.OperationName = "Update Zone Settings";
+
+        var response = await Transport.SendAsync<List<ZoneSetting>>(request, cancellationToken).ConfigureAwait(false);
+        return response.Result ?? new List<ZoneSetting>();
     }
 
     private async Task<Zone> SendForZoneAsync(CloudflareRequest request, CancellationToken cancellationToken)

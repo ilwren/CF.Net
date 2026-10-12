@@ -88,12 +88,14 @@ through `DnsRecord.Data` and `DnsRecord.GetData<T>()`.
 | `ListAsync(SslCertificatePackListParameters?, zoneId)` | `GET /zones/{zone_id}/ssl/certificate_packs` | `deploy` (`staging`/`production`), `status` (`all`, otherwise only the active packs are listed), `page`, `per_page` (5–50) |
 | `ListAllAsync(...)` | `GET …/ssl/certificate_packs` | walks the pages, keeps `deploy`/`status`/`per_page` on every call, and stops on a short page when `result_info` is absent |
 | `GetAsync(certificatePackId, zoneId)` | `GET …/ssl/certificate_packs/{certificate_pack_id}` | `null` on 404. A zone the token cannot see is answered with 403 (9109 unknown zone, 10000 out of scope) and raises, because that is a scoping problem, not a missing pack |
+| `OrderAsync(OrderSslCertificatePackRequest, zoneId)` | `POST …/ssl/certificate_packs/order` | note the `/order` suffix - posting to the collection itself is not the endpoint. Body `{type:"advanced", hosts[], validation_method, validity_days, certificate_authority, cloudflare_branding?}`, every field checked locally first |
 | `DeleteAsync(certificatePackId, zoneId)` | `DELETE …/ssl/certificate_packs/{certificate_pack_id}` | Advanced Certificate Manager packs only; returns the `id` Cloudflare echoes back |
 
 Permissions are `SSL and Certificates Read` to list and read, `SSL and Certificates Write` to delete.
 
 `SslCertificatePack` maps `id`, `zone_id`, `hosts`, `status`, `type`, `certificate_authority`, `priority`,
-`signature` and `uploaded_on`. `status` has more values than the schema names in one place, so it stays a
+`signature`, `uploaded_on` and the `certificates` array (each with `id`, `hosts`, `status`, `bundle_method`
+and `expires_on`). `status` has more values than the schema names in one place, so it stays a
 string — `SslCertificatePackStatuses` holds the seven the documentation names (`initializing`,
 `pending_validation`, `validation_timed_out`, `inactive`, `backup_issued`, `holding_deployment`, `deleted`)
 and an unlisted one is never a deserialisation failure. `SslCertificatePackTypes` is the complete set of
@@ -102,10 +104,18 @@ eight (`universal`, `advanced`, `managed_hostname`, `mh_custom`, `sni_custom`, `
 fields the model does not name (`validation_method`, `validity_days`, the primary certificate, …) arrive in
 `AdditionalData` rather than being dropped.
 
-⛔ Ordering a pack (`POST …/certificate_packs/order`), restarting validation or changing branding
-(`PATCH …/certificate_packs/{certificate_pack_id}`), the quota (`GET …/certificate_packs/quota`), universal
-SSL settings (`/zones/{zone_id}/ssl/universal/settings`), DCV delegation and validation method
-(`/zones/{zone_id}/ssl/verification`), auto-origin TLS KEX and the SSL/TLS recommendation.
+Ordering is a paid Advanced Certificate Manager feature, and it is not finished when the call returns: the
+hosts must contain the zone apex, at most 50 of them, and validation still has to be answered - a TXT record
+or an HTTP token for `txt`/`http`, a clicked link for `email` - so the pack sits in `pending_validation`
+until then. `validity_days` accepts 14, 30, 90 and 365 (730, 1095 and 5475 belong to the separate
+`request_validity` model and are rejected locally), the authorities are `google`, `lets_encrypt` and
+`ssl_com`, and `type` is always `advanced`, which is the only value the endpoint defines. Anything this
+release does not model can still be sent through the request's `AdditionalData`.
+
+⛔ Restarting validation or changing branding (`PATCH …/certificate_packs/{certificate_pack_id}`), the quota
+(`GET …/certificate_packs/quota`), universal SSL settings (`/zones/{zone_id}/ssl/universal/settings`), DCV
+delegation and validation method (`/zones/{zone_id}/ssl/verification`), auto-origin TLS KEX and the SSL/TLS
+recommendation.
 
 ## Users and accounts
 

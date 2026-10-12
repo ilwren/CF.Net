@@ -55,6 +55,25 @@ public interface ISslCertificatesService
         string? zoneId = null,
         CancellationToken cancellationToken = default);
 
+    /// <summary>
+    /// Orders an Advanced Certificate Manager pack via <c>POST /zones/{zone_id}/ssl/certificate_packs/order</c>.
+    /// </summary>
+    /// <param name="request">Hosts, validation method, validity, authority and branding; validated locally first.</param>
+    /// <param name="zoneId">Zone id; falls back to the configured default when null.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>The pack as Cloudflare created it, usually still <c>initializing</c> or <c>pending_validation</c>.</returns>
+    /// <remarks>
+    /// Note the path: ordering posts to <c>…/certificate_packs/order</c>, not to the collection itself. The
+    /// hosts must contain the zone apex. Validation is not automatic - with <c>txt</c> or <c>http</c> you
+    /// still have to answer the challenge, and with <c>email</c> someone has to click the link - so the pack
+    /// stays <c>pending_validation</c> until then. Needs <c>SSL and Certificates Write</c> and, being a
+    /// paid Advanced Certificate Manager feature, an account that has it enabled.
+    /// </remarks>
+    Task<SslCertificatePack> OrderAsync(
+        OrderSslCertificatePackRequest request,
+        string? zoneId = null,
+        CancellationToken cancellationToken = default);
+
     /// <summary>Deletes an Advanced Certificate Manager pack via <c>DELETE /zones/{zone_id}/ssl/certificate_packs/{certificate_pack_id}</c>.</summary>
     /// <param name="certificatePackId">The pack id.</param>
     /// <param name="zoneId">Zone id; falls back to the configured default when null.</param>
@@ -143,6 +162,23 @@ public sealed class SslCertificatesService : CloudflareService, ISslCertificates
 
         var response = await Transport.SendAsync<SslCertificatePack>(request, cancellationToken).ConfigureAwait(false);
         return response.Result;
+    }
+
+    /// <inheritdoc />
+    public async Task<SslCertificatePack> OrderAsync(
+        OrderSslCertificatePackRequest request,
+        string? zoneId = null,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        request.EnsureValid();
+
+        var zone = ResolveZoneId(zoneId);
+        var httpRequest = CloudflareRequest.Post($"{ZonePath(zone)}/ssl/certificate_packs/order", request);
+        httpRequest.OperationName = "Order SSL Certificate Pack";
+
+        var response = await Transport.SendAsync<SslCertificatePack>(httpRequest, cancellationToken).ConfigureAwait(false);
+        return response.EnsureResult();
     }
 
     /// <inheritdoc />

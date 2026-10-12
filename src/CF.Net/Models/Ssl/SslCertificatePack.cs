@@ -42,6 +42,13 @@ public sealed class SslCertificatePack
     public string? Type { get; set; }
 
     /// <summary>
+    /// The individual certificates in this pack, each covering some of <see cref="Hosts"/>. Present on the
+    /// response to an order, and on a get once issuance has produced something.
+    /// </summary>
+    [JsonPropertyName("certificates")]
+    public List<SslCertificate>? Certificates { get; set; }
+
+    /// <summary>
     /// Certificate authority that issued the pack: one of <see cref="SslCertificateAuthorities"/>, or
     /// <c>null</c> for packs that have not been issued yet.
     /// </summary>
@@ -140,6 +147,9 @@ public static class SslCertificateAuthorities
 
     /// <summary>SSL.com.</summary>
     public const string SslCom = "ssl_com";
+
+    /// <summary>Every value Cloudflare accepts for an order.</summary>
+    public static readonly IReadOnlyList<string> All = new[] { Google, LetsEncrypt, SslCom };
 }
 
 /// <summary>The deployment environments the <c>deploy</c> query parameter accepts.</summary>
@@ -150,6 +160,202 @@ public static class SslCertificatePackDeployments
 
     /// <summary>Certificates that are live.</summary>
     public const string Production = "production";
+}
+
+/// <summary>One certificate inside a pack.</summary>
+public sealed class SslCertificate
+{
+    /// <summary>Certificate identifier.</summary>
+    [JsonPropertyName("id")]
+    public string? Id { get; set; }
+
+    /// <summary>Hostnames covered by this certificate.</summary>
+    [JsonPropertyName("hosts")]
+    public List<string>? Hosts { get; set; }
+
+    /// <summary>Certificate status, as its own lifecycle rather than the pack's.</summary>
+    [JsonPropertyName("status")]
+    public string? Status { get; set; }
+
+    /// <summary>Certificate bundle method.</summary>
+    [JsonPropertyName("bundle_method")]
+    public string? BundleMethod { get; set; }
+
+    /// <summary>When the certificate from the authority expires.</summary>
+    [JsonPropertyName("expires_on")]
+    public DateTimeOffset? ExpiresOn { get; set; }
+
+    /// <summary>
+    /// Captures the rest - <c>geo_restrictions</c>, issuer, signature and so on - rather than guessing at
+    /// field names this release has not seen documented.
+    /// </summary>
+    [JsonExtensionData]
+    public IDictionary<string, JsonElement>? AdditionalData { get; set; }
+
+    /// <inheritdoc />
+    public override string ToString() => Id ?? string.Empty;
+}
+
+/// <summary>
+/// Body of <c>POST /zones/{zone_id}/ssl/certificate_packs/order</c>, which orders an Advanced Certificate
+/// Manager pack.
+/// </summary>
+/// <remarks>
+/// Every field except <see cref="CloudflareBranding"/> is required by Cloudflare, and each has a closed set
+/// of accepted values - <see cref="EnsureValid"/> checks all of them locally so a typo is a configuration
+/// exception here rather than a 400 from the API. Needs <c>SSL and Certificates Write</c>.
+/// </remarks>
+public sealed class OrderSslCertificatePackRequest
+{
+    /// <summary>How many hosts one certificate pack may cover. Cloudflare's cap, checked locally.</summary>
+    public const int MaxHosts = 50;
+
+    /// <summary>Creates an order.</summary>
+    /// <param name="hosts">
+    /// Hostnames to cover. Must contain the zone apex, at most 50 of them, and never empty.
+    /// </param>
+    /// <param name="validationMethod">One of <see cref="SslValidationMethods"/>.</param>
+    /// <param name="validityDays">One of <see cref="SslCertificatePackValidityDays"/>.</param>
+    /// <param name="certificateAuthority">One of <see cref="SslCertificateAuthorities"/>.</param>
+    /// <param name="cloudflareBranding">
+    /// Adds a <c>sni.cloudflaressl.com</c> subdomain as the common name when true.
+    /// </param>
+    public OrderSslCertificatePackRequest(
+        IEnumerable<string> hosts,
+        string validationMethod,
+        int validityDays,
+        string certificateAuthority,
+        bool? cloudflareBranding = null)
+    {
+        ArgumentNullException.ThrowIfNull(hosts);
+
+        Type = SslCertificatePackTypes.Advanced;
+        Hosts = hosts.ToList();
+        ValidationMethod = validationMethod;
+        ValidityDays = validityDays;
+        CertificateAuthority = certificateAuthority;
+        CloudflareBranding = cloudflareBranding;
+    }
+
+    /// <summary>Parameterless constructor for deserialisation.</summary>
+    [JsonConstructor]
+    public OrderSslCertificatePackRequest()
+    {
+    }
+
+    /// <summary>
+    /// Kind of pack. <c>advanced</c> is the only value this endpoint defines, and the constructor sets it.
+    /// </summary>
+    [JsonPropertyName("type")]
+    public string? Type { get; set; }
+
+    /// <summary>Hostnames to cover; must contain the zone apex.</summary>
+    [JsonPropertyName("hosts")]
+    public List<string>? Hosts { get; set; }
+
+    /// <summary>How domain control is validated: <c>txt</c>, <c>http</c> or <c>email</c>.</summary>
+    [JsonPropertyName("validation_method")]
+    public string? ValidationMethod { get; set; }
+
+    /// <summary>How long the certificate is valid for: 14, 30, 90 or 365 days.</summary>
+    [JsonPropertyName("validity_days")]
+    public int? ValidityDays { get; set; }
+
+    /// <summary>Which authority issues it: <c>google</c>, <c>lets_encrypt</c> or <c>ssl_com</c>.</summary>
+    [JsonPropertyName("certificate_authority")]
+    public string? CertificateAuthority { get; set; }
+
+    /// <summary>Whether to add Cloudflare branding to the order.</summary>
+    [JsonPropertyName("cloudflare_branding")]
+    public bool? CloudflareBranding { get; set; }
+
+    /// <summary>
+    /// Anything this release does not model yet can be sent through here; extension data is serialised
+    /// alongside the properties above.
+    /// </summary>
+    [JsonExtensionData]
+    public IDictionary<string, JsonElement>? AdditionalData { get; set; }
+
+    /// <summary>Checks every field against the values Cloudflare accepts.</summary>
+    /// <exception cref="Exceptions.CloudflareConfigurationException">A field is missing or out of range.</exception>
+    public void EnsureValid()
+    {
+        if (!string.Equals(Type, SslCertificatePackTypes.Advanced, StringComparison.OrdinalIgnoreCase))
+        {
+            throw new Exceptions.CloudflareConfigurationException(
+                $"Ordering a certificate pack needs type '{SslCertificatePackTypes.Advanced}', which is the only one this endpoint defines.");
+        }
+
+        if (Hosts is not { Count: > 0 })
+        {
+            throw new Exceptions.CloudflareConfigurationException(
+                "A certificate pack needs at least one host, and the list must contain the zone apex.");
+        }
+
+        if (Hosts.Count > MaxHosts)
+        {
+            throw new Exceptions.CloudflareConfigurationException(
+                $"A certificate pack may not cover more than {MaxHosts} hosts, and {Hosts.Count} were given.");
+        }
+
+        if (Hosts.Any(string.IsNullOrWhiteSpace))
+        {
+            throw new Exceptions.CloudflareConfigurationException("Every host in a certificate pack needs a name.");
+        }
+
+        if (!SslValidationMethods.All.Contains(ValidationMethod, StringComparer.OrdinalIgnoreCase))
+        {
+            throw new Exceptions.CloudflareConfigurationException(
+                $"Validation method '{ValidationMethod}' is not one of {string.Join(", ", SslValidationMethods.All)}.");
+        }
+
+        if (ValidityDays is not { } days || !SslCertificatePackValidityDays.All.Contains(days))
+        {
+            throw new Exceptions.CloudflareConfigurationException(
+                $"Validity days '{ValidityDays}' is not one of {string.Join(", ", SslCertificatePackValidityDays.All)}.");
+        }
+
+        if (!SslCertificateAuthorities.All.Contains(CertificateAuthority, StringComparer.OrdinalIgnoreCase))
+        {
+            throw new Exceptions.CloudflareConfigurationException(
+                $"Certificate authority '{CertificateAuthority}' is not one of {string.Join(", ", SslCertificateAuthorities.All)}.");
+        }
+    }
+}
+
+/// <summary>The <c>validation_method</c> values an order accepts.</summary>
+public static class SslValidationMethods
+{
+    /// <summary>DNS: prove control with a TXT record.</summary>
+    public const string Txt = "txt";
+
+    /// <summary>HTTP: prove control by serving a token over HTTP.</summary>
+    public const string Http = "http";
+
+    /// <summary>E-mail to an administrative address at the domain.</summary>
+    public const string Email = "email";
+
+    /// <summary>Every value Cloudflare accepts, in the order the schema lists them.</summary>
+    public static readonly IReadOnlyList<string> All = new[] { Txt, Http, Email };
+}
+
+/// <summary>The <c>validity_days</c> values an order accepts.</summary>
+public static class SslCertificatePackValidityDays
+{
+    /// <summary>Two weeks.</summary>
+    public const int Fourteen = 14;
+
+    /// <summary>One month.</summary>
+    public const int Thirty = 30;
+
+    /// <summary>Three months.</summary>
+    public const int Ninety = 90;
+
+    /// <summary>One year.</summary>
+    public const int OneYear = 365;
+
+    /// <summary>Every value Cloudflare accepts, shortest first.</summary>
+    public static readonly IReadOnlyList<int> All = new[] { Fourteen, Thirty, Ninety, OneYear };
 }
 
 /// <summary>Query parameters of <c>GET /zones/{zone_id}/ssl/certificate_packs</c>.</summary>

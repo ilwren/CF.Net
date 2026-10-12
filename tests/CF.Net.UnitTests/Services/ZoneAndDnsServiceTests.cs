@@ -1193,3 +1193,162 @@ public class SslCertificatePacksTests
         Assert.Equal("page=3&per_page=20&deploy=staging", query.ToString().TrimStart('?'));
     }
 }
+
+public class SslCertificatePackOrderTests
+{
+    private const string OrderPath = "/client/v4/zones/zone-5678/ssl/certificate_packs/order";
+
+    private static OrderSslCertificatePackRequest ValidOrder(bool? branding = false) =>
+        new(
+            new[] { "example.com", "www.example.com" },
+            SslValidationMethods.Txt,
+            SslCertificatePackValidityDays.OneYear,
+            SslCertificateAuthorities.LetsEncrypt,
+            branding);
+
+    [Fact]
+    public async Task OrderAsync_posts_every_field_to_the_order_path()
+    {
+        using var harness = CloudflareHarness.Create();
+        harness.RespondWithResult(
+            """
+            {
+              "id": "pack-9",
+              "hosts": ["example.com", "www.example.com"],
+              "status": "initializing",
+              "type": "advanced",
+              "certificate_authority": "lets_encrypt",
+              "certificates": [
+                {
+                  "id": "cert-1",
+                  "hosts": ["example.com"],
+                  "status": "initializing",
+                  "bundle_method": "ubiquitous",
+                  "expires_on": "2027-01-02T03:04:05Z",
+                  "geo_restrictions": {"label": "eu"}
+                }
+              ]
+            }
+            """);
+
+        var pack = await harness.Client.Ssl.OrderAsync(ValidOrder());
+
+        Assert.Equal(HttpMethod.Post, harness.LastRequest.Method);
+        Assert.Equal(OrderPath, harness.LastRequest.Path);
+        Assert.Equal(
+            "{\"type\":\"advanced\",\"hosts\":[\"example.com\",\"www.example.com\"]," +
+            "\"validation_method\":\"txt\",\"validity_days\":365," +
+            "\"certificate_authority\":\"lets_encrypt\",\"cloudflare_branding\":false}",
+            harness.LastRequest.Body);
+
+        Assert.Equal("pack-9", pack.Id);
+        Assert.Equal(SslCertificatePackStatuses.Initializing, pack.Status);
+
+        var certificate = Assert.Single(pack.Certificates!);
+        Assert.Equal("cert-1", certificate.Id);
+        Assert.Equal(new[] { "example.com" }, certificate.Hosts);
+        Assert.Equal("ubiquitous", certificate.BundleMethod);
+        Assert.Equal(new DateTimeOffset(2027, 1, 2, 3, 4, 5, TimeSpan.Zero), certificate.ExpiresOn);
+        // geo_restrictions is not modelled, so it survives in the extension data instead of being dropped.
+        Assert.Equal("eu", certificate.AdditionalData!["geo_restrictions"].GetProperty("label").GetString());
+    }
+
+    [Fact]
+    public async Task OrderAsync_leaves_branding_out_when_it_was_not_chosen()
+    {
+        using var harness = CloudflareHarness.Create();
+        harness.RespondWithResult("{\"id\":\"pack-9\"}");
+
+        await harness.Client.Ssl.OrderAsync(ValidOrder(branding: null));
+
+        Assert.DoesNotContain("cloudflare_branding", harness.LastRequest.Body, StringComparison.Ordinal);
+        Assert.Contains("\"validity_days\":365", harness.LastRequest.Body, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task OrderAsync_honours_an_explicit_zone_id()
+    {
+        using var harness = CloudflareHarness.Create();
+        harness.RespondWithResult("{\"id\":\"pack-9\"}");
+
+        await harness.Client.Ssl.OrderAsync(ValidOrder(), "zone-other");
+
+        Assert.Equal("/client/v4/zones/zone-other/ssl/certificate_packs/order", harness.LastRequest.Path);
+    }
+
+    [Fact]
+    public async Task OrderAsync_checks_every_field_before_calling_out()
+    {
+        using var harness = CloudflareHarness.Create();
+
+        await Assert.ThrowsAsync<CloudflareConfigurationException>(() => harness.Client.Ssl.OrderAsync(
+            new OrderSslCertificatePackRequest(Array.Empty<string>(), "txt", 365, "lets_encrypt")));
+
+        await Assert.ThrowsAsync<CloudflareConfigurationException>(() => harness.Client.Ssl.OrderAsync(
+            new OrderSslCertificatePackRequest(
+                Enumerable.Repeat("host.example.com", OrderSslCertificatePackRequest.MaxHosts + 1),
+                "txt", 365, "lets_encrypt")));
+
+        await Assert.ThrowsAsync<CloudflareConfigurationException>(() => harness.Client.Ssl.OrderAsync(
+            new OrderSslCertificatePackRequest(new[] { "example.com", " " }, "txt", 365, "lets_encrypt")));
+
+        await Assert.ThrowsAsync<CloudflareConfigurationException>(() => harness.Client.Ssl.OrderAsync(
+            new OrderSslCertificatePackRequest(new[] { "example.com" }, "dns", 365, "lets_encrypt")));
+
+        // 730 and 1095 belong to request_validity, not to the validity_days an order accepts.
+        await Assert.ThrowsAsync<CloudflareConfigurationException>(() => harness.Client.Ssl.OrderAsync(
+            new OrderSslCertificatePackRequest(new[] { "example.com" }, "txt", 730, "lets_encrypt")));
+
+        await Assert.ThrowsAsync<CloudflareConfigurationException>(() => harness.Client.Ssl.OrderAsync(
+            new OrderSslCertificatePackRequest(new[] { "example.com" }, "txt", 365, "digicert")));
+
+        await Assert.ThrowsAsync<CloudflareConfigurationException>(
+            () => harness.Client.Ssl.OrderAsync(new OrderSslCertificatePackRequest
+            {
+                Type = SslCertificatePackTypes.Universal,
+                Hosts = new List<string> { "example.com" },
+                ValidationMethod = SslValidationMethods.Txt,
+                ValidityDays = 365,
+                CertificateAuthority = SslCertificateAuthorities.Google,
+            }));
+
+        Assert.Equal(0, harness.RequestCount);
+    }
+
+    [Fact]
+    public async Task OrderAsync_needs_a_request()
+    {
+        using var harness = CloudflareHarness.Create();
+
+        await Assert.ThrowsAsync<ArgumentNullException>(() => harness.Client.Ssl.OrderAsync(null!));
+
+        Assert.Equal(0, harness.RequestCount);
+    }
+
+    [Fact]
+    public async Task An_order_without_a_result_payload_raises()
+    {
+        using var harness = CloudflareHarness.Create();
+        harness.RespondWithResult("null");
+
+        var exception = await Assert.ThrowsAsync<CloudflareApiException>(() => harness.Client.Ssl.OrderAsync(ValidOrder()));
+
+        Assert.Contains("without a result payload", exception.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void The_order_constants_list_exactly_what_cloudflare_accepts()
+    {
+        Assert.Equal(new[] { "txt", "http", "email" }, SslValidationMethods.All);
+        Assert.Equal(new[] { 14, 30, 90, 365 }, SslCertificatePackValidityDays.All);
+        Assert.Equal(new[] { "google", "lets_encrypt", "ssl_com" }, SslCertificateAuthorities.All);
+        Assert.Equal(50, OrderSslCertificatePackRequest.MaxHosts);
+        Assert.Equal("advanced", SslCertificatePackTypes.Advanced);
+    }
+
+    [Fact]
+    public void An_order_always_names_the_advanced_type()
+    {
+        Assert.Equal(SslCertificatePackTypes.Advanced, ValidOrder().Type);
+    }
+}

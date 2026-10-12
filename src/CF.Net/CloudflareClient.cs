@@ -51,6 +51,7 @@ public sealed class CloudflareClient : ICloudflareClient, IDisposable
         Accounts = new AccountsService(transport);
         Zones = new ZonesService(transport);
         DnsRecords = new DnsRecordsService(transport);
+        Ssl = new SslCertificatesService(transport);
         Workers = new WorkersScriptsService(transport);
         Pages = new PagesProjectsService(transport);
         D1 = new D1DatabaseService(transport);
@@ -75,6 +76,9 @@ public sealed class CloudflareClient : ICloudflareClient, IDisposable
 
     /// <inheritdoc />
     public IDnsRecordsService DnsRecords { get; }
+
+    /// <inheritdoc />
+    public ISslCertificatesService Ssl { get; }
 
     /// <inheritdoc />
     public IWorkersScriptsService Workers { get; }

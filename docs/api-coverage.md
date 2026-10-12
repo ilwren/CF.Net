@@ -45,8 +45,9 @@ Status legend: ✅ wrapped · ⛔ deliberately out of scope for this phase.
 `ZoneSettingIds` declares only the ids that appear in Cloudflare's published schema — every method takes
 the id as a string, so any setting can be addressed. `ZoneSettingValues.On`/`.Off` are the switch literals.
 
-⛔ SSL certificate packs, firewall rules, page rules, rate limits, WAF custom rules, Load balancing,
-Waiting Room, Turnstile — separate phases.
+⛔ Firewall rules, page rules, rate limits, WAF custom rules, Load balancing, Waiting Room, Turnstile —
+separate phases. Certificate packs have their own section below; what is still missing there is ordering,
+the validation restart, the quota and universal SSL settings.
 
 ## DNS records
 
@@ -75,6 +76,36 @@ Record types modelled with constants and typed data: `A`, `AAAA`, `CAA`, `CERT`,
 through `DnsRecord.Data` and `DnsRecord.GetData<T>()`.
 
 ⛔ DNS analytics, DNSSEC, custom nameservers, secondary zone transfers.
+
+---
+
+## SSL certificate packs
+
+`ISslCertificatesService` — `client.Ssl`
+
+| Method | Endpoint | Notes |
+| --- | --- | --- |
+| `ListAsync(SslCertificatePackListParameters?, zoneId)` | `GET /zones/{zone_id}/ssl/certificate_packs` | `deploy` (`staging`/`production`), `status` (`all`, otherwise only the active packs are listed), `page`, `per_page` (5–50) |
+| `ListAllAsync(...)` | `GET …/ssl/certificate_packs` | walks the pages, keeps `deploy`/`status`/`per_page` on every call, and stops on a short page when `result_info` is absent |
+| `GetAsync(certificatePackId, zoneId)` | `GET …/ssl/certificate_packs/{certificate_pack_id}` | `null` on 404. A zone the token cannot see is answered with 403 (9109 unknown zone, 10000 out of scope) and raises, because that is a scoping problem, not a missing pack |
+| `DeleteAsync(certificatePackId, zoneId)` | `DELETE …/ssl/certificate_packs/{certificate_pack_id}` | Advanced Certificate Manager packs only; returns the `id` Cloudflare echoes back |
+
+Permissions are `SSL and Certificates Read` to list and read, `SSL and Certificates Write` to delete.
+
+`SslCertificatePack` maps `id`, `zone_id`, `hosts`, `status`, `type`, `certificate_authority`, `priority`,
+`signature` and `uploaded_on`. `status` has more values than the schema names in one place, so it stays a
+string — `SslCertificatePackStatuses` holds the seven the documentation names (`initializing`,
+`pending_validation`, `validation_timed_out`, `inactive`, `backup_issued`, `holding_deployment`, `deleted`)
+and an unlisted one is never a deserialisation failure. `SslCertificatePackTypes` is the complete set of
+eight (`universal`, `advanced`, `managed_hostname`, `mh_custom`, `sni_custom`, `total_tls`, `keyless`,
+`legacy_custom`), `SslCertificateAuthorities` the three (`google`, `lets_encrypt`, `ssl_com`). Issuance
+fields the model does not name (`validation_method`, `validity_days`, the primary certificate, …) arrive in
+`AdditionalData` rather than being dropped.
+
+⛔ Ordering a pack (`POST …/certificate_packs/order`), restarting validation or changing branding
+(`PATCH …/certificate_packs/{certificate_pack_id}`), the quota (`GET …/certificate_packs/quota`), universal
+SSL settings (`/zones/{zone_id}/ssl/universal/settings`), DCV delegation and validation method
+(`/zones/{zone_id}/ssl/verification`), auto-origin TLS KEX and the SSL/TLS recommendation.
 
 ## Users and accounts
 

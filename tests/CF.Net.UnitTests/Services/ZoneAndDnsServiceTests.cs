@@ -3,6 +3,7 @@ using CFNet.Exceptions;
 using CFNet.Http;
 using CFNet.Models.Common;
 using CFNet.Models.Dns;
+using CFNet.Models.Ssl;
 using CFNet.Models.Zones;
 using CFNet.UnitTests.Testing;
 using Xunit;
@@ -999,5 +1000,195 @@ public class ZoneSettingsTests
         await harness.Client.Zones.ListSettingsAsync("zone-other");
 
         Assert.Equal("/client/v4/zones/zone-other/settings", harness.LastRequest.Path);
+    }
+}
+
+public class SslCertificatePacksTests
+{
+    private const string PackJson =
+        "{\"id\":\"pack-1\",\"zone_id\":\"zone-5678\",\"hosts\":[\"example.com\",\"*.example.com\"]," +
+        "\"status\":\"pending_validation\",\"type\":\"advanced\",\"certificate_authority\":\"lets_encrypt\"," +
+        "\"priority\":2,\"signature\":\"SHA256\",\"uploaded_on\":\"2026-01-02T03:04:05Z\"," +
+        "\"validation_method\":\"txt\",\"validity_days\":365}";
+
+    [Fact]
+    public async Task ListAsync_reads_the_zone_scoped_collection_with_its_query_parameters()
+    {
+        using var harness = CloudflareHarness.Create();
+        harness.RespondWithPage($"[{PackJson}]", page: 1, totalPages: 1, count: 1, totalCount: 1);
+
+        var page = await harness.Client.Ssl.ListAsync(new SslCertificatePackListParameters
+        {
+            Status = "all",
+            Deploy = SslCertificatePackDeployments.Production,
+            PerPage = 50,
+        });
+
+        Assert.Equal($"/client/v4/zones/{CloudflareHarness.TestZoneId}/ssl/certificate_packs", harness.LastRequest.Path);
+        Assert.Contains("per_page=50", harness.LastRequest.Query, StringComparison.Ordinal);
+        Assert.Contains("deploy=production", harness.LastRequest.Query, StringComparison.Ordinal);
+        Assert.Contains("status=all", harness.LastRequest.Query, StringComparison.Ordinal);
+        Assert.DoesNotContain("page=", harness.LastRequest.Query, StringComparison.Ordinal);
+
+        Assert.Equal(1, page.TotalCount);
+        var pack = Assert.Single(page.Items);
+        Assert.Equal("pack-1", pack.Id);
+        Assert.Equal("zone-5678", pack.ZoneId);
+        Assert.Equal(new[] { "example.com", "*.example.com" }, pack.Hosts);
+        Assert.Equal(SslCertificatePackStatuses.PendingValidation, pack.Status);
+        Assert.Equal(SslCertificatePackTypes.Advanced, pack.Type);
+        Assert.Equal(SslCertificateAuthorities.LetsEncrypt, pack.CertificateAuthority);
+        Assert.Equal(2, pack.Priority!.Value);
+        Assert.Equal("SHA256", pack.Signature);
+        Assert.Equal(new DateTimeOffset(2026, 1, 2, 3, 4, 5, TimeSpan.Zero), pack.UploadedOn);
+        Assert.Equal("pack-1", pack.ToString());
+    }
+
+    [Fact]
+    public async Task A_field_the_model_does_not_name_is_kept_rather_than_dropped()
+    {
+        using var harness = CloudflareHarness.Create();
+        harness.RespondWithPage($"[{PackJson}]", page: 1, totalPages: 1, count: 1, totalCount: 1);
+
+        var pack = Assert.Single((await harness.Client.Ssl.ListAsync()).Items);
+
+        Assert.NotNull(pack.AdditionalData);
+        Assert.Equal("txt", pack.AdditionalData!["validation_method"].GetString());
+        Assert.Equal(365, pack.AdditionalData["validity_days"].GetInt32());
+    }
+
+    [Fact]
+    public async Task ListAsync_sends_no_query_at_all_when_nothing_is_set()
+    {
+        using var harness = CloudflareHarness.Create();
+        harness.RespondWithPage("[]", page: 1, totalPages: 1, count: 0, totalCount: 0);
+
+        var page = await harness.Client.Ssl.ListAsync();
+
+        Assert.Equal(string.Empty, harness.LastRequest.Query);
+        Assert.Empty(page.Items);
+    }
+
+    [Fact]
+    public async Task ListAsync_honours_an_explicit_zone_id()
+    {
+        using var harness = CloudflareHarness.Create();
+        harness.RespondWithPage("[]", page: 1, totalPages: 1, count: 0, totalCount: 0);
+
+        await harness.Client.Ssl.ListAsync(null, "zone-other");
+
+        Assert.Equal("/client/v4/zones/zone-other/ssl/certificate_packs", harness.LastRequest.Path);
+    }
+
+    [Fact]
+    public async Task ListAllAsync_walks_every_page_and_keeps_the_filters()
+    {
+        using var harness = CloudflareHarness.Create();
+        harness
+            .RespondWithPage("[{\"id\":\"pack-1\"}]", page: 1, totalPages: 2, count: 1, totalCount: 2)
+            .RespondWithPage("[{\"id\":\"pack-2\"}]", page: 2, totalPages: 2, count: 1, totalCount: 2);
+
+        var packs = await harness.Client.Ssl
+            .ListAllAsync(new SslCertificatePackListParameters { Status = "all", PerPage = 5 })
+            .CollectAsync();
+
+        Assert.Equal(new[] { "pack-1", "pack-2" }, packs.Select(pack => pack.Id));
+        Assert.Equal(2, harness.RequestCount);
+        Assert.Equal("page=1&per_page=5&status=all", harness.Requests[0].Query.TrimStart('?'));
+        Assert.Equal("page=2&per_page=5&status=all", harness.Requests[1].Query.TrimStart('?'));
+    }
+
+    [Fact]
+    public async Task ListAllAsync_stops_on_a_short_page_even_without_result_info()
+    {
+        using var harness = CloudflareHarness.Create();
+        harness.RespondWithResult("[{\"id\":\"pack-1\"}]");
+
+        var packs = await harness.Client.Ssl.ListAllAsync().CollectAsync();
+
+        Assert.Equal("pack-1", Assert.Single(packs).Id);
+        Assert.Equal(1, harness.RequestCount);
+    }
+
+    [Fact]
+    public async Task GetAsync_scopes_the_call_to_one_pack()
+    {
+        using var harness = CloudflareHarness.Create();
+        harness.RespondWithResult(PackJson);
+
+        var pack = await harness.Client.Ssl.GetAsync("pack-1");
+
+        Assert.Equal(HttpMethod.Get, harness.LastRequest.Method);
+        Assert.Equal(
+            $"/client/v4/zones/{CloudflareHarness.TestZoneId}/ssl/certificate_packs/pack-1",
+            harness.LastRequest.Path);
+        Assert.Equal("pack-1", pack?.Id);
+    }
+
+    [Fact]
+    public async Task GetAsync_returns_null_when_the_zone_has_no_such_pack()
+    {
+        using var harness = CloudflareHarness.Create();
+        harness.RespondWithError(HttpStatusCode.NotFound, 10007, "Certificate pack not found");
+
+        Assert.Null(await harness.Client.Ssl.GetAsync("missing"));
+    }
+
+    [Fact]
+    public async Task GetAsync_percent_encodes_the_pack_id()
+    {
+        using var harness = CloudflareHarness.Create();
+        harness.RespondWithResult(PackJson);
+
+        await harness.Client.Ssl.GetAsync("pack/1");
+
+        Assert.Contains("/ssl/certificate_packs/pack%2F1", harness.LastRequest.Uri!.OriginalString, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task DeleteAsync_returns_the_identifier_cloudflare_echoes()
+    {
+        using var harness = CloudflareHarness.Create();
+        harness.RespondWithResult("{\"id\":\"pack-1\"}");
+
+        var deleted = await harness.Client.Ssl.DeleteAsync("pack-1");
+
+        Assert.Equal(HttpMethod.Delete, harness.LastRequest.Method);
+        Assert.Equal(
+            $"/client/v4/zones/{CloudflareHarness.TestZoneId}/ssl/certificate_packs/pack-1",
+            harness.LastRequest.Path);
+        Assert.Equal("pack-1", deleted);
+    }
+
+    [Fact]
+    public async Task DeleteAsync_returns_null_when_cloudflare_sends_no_result()
+    {
+        using var harness = CloudflareHarness.Create();
+        harness.RespondWithResult("null");
+
+        Assert.Null(await harness.Client.Ssl.DeleteAsync("pack-1"));
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData("   ")]
+    public async Task A_pack_id_is_required(string? packId)
+    {
+        using var harness = CloudflareHarness.Create();
+
+        await Assert.ThrowsAsync<CloudflareConfigurationException>(() => harness.Client.Ssl.GetAsync(packId!));
+        await Assert.ThrowsAsync<CloudflareConfigurationException>(() => harness.Client.Ssl.DeleteAsync(packId!));
+
+        Assert.Equal(0, harness.RequestCount);
+    }
+
+    [Fact]
+    public void The_list_parameters_only_send_what_was_set()
+    {
+        var query = new QueryStringBuilder();
+        new SslCertificatePackListParameters { Page = 3, PerPage = 20, Deploy = "staging" }.Apply(query);
+
+        Assert.Equal("page=3&per_page=20&deploy=staging", query.ToString().TrimStart('?'));
     }
 }

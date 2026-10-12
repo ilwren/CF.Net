@@ -1028,7 +1028,8 @@ public class SslCertificatePacksTests
         Assert.Contains("per_page=50", harness.LastRequest.Query, StringComparison.Ordinal);
         Assert.Contains("deploy=production", harness.LastRequest.Query, StringComparison.Ordinal);
         Assert.Contains("status=all", harness.LastRequest.Query, StringComparison.Ordinal);
-        Assert.DoesNotContain("page=", harness.LastRequest.Query, StringComparison.Ordinal);
+        // "per_page" contains "page", so the missing page number is asserted on the whole query.
+        Assert.Equal("per_page=50&deploy=production&status=all", harness.LastRequest.Query.TrimStart('?'));
 
         Assert.Equal(1, page.TotalCount);
         var pack = Assert.Single(page.Items);

@@ -205,48 +205,42 @@ jobs:
           dotnet pack src/CF.Net/CF.Net.csproj --configuration "$CONFIGURATION" --no-build --output artifacts 2>&1 \
             | tee "$RUNNER_TEMP/ci-logs/60-pack.log"
 
+      # Annotations are readable through the GitHub API, which the job log and the uploaded artifact are
+      # not from every environment, so the failing tests are published here as well as written to the file
+      # the pull-request comment step reads. A reporting step must never be what turns a job red - the
+      # tests already did that - hence continue-on-error and the console-log fallback.
       - name: Extract failing tests from the trx
         if: failure()
+        continue-on-error: true
         shell: bash
+        env:
+          PYTHONIOENCODING: utf-8
         run: |
           PY=$(command -v python3 || command -v python || true)
-          if [ -z "$PY" ]; then echo "no python"; exit 0; fi
-          "$PY" - <<'PY'
-          import glob, os, xml.etree.ElementTree as ET
+          if [ -n "$PY" ]; then
+            "$PY" .github/scripts/report_test_failures.py || echo "::warning::the trx report exited $?"
+          else
+            echo "::warning::no python interpreter on this runner, falling back to the console logs"
+          fi
 
-          ns = {'t': 'http://microsoft.com/schemas/VisualStudio/TeamTest/2010'}
-          blocks = []
-          for trx in sorted(glob.glob('TestResults/**/*.trx', recursive=True)):
-              try:
-                  root = ET.parse(trx).getroot()
-              except Exception:
-                  continue
-              for result in root.findall('.//t:UnitTestResult', ns):
-                  if result.get('outcome') != 'Failed':
-                      continue
-                  info = result.find('.//t:ErrorInfo', ns)
-                  message = (info.findtext('t:Message', '', ns) or '').strip() if info is not None else ''
-                  stack = (info.findtext('t:StackTrace', '', ns) or '').strip() if info is not None else ''
-                  blocks.append(
-                      f"FAILED {os.path.basename(trx)} :: {result.get('testName')}\n"
-                      f"{message[:900]}\n"
-                      f"{stack[:400]}")
+          if [ -s "$RUNNER_TEMP/failures.txt" ]; then
+            exit 0
+          fi
 
-          # Annotations are readable through the GitHub API, which the job log and the uploaded artifact
-          # are not from every environment, so the failing tests are published here as well as written to
-          # the file below. Ten is GitHub's per-step cap for a level; the rest stay in the pull-request
-          # comment this job also posts.
-          for block in blocks[:10]:
-              parts = block.split(chr(10))
-              title = parts[0].replace('%', '%25').replace(':', '%3A').replace(',', '%2C')
-              body = chr(10).join(parts[1:]).replace('%', '%25').replace(chr(13), '%0D').replace(chr(10), '%0A')
-              print('::error title=' + title + '::' + body)
+          # Nothing was written, so read the logs xunit leaves on every platform instead: one annotation
+          # per log, four at most, with the newlines folded into %0A the way workflow commands need.
+          count=0
+          for log in "$RUNNER_TEMP"/ci-logs/*.log; do
+            [ -f "$log" ] || continue
+            grep -q '^  Failed ' "$log" || continue
+            body=$(grep -A 4 '^  Failed ' "$log" | head -c 1500 | tr -d '\r' \
+                   | sed -e 's/%/%25/g' -e 's/$/%0A/' | tr -d '\n')
+            echo "::error title=FAILED $(basename "$log")::${body}"
+            count=$((count + 1))
+            [ "$count" -ge 4 ] && break
+          done
 
-          out = os.path.join(os.environ['RUNNER_TEMP'], 'failures.txt')
-          with open(out, 'w', encoding='utf-8') as handle:
-              handle.write('\n\n'.join(blocks))
-          print(f'{len(blocks)} failing test(s)')
-          PY
+          exit 0
 
       - name: Report failures
         if: failure() && github.event_name == 'pull_request'

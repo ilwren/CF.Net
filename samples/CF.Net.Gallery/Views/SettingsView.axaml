@@ -127,9 +127,15 @@
           <TextBlock Classes="hint"
                      Text="The file is plain text and holds a live credential. Leave the box unticked to keep everything in memory for this session only - the fields are then pre-filled from the CLOUDFLARE_* environment variables instead." />
 
+          <TextBlock Classes="hint"
+                     Text="List accounts answers GET /accounts with every account the credentials can see, which is the honest way to find the account id the Workers, Pages, D1, KV and R2 pages need; Get account reads the one already configured, and Read user answers GET /user for the owner of a Global API Key. All three land in the request and response panes like any other call." TextWrapping="Wrap" />
+
           <WrapPanel Orientation="Horizontal">
             <Button Classes="run" Content="Apply" Command="{Binding ApplyCommand}" Margin="0,0,8,0" />
             <Button Content="Check connection" Command="{Binding CheckConnectionCommand}" Margin="0,0,8,0" />
+            <Button Content="List accounts" Command="{Binding ListAccountsCommand}" Margin="0,0,8,0" />
+            <Button Content="Get account" Command="{Binding GetAccountCommand}" Margin="0,0,8,0" />
+            <Button Content="Read user" Command="{Binding ReadUserCommand}" Margin="0,0,8,0" />
             <Button Content="Save to disk" Command="{Binding SaveCommand}" Margin="0,0,8,0" />
             <Button Content="Reload" Command="{Binding ReloadCommand}" Margin="0,0,8,0" />
             <Button Content="Forget" Command="{Binding ClearCommand}" />

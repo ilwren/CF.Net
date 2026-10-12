@@ -65,6 +65,7 @@ public sealed class ZonesViewModel : ModuleViewModelBase
         DeleteZoneCommand = new RelayCommand(DeleteZoneAsync);
 
         DnsListCommand = new RelayCommand(DnsListAsync);
+        DnsListAllCommand = new RelayCommand(DnsListAllAsync);
         DnsFindCommand = new RelayCommand(DnsFindAsync);
         DnsGetCommand = new RelayCommand(DnsGetAsync);
         DnsCreateCommand = new RelayCommand(DnsCreateAsync);
@@ -245,6 +246,9 @@ public sealed class ZonesViewModel : ModuleViewModelBase
     public RelayCommand DnsListCommand { get; }
 
     /// <summary>Finds records by name.</summary>
+    /// <summary>Walks every page of DNS records, keeping the filters.</summary>
+    public RelayCommand DnsListAllCommand { get; }
+
     public RelayCommand DnsFindCommand { get; }
 
     /// <summary>Gets one DNS record.</summary>
@@ -510,6 +514,22 @@ public sealed class ZonesViewModel : ModuleViewModelBase
             Type = Blank(DnsListType),
             Name = Blank(DnsListName),
         }, ZoneIdFor(DnsListZoneId)));
+
+    private Task DnsListAllAsync() => RunAsync("List every DNS record", async () =>
+    {
+        var records = new List<DnsRecord>();
+        await foreach (var record in Client.DnsRecords.ListAllAsync(new DnsRecordListParameters
+        {
+            PerPage = OptionalInt(DnsListPerPage),
+            Type = Blank(DnsListType),
+            Name = Blank(DnsListName),
+        }, ZoneIdFor(DnsListZoneId)))
+        {
+            records.Add(record);
+        }
+
+        return records;
+    });
 
     private Task DnsFindAsync() => RunAsync("Find DNS records", async () =>
         await Client.DnsRecords.FindAsync(

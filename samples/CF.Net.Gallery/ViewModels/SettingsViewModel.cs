@@ -39,6 +39,9 @@ public sealed class SettingsViewModel : PageViewModelBase
 
         ApplyCommand = new RelayCommand(() => _gallery.ApplySettingsAsync());
         CheckConnectionCommand = new RelayCommand(() => _gallery.RunConnectionCheckAsync());
+        ListAccountsCommand = new RelayCommand(() => _gallery.RunListAccountsAsync());
+        GetAccountCommand = new RelayCommand(() => _gallery.RunGetAccountAsync());
+        ReadUserCommand = new RelayCommand(() => _gallery.RunReadUserAsync());
         SaveCommand = new RelayCommand(() =>
         {
             _gallery.SaveSettingsNow();
@@ -63,6 +66,15 @@ public sealed class SettingsViewModel : PageViewModelBase
 
     /// <summary>Runs the connectivity check.</summary>
     public RelayCommand CheckConnectionCommand { get; }
+
+    /// <summary>Lists the accounts the credentials can see - <c>GET /accounts</c>.</summary>
+    public RelayCommand ListAccountsCommand { get; }
+
+    /// <summary>Reads the account the configured id names - <c>GET /accounts/{account_id}</c>.</summary>
+    public RelayCommand GetAccountCommand { get; }
+
+    /// <summary>Reads the user behind the credentials - <c>GET /user</c>.</summary>
+    public RelayCommand ReadUserCommand { get; }
 
     /// <summary>Writes the fields to disk.</summary>
     public RelayCommand SaveCommand { get; }

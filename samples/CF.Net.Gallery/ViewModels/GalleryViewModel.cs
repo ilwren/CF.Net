@@ -4,6 +4,7 @@ using CFNet.Configuration;
 using CFNet.Exceptions;
 using CFNet.Gallery.Infrastructure;
 using CFNet.Http;
+using CFNet.Services;
 
 namespace CFNet.Gallery.ViewModels;
 
@@ -320,6 +321,39 @@ public sealed class GalleryViewModel : ObservableObject, IDisposable
     /// <summary>Runs the connectivity check on its own.</summary>
     /// <returns>A task completing when the check finishes.</returns>
     public Task RunConnectionCheckAsync() => CheckConnectionAsync();
+
+    /// <summary>
+    /// Lists the accounts the credentials can see, which is where an account id to paste into the settings
+    /// comes from.
+    /// </summary>
+    /// <returns>A task completing when the call finishes.</returns>
+    public Task RunListAccountsAsync() => DiscoverAsync("List accounts", () => Client.Accounts.ListAsync(new AccountListParameters { PerPage = 50 }));
+
+    /// <summary>Reads the one account the configured id names.</summary>
+    /// <returns>A task completing when the call finishes.</returns>
+    public Task RunGetAccountAsync() => DiscoverAsync("Get account", () => Client.Accounts.GetAsync());
+
+    /// <summary>Reads the user the credentials belong to.</summary>
+    /// <returns>A task completing when the call finishes.</returns>
+    public Task RunReadUserAsync() => DiscoverAsync("Read user", () => Client.User.GetAsync());
+
+    /// <summary>
+    /// Runs one of the discovery calls behind the settings page. They all read something the credentials
+    /// themselves describe, so they share one shape: report the result, or report why it failed.
+    /// </summary>
+    private async Task DiscoverAsync<TResult>(string operation, Func<Task<TResult>> call)
+    {
+        BeginOperation(operation);
+
+        try
+        {
+            CompleteOperation(await call());
+        }
+        catch (Exception exception)
+        {
+            FailOperation(operation, exception);
+        }
+    }
 
     /// <summary>Persists the settings when the user allowed it.</summary>
     public void SaveSettingsNow() => SaveSettings();

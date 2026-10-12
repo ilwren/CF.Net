@@ -143,6 +143,7 @@
                 </StackPanel>
                 <WrapPanel Orientation="Horizontal">
                   <Button Classes="run" Content="List" Command="{Binding DnsListCommand}" Margin="0,0,8,0" />
+                  <Button Content="List every page" Command="{Binding DnsListAllCommand}" Margin="0,0,8,0" />
                   <Button Content="Find by name" Command="{Binding DnsFindCommand}" />
                 </WrapPanel>
               </StackPanel>

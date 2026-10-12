@@ -159,6 +159,13 @@ public static class ZoneSettingIds
     /// <c>ISslService</c> wraps it typed instead.
     /// </summary>
     public const string SslAutomaticMode = "ssl_automatic_mode";
+
+    /// <summary>
+    /// TLS compliance modes constraining the key-exchange algorithms Cloudflare may use towards the origin.
+    /// Value is an <b>array</b> of mode strings (<c>"fips"</c>, <c>"pqh"</c>), not a scalar, and both its
+    /// write verbs replace the whole list - <c>ISslService</c> wraps it typed instead.
+    /// </summary>
+    public const string OriginTlsComplianceModes = "origin_tls_compliance_modes";
 }
 
 /// <summary>

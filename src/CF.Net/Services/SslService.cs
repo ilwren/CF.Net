@@ -329,6 +329,67 @@ public interface ISslService
         string certificatePackId,
         string? zoneId = null,
         CancellationToken cancellationToken = default);
+
+    /// <summary>Reads the origin TLS compliance modes via <c>GET /zones/{zone_id}/settings/origin_tls_compliance_modes</c>.</summary>
+    /// <param name="zoneId">Zone id; falls back to the configured default when null.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>The setting, or <c>null</c> when the zone has no result for it.</returns>
+    /// <remarks>
+    /// This is the constraint <see cref="ISslService.GetAutoOriginTlsKexAsync"/> operates inside: each mode
+    /// narrows the key exchanges automatic enrolment may choose, and several modes combine as the
+    /// intersection of their permitted algorithms. Needs <c>Zone Settings Read</c>.
+    /// </remarks>
+    Task<OriginTlsComplianceModes?> GetOriginTlsComplianceModesAsync(
+        string? zoneId = null,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Replaces the origin TLS compliance modes via <c>PUT /zones/{zone_id}/settings/origin_tls_compliance_modes</c>.
+    /// </summary>
+    /// <param name="request">The complete new list of modes; an empty list clears the constraint.</param>
+    /// <param name="zoneId">Zone id; falls back to the configured default when null.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>The setting as it now stands.</returns>
+    /// <remarks>
+    /// Validates the request and throws <see cref="Exceptions.CloudflareConfigurationException"/> before
+    /// anything is sent. Needs <c>Zone Settings Write</c>.
+    /// </remarks>
+    Task<OriginTlsComplianceModes> ReplaceOriginTlsComplianceModesAsync(
+        UpdateOriginTlsComplianceModesRequest request,
+        string? zoneId = null,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Changes the origin TLS compliance modes via <c>PATCH /zones/{zone_id}/settings/origin_tls_compliance_modes</c>.
+    /// </summary>
+    /// <param name="request">The complete new list of modes; an empty list clears the constraint.</param>
+    /// <param name="zoneId">Zone id; falls back to the configured default when null.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>The setting as it now stands.</returns>
+    /// <remarks>
+    /// Despite the verb this is <b>not</b> a merge: Cloudflare documents PATCH here as a full replace, the
+    /// same operation <see cref="ReplaceOriginTlsComplianceModesAsync"/> performs with PUT, so dropping one
+    /// mode means sending the remaining ones. Validates the request and throws
+    /// <see cref="Exceptions.CloudflareConfigurationException"/> before anything is sent.
+    /// </remarks>
+    Task<OriginTlsComplianceModes> ChangeOriginTlsComplianceModesAsync(
+        UpdateOriginTlsComplianceModesRequest request,
+        string? zoneId = null,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Clears the constraint via <c>DELETE /zones/{zone_id}/settings/origin_tls_compliance_modes</c>.
+    /// </summary>
+    /// <param name="zoneId">Zone id; falls back to the configured default when null.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>
+    /// The setting afterwards - Cloudflare returns its id and editability but no <c>value</c> - or
+    /// <c>null</c> when it sends no result.
+    /// </returns>
+    /// <remarks>Equivalent to replacing the list with an empty one. Needs <c>Zone Settings Write</c>.</remarks>
+    Task<OriginTlsComplianceModes?> ClearOriginTlsComplianceModesAsync(
+        string? zoneId = null,
+        CancellationToken cancellationToken = default);
 }
 
 /// <inheritdoc />
@@ -692,5 +753,74 @@ public sealed class SslService : CloudflareService, ISslService
 
         var response = await Transport.SendAsync<SslCertificatePackDeletion>(request, cancellationToken).ConfigureAwait(false);
         return response.Result?.Id;
+    }
+
+    /// <inheritdoc />
+    public async Task<OriginTlsComplianceModes?> GetOriginTlsComplianceModesAsync(
+        string? zoneId = null,
+        CancellationToken cancellationToken = default)
+    {
+        var zone = ResolveZoneId(zoneId);
+        var request = CloudflareRequest.Get(ComplianceModesPath(zone)).Tolerate(System.Net.HttpStatusCode.NotFound);
+        request.OperationName = "Get Origin TLS Compliance Modes";
+
+        var response = await Transport.SendAsync<OriginTlsComplianceModes>(request, cancellationToken).ConfigureAwait(false);
+        return response.Result;
+    }
+
+    /// <inheritdoc />
+    public Task<OriginTlsComplianceModes> ReplaceOriginTlsComplianceModesAsync(
+        UpdateOriginTlsComplianceModesRequest request,
+        string? zoneId = null,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        request.EnsureValid();
+
+        var put = CloudflareRequest.Put(ComplianceModesPath(ResolveZoneId(zoneId)), request);
+        put.OperationName = "Replace Origin TLS Compliance Modes";
+
+        return SendComplianceModesAsync(put, cancellationToken);
+    }
+
+    /// <inheritdoc />
+    public Task<OriginTlsComplianceModes> ChangeOriginTlsComplianceModesAsync(
+        UpdateOriginTlsComplianceModesRequest request,
+        string? zoneId = null,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        request.EnsureValid();
+
+        var patch = CloudflareRequest.Patch(ComplianceModesPath(ResolveZoneId(zoneId)), request);
+        patch.OperationName = "Change Origin TLS Compliance Modes";
+
+        return SendComplianceModesAsync(patch, cancellationToken);
+    }
+
+    /// <inheritdoc />
+    public async Task<OriginTlsComplianceModes?> ClearOriginTlsComplianceModesAsync(
+        string? zoneId = null,
+        CancellationToken cancellationToken = default)
+    {
+        var zone = ResolveZoneId(zoneId);
+        var request = CloudflareRequest.Delete(ComplianceModesPath(zone)).Tolerate(System.Net.HttpStatusCode.NotFound);
+        request.OperationName = "Clear Origin TLS Compliance Modes";
+
+        var response = await Transport.SendAsync<OriginTlsComplianceModes>(request, cancellationToken).ConfigureAwait(false);
+        return response.Result;
+    }
+
+    /// <summary>Path of the compliance-modes zone setting.</summary>
+    private string ComplianceModesPath(string zoneId) =>
+        $"{ZonePath(zoneId)}/settings/{ZoneSettingIds.OriginTlsComplianceModes}";
+
+    /// <summary>Sends either compliance-modes write verb; both return the setting as it now stands.</summary>
+    private async Task<OriginTlsComplianceModes> SendComplianceModesAsync(
+        CloudflareRequest request,
+        CancellationToken cancellationToken)
+    {
+        var response = await Transport.SendAsync<OriginTlsComplianceModes>(request, cancellationToken).ConfigureAwait(false);
+        return response.EnsureResult();
     }
 }

@@ -128,6 +128,59 @@ public interface ICustomHostnamesService
         string customHostnameId,
         string? zoneId = null,
         CancellationToken cancellationToken = default);
+
+    /// <summary>Reads the fallback origin via <c>GET /zones/{zone_id}/custom_hostnames/fallback_origin</c>.</summary>
+    /// <param name="zoneId">Zone id; falls back to the configured default when null.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>The fallback origin, or <c>null</c> when the zone has none.</returns>
+    /// <remarks>
+    /// Where traffic goes for a custom hostname with no <c>custom_origin_server</c> of its own. The result
+    /// can carry activation <c>errors</c> as plain strings inside a successful response, so reading it back
+    /// after setting it is worth the call. Needs <c>SSL and Certificates Read</c>.
+    /// </remarks>
+    Task<CustomHostnameFallbackOrigin?> GetFallbackOriginAsync(
+        string? zoneId = null,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>Sets the fallback origin via <c>PUT /zones/{zone_id}/custom_hostnames/fallback_origin</c>.</summary>
+    /// <param name="request">Body carrying the single origin hostname.</param>
+    /// <param name="zoneId">Zone id; falls back to the configured default when null.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>The fallback origin Cloudflare recorded, with its activation status.</returns>
+    /// <remarks>
+    /// Validates the request and throws <see cref="Exceptions.CloudflareConfigurationException"/> before
+    /// anything is sent. There is no merge: a <c>PUT</c> of one origin replaces whatever was there. Needs
+    /// <c>SSL and Certificates Write</c>.
+    /// </remarks>
+    Task<CustomHostnameFallbackOrigin> SetFallbackOriginAsync(
+        UpdateCustomHostnameFallbackOriginRequest request,
+        string? zoneId = null,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>Sets the fallback origin to one hostname via <c>PUT /zones/{zone_id}/custom_hostnames/fallback_origin</c>.</summary>
+    /// <param name="origin">Origin hostname, at most 255 characters.</param>
+    /// <param name="zoneId">Zone id; falls back to the configured default when null.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>The fallback origin Cloudflare recorded, with its activation status.</returns>
+    /// <remarks>Convenience for a request body that is exactly <c>{"origin": ...}</c>.</remarks>
+    Task<CustomHostnameFallbackOrigin> SetFallbackOriginAsync(
+        string origin,
+        string? zoneId = null,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Removes the fallback origin via <c>DELETE /zones/{zone_id}/custom_hostnames/fallback_origin</c>.
+    /// </summary>
+    /// <param name="zoneId">Zone id; falls back to the configured default when null.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>A task that completes when Cloudflare has accepted the deletion.</returns>
+    /// <remarks>
+    /// Custom hostnames that relied on it have nowhere to fall back to until one is set again. Needs
+    /// <c>SSL and Certificates Write</c>.
+    /// </remarks>
+    Task DeleteFallbackOriginAsync(
+        string? zoneId = null,
+        CancellationToken cancellationToken = default);
 }
 
 /// <inheritdoc />
@@ -291,4 +344,57 @@ public sealed class CustomHostnamesService : CloudflareService, ICustomHostnames
             PerPage = parameters?.PerPage,
             Page = page,
         };
+
+    /// <inheritdoc />
+    public async Task<CustomHostnameFallbackOrigin?> GetFallbackOriginAsync(
+        string? zoneId = null,
+        CancellationToken cancellationToken = default)
+    {
+        var request = CloudflareRequest.Get(FallbackOriginPath(zoneId)).Tolerate(System.Net.HttpStatusCode.NotFound);
+        request.OperationName = "Get Custom Hostname Fallback Origin";
+
+        var response = await Transport.SendAsync<CustomHostnameFallbackOrigin>(request, cancellationToken).ConfigureAwait(false);
+        return response.Result;
+    }
+
+    /// <inheritdoc />
+    public async Task<CustomHostnameFallbackOrigin> SetFallbackOriginAsync(
+        UpdateCustomHostnameFallbackOriginRequest request,
+        string? zoneId = null,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        request.EnsureValid();
+
+        var put = CloudflareRequest.Put(FallbackOriginPath(zoneId), request);
+        put.OperationName = "Set Custom Hostname Fallback Origin";
+
+        var response = await Transport.SendAsync<CustomHostnameFallbackOrigin>(put, cancellationToken).ConfigureAwait(false);
+        return response.EnsureResult();
+    }
+
+    /// <inheritdoc />
+    public Task<CustomHostnameFallbackOrigin> SetFallbackOriginAsync(
+        string origin,
+        string? zoneId = null,
+        CancellationToken cancellationToken = default) =>
+        SetFallbackOriginAsync(
+            UpdateCustomHostnameFallbackOriginRequest.For(Require(origin, nameof(origin))),
+            zoneId,
+            cancellationToken);
+
+    /// <inheritdoc />
+    public async Task DeleteFallbackOriginAsync(
+        string? zoneId = null,
+        CancellationToken cancellationToken = default)
+    {
+        var request = CloudflareRequest.Delete(FallbackOriginPath(zoneId));
+        request.OperationName = "Delete Custom Hostname Fallback Origin";
+
+        await SendVoidAsync(request, cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>Path of the zone-wide fallback origin, which sits beside the custom hostnames themselves.</summary>
+    private string FallbackOriginPath(string? zoneId) =>
+        $"{ZonePath(ResolveZoneId(zoneId))}/custom_hostnames/fallback_origin";
 }

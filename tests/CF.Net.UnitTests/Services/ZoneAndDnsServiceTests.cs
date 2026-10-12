@@ -2685,3 +2685,347 @@ public class CustomHostnamesServiceTests
         Assert.Equal("_acme-challenge", new CustomHostnameSslValidationRecord { Cname = "_acme-challenge" }.ToString());
     }
 }
+
+public class OriginTlsComplianceModesTests
+{
+    private const string SettingPath = "/client/v4/zones/zone-5678/settings/origin_tls_compliance_modes";
+
+    private const string ModesJson = """
+        {
+          "id": "origin_tls_compliance_modes",
+          "editable": true,
+          "value": ["fips", "pqh"],
+          "modified_on": "2026-10-01T09:00:00Z",
+          "some_new_setting_field": "still-here"
+        }
+        """;
+
+    [Fact]
+    public async Task GetOriginTlsComplianceModesAsync_reads_the_constraint_auto_origin_tls_kex_works_inside()
+    {
+        using var harness = CloudflareHarness.Create();
+        harness.RespondWithResult(ModesJson);
+
+        var modes = await harness.Client.Ssl.GetOriginTlsComplianceModesAsync();
+
+        Assert.Equal(HttpMethod.Get, harness.LastRequest.Method);
+        Assert.Equal(SettingPath, harness.LastRequest.Path);
+        Assert.Equal(string.Empty, harness.LastRequest.Query);
+
+        Assert.Equal("origin_tls_compliance_modes", modes!.Id);
+        Assert.True(modes.Editable);
+        Assert.Equal(new[] { "fips", "pqh" }, modes.Value);
+        Assert.True(modes.IsConstrained);
+        Assert.Equal(2026, modes.ModifiedOn?.Year);
+        Assert.Equal("fips, pqh", modes.ToString());
+        Assert.True(modes.AdditionalData!.ContainsKey("some_new_setting_field"));
+    }
+
+    [Fact]
+    public async Task GetOriginTlsComplianceModesAsync_returns_null_when_the_zone_reports_no_result()
+    {
+        using var harness = CloudflareHarness.Create();
+        harness.RespondWithError(HttpStatusCode.NotFound, 1001, "Unknown setting");
+
+        Assert.Null(await harness.Client.Ssl.GetOriginTlsComplianceModesAsync());
+    }
+
+    [Fact]
+    public async Task ReplaceOriginTlsComplianceModesAsync_puts_the_complete_new_list()
+    {
+        using var harness = CloudflareHarness.Create();
+        harness.RespondWithResult(ModesJson);
+
+        var modes = await harness.Client.Ssl.ReplaceOriginTlsComplianceModesAsync(
+            UpdateOriginTlsComplianceModesRequest.With(
+                OriginTlsComplianceModeValues.Fips,
+                OriginTlsComplianceModeValues.PostQuantumHybrid));
+
+        Assert.Equal(HttpMethod.Put, harness.LastRequest.Method);
+        Assert.Equal(SettingPath, harness.LastRequest.Path);
+        Assert.Equal("""{"value":["fips","pqh"]}""", harness.LastRequest.Body);
+        Assert.Equal("fips, pqh", modes.ToString());
+    }
+
+    [Fact]
+    public async Task ChangeOriginTlsComplianceModesAsync_patches_the_same_bytes_because_patch_is_also_a_replace()
+    {
+        using var harness = CloudflareHarness.Create();
+        harness.RespondWithResult(ModesJson);
+        harness.RespondWithResult(ModesJson);
+
+        await harness.Client.Ssl.ChangeOriginTlsComplianceModesAsync(
+            UpdateOriginTlsComplianceModesRequest.With(OriginTlsComplianceModeValues.Fips));
+
+        Assert.Equal(HttpMethod.Patch, harness.LastRequest.Method);
+        Assert.Equal(SettingPath, harness.LastRequest.Path);
+        Assert.Equal("""{"value":["fips"]}""", harness.LastRequest.Body);
+
+        // Both verbs are documented as a full replace, not a merge, so they must send the same body.
+        await harness.Client.Ssl.ReplaceOriginTlsComplianceModesAsync(
+            UpdateOriginTlsComplianceModesRequest.With(OriginTlsComplianceModeValues.Fips));
+
+        Assert.Equal(HttpMethod.Put, harness.LastRequest.Method);
+        Assert.Equal("""{"value":["fips"]}""", harness.LastRequest.Body);
+        Assert.Equal(2, harness.RequestCount);
+    }
+
+    [Fact]
+    public async Task Clearing_the_constraint_is_an_empty_list_not_a_missing_one()
+    {
+        using var harness = CloudflareHarness.Create();
+        harness.RespondWithResult(ModesJson);
+
+        await harness.Client.Ssl.ReplaceOriginTlsComplianceModesAsync(UpdateOriginTlsComplianceModesRequest.Clear());
+        Assert.Equal("""{"value":[]}""", harness.LastRequest.Body);
+
+        // A missing list is refused locally: Cloudflare could not read it as the complete replacement.
+        await Assert.ThrowsAsync<CloudflareConfigurationException>(
+            () => harness.Client.Ssl.ChangeOriginTlsComplianceModesAsync(new UpdateOriginTlsComplianceModesRequest()));
+        await Assert.ThrowsAsync<ArgumentNullException>(
+            () => harness.Client.Ssl.ReplaceOriginTlsComplianceModesAsync(null!));
+
+        Assert.Equal(1, harness.RequestCount);
+    }
+
+    [Fact]
+    public async Task ClearOriginTlsComplianceModesAsync_deletes_the_setting_which_comes_back_without_a_value()
+    {
+        using var harness = CloudflareHarness.Create();
+        harness.RespondWithResult("""
+            {
+              "id": "origin_tls_compliance_modes",
+              "editable": true,
+              "modified_on": "2026-10-02T09:00:00Z"
+            }
+            """);
+
+        var cleared = await harness.Client.Ssl.ClearOriginTlsComplianceModesAsync();
+
+        Assert.Equal(HttpMethod.Delete, harness.LastRequest.Method);
+        Assert.Equal(SettingPath, harness.LastRequest.Path);
+        Assert.True(string.IsNullOrEmpty(harness.LastRequest.Body));
+
+        Assert.Equal("origin_tls_compliance_modes", cleared!.Id);
+        Assert.Null(cleared.Value);
+        Assert.False(cleared.IsConstrained);
+        Assert.Equal("(no constraint)", cleared.ToString());
+    }
+
+    [Fact]
+    public async Task A_mode_this_library_has_never_heard_of_survives_in_both_directions()
+    {
+        using var harness = CloudflareHarness.Create();
+        harness.RespondWithResult("""
+            { "id": "origin_tls_compliance_modes", "editable": true, "value": ["cnsa2"] }
+            """);
+        harness.RespondWithResult(ModesJson);
+
+        var modes = await harness.Client.Ssl.GetOriginTlsComplianceModesAsync();
+        Assert.Equal(new[] { "cnsa2" }, modes!.Value);
+        Assert.Equal("cnsa2", modes.ToString());
+
+        // Cloudflare says to treat unknown values as opaque strings, so sending one back is allowed too.
+        await harness.Client.Ssl.ChangeOriginTlsComplianceModesAsync(
+            UpdateOriginTlsComplianceModesRequest.With("cnsa2"));
+        Assert.Equal("""{"value":["cnsa2"]}""", harness.LastRequest.Body);
+    }
+
+    [Fact]
+    public async Task The_compliance_modes_zone_can_be_overridden_per_call()
+    {
+        using var harness = CloudflareHarness.Create();
+        harness.RespondWithResult(ModesJson);
+        harness.RespondWithResult(ModesJson);
+
+        await harness.Client.Ssl.GetOriginTlsComplianceModesAsync(zoneId: "zone-other");
+        Assert.Equal(
+            "/client/v4/zones/zone-other/settings/origin_tls_compliance_modes",
+            harness.LastRequest.Path);
+
+        await harness.Client.Ssl.ClearOriginTlsComplianceModesAsync(zoneId: "zone-other");
+        Assert.Equal(
+            "/client/v4/zones/zone-other/settings/origin_tls_compliance_modes",
+            harness.LastRequest.Path);
+    }
+
+    [Fact]
+    public void The_documented_modes_and_the_requests_describe_themselves()
+    {
+        Assert.Equal(new[] { "fips", "pqh" }, OriginTlsComplianceModeValues.All);
+        Assert.Equal("fips, pqh", UpdateOriginTlsComplianceModesRequest.With("fips", "pqh").ToString());
+        Assert.Equal("clear the constraint", UpdateOriginTlsComplianceModesRequest.Clear().ToString());
+        Assert.Equal("(no list)", new UpdateOriginTlsComplianceModesRequest().ToString());
+        Assert.Equal("(no constraint)", new OriginTlsComplianceModes().ToString());
+    }
+}
+
+public class CustomHostnameFallbackOriginTests
+{
+    private const string FallbackPath = "/client/v4/zones/zone-5678/custom_hostnames/fallback_origin";
+
+    private const string OriginJson = """
+        {
+          "origin": "fallback.example.com",
+          "status": "active",
+          "created_at": "2026-09-20T10:00:00Z",
+          "updated_at": "2026-09-21T11:00:00Z",
+          "some_new_fallback_field": 3
+        }
+        """;
+
+    [Fact]
+    public async Task GetFallbackOriginAsync_reads_the_origin_hostnames_without_their_own_fall_back_to()
+    {
+        using var harness = CloudflareHarness.Create();
+        harness.RespondWithResult(OriginJson);
+
+        var origin = await harness.Client.CustomHostnames.GetFallbackOriginAsync();
+
+        Assert.Equal(HttpMethod.Get, harness.LastRequest.Method);
+        Assert.Equal(FallbackPath, harness.LastRequest.Path);
+        Assert.Equal(string.Empty, harness.LastRequest.Query);
+
+        Assert.Equal("fallback.example.com", origin!.Origin);
+        Assert.Equal(CustomHostnameFallbackOriginStatuses.Active, origin.Status);
+        Assert.Equal(2026, origin.CreatedAt?.Year);
+        Assert.Equal(2026, origin.UpdatedAt?.Year);
+        Assert.False(origin.HasErrors);
+        Assert.Equal("fallback.example.com (active)", origin.ToString());
+        Assert.True(origin.AdditionalData!.ContainsKey("some_new_fallback_field"));
+    }
+
+    [Fact]
+    public async Task Activation_errors_are_plain_strings_inside_an_otherwise_successful_response()
+    {
+        using var harness = CloudflareHarness.Create();
+        harness.RespondWithResult("""
+            {
+              "origin": "fallback.example.com",
+              "status": "deployment_timed_out",
+              "errors": [
+                "Origin did not complete the TLS handshake",
+                "Certificate does not cover the origin hostname"
+              ]
+            }
+            """);
+
+        var origin = await harness.Client.CustomHostnames.GetFallbackOriginAsync();
+
+        Assert.True(origin!.HasErrors);
+        Assert.Equal(2, origin.Errors!.Count);
+        Assert.Equal("Origin did not complete the TLS handshake", origin.Errors[0]);
+        Assert.Equal("fallback.example.com (deployment_timed_out, 2 activation errors)", origin.ToString());
+    }
+
+    [Fact]
+    public async Task GetFallbackOriginAsync_returns_null_when_the_zone_has_none()
+    {
+        using var harness = CloudflareHarness.Create();
+        harness.RespondWithError(HttpStatusCode.NotFound, 10007, "Fallback origin not found");
+
+        Assert.Null(await harness.Client.CustomHostnames.GetFallbackOriginAsync());
+    }
+
+    [Fact]
+    public async Task SetFallbackOriginAsync_puts_the_one_field_the_body_is_allowed_to_have()
+    {
+        using var harness = CloudflareHarness.Create();
+        harness.RespondWithResult("""
+            { "origin": "fallback.example.com", "status": "pending_deployment" }
+            """);
+
+        var saved = await harness.Client.CustomHostnames.SetFallbackOriginAsync(
+            UpdateCustomHostnameFallbackOriginRequest.For("fallback.example.com"));
+
+        Assert.Equal(HttpMethod.Put, harness.LastRequest.Method);
+        Assert.Equal(FallbackPath, harness.LastRequest.Path);
+        Assert.Equal("""{"origin":"fallback.example.com"}""", harness.LastRequest.Body);
+        Assert.Equal(CustomHostnameFallbackOriginStatuses.PendingDeployment, saved.Status);
+        Assert.Equal("fallback.example.com (pending_deployment)", saved.ToString());
+    }
+
+    [Fact]
+    public async Task The_string_overload_sends_the_same_request_as_the_request_object()
+    {
+        using var harness = CloudflareHarness.Create();
+        harness.RespondWithResult(OriginJson);
+
+        await harness.Client.CustomHostnames.SetFallbackOriginAsync("fallback.example.com");
+
+        Assert.Equal(HttpMethod.Put, harness.LastRequest.Method);
+        Assert.Equal(FallbackPath, harness.LastRequest.Path);
+        Assert.Equal("""{"origin":"fallback.example.com"}""", harness.LastRequest.Body);
+    }
+
+    [Fact]
+    public async Task A_fallback_origin_without_an_origin_never_reaches_the_transport()
+    {
+        using var harness = CloudflareHarness.Create();
+
+        Assert.Throws<CloudflareConfigurationException>(
+            () => new UpdateCustomHostnameFallbackOriginRequest { Origin = "   " }.EnsureValid());
+
+        await Assert.ThrowsAsync<CloudflareConfigurationException>(
+            () => harness.Client.CustomHostnames.SetFallbackOriginAsync(new UpdateCustomHostnameFallbackOriginRequest()));
+        await Assert.ThrowsAsync<CloudflareConfigurationException>(
+            () => harness.Client.CustomHostnames.SetFallbackOriginAsync(" "));
+
+        Assert.Equal(0, harness.RequestCount);
+    }
+
+    [Fact]
+    public async Task DeleteFallbackOriginAsync_sends_a_delete_with_no_body()
+    {
+        using var harness = CloudflareHarness.Create();
+        harness.RespondWithResult("null");
+
+        await harness.Client.CustomHostnames.DeleteFallbackOriginAsync();
+
+        Assert.Equal(HttpMethod.Delete, harness.LastRequest.Method);
+        Assert.Equal(FallbackPath, harness.LastRequest.Path);
+        Assert.True(string.IsNullOrEmpty(harness.LastRequest.Body));
+    }
+
+    [Fact]
+    public async Task The_fallback_origin_zone_can_be_overridden_per_call()
+    {
+        using var harness = CloudflareHarness.Create();
+        harness.RespondWithResult(OriginJson);
+        harness.RespondWithResult("null");
+
+        await harness.Client.CustomHostnames.GetFallbackOriginAsync(zoneId: "zone-other");
+        Assert.Equal("/client/v4/zones/zone-other/custom_hostnames/fallback_origin", harness.LastRequest.Path);
+
+        await harness.Client.CustomHostnames.DeleteFallbackOriginAsync(zoneId: "zone-other");
+        Assert.Equal("/client/v4/zones/zone-other/custom_hostnames/fallback_origin", harness.LastRequest.Path);
+    }
+
+    [Fact]
+    public void The_documented_statuses_and_the_requests_describe_themselves()
+    {
+        Assert.Equal(
+            new[]
+            {
+                "initializing",
+                "pending_deployment",
+                "pending_deletion",
+                "active",
+                "deployment_timed_out",
+                "deletion_timed_out",
+            },
+            CustomHostnameFallbackOriginStatuses.All);
+
+        Assert.Equal(
+            "origin.example.com",
+            UpdateCustomHostnameFallbackOriginRequest.For("origin.example.com").ToString());
+        Assert.Equal("(no origin)", new UpdateCustomHostnameFallbackOriginRequest().ToString());
+        Assert.Equal("(no fallback origin)", new CustomHostnameFallbackOrigin().ToString());
+        Assert.Equal(
+            "fallback.example.com",
+            new CustomHostnameFallbackOrigin { Origin = "fallback.example.com" }.ToString());
+        Assert.Equal(
+            "pending_deletion",
+            new CustomHostnameFallbackOrigin { Status = "pending_deletion" }.ToString());
+    }
+}

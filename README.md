@@ -93,8 +93,8 @@ Console.WriteLine($"{zones.Count} of {zones.TotalCount} zones");
 | `client.Accounts` | `IAccountsService` | account discovery |
 | `client.Zones` | `IZonesService` | zones, activation checks, cache purge |
 | `client.DnsRecords` | `IDnsRecordsService` | DNS records, including typed SRV/LOC/MX data, zone file export and import |
-| `client.Ssl` | `ISslService` | certificate packs, Universal SSL, validation details, the two SSL enrolment settings, certificate analysis |
-| `client.CustomHostnames` | `ICustomHostnamesService` | SSL for SaaS: custom hostnames, their certificates and the challenges that validate them |
+| `client.Ssl` | `ISslService` | certificate packs, Universal SSL, validation details, the enrolment settings Cloudflare files under SSL, the origin TLS compliance modes that bound them, certificate analysis |
+| `client.CustomHostnames` | `ICustomHostnamesService` | SSL for SaaS: custom hostnames, their certificates, the challenges that validate them and the zone-wide fallback origin |
 | `client.Workers` | `IWorkersScriptsService` | scripts, module content, script settings, deployments, `workers.dev` subdomain |
 | `client.Pages` | `IPagesProjectsService` | projects, deployments, custom domains |
 | `client.D1` | `ID1DatabaseService` | databases, SQL queries, batches, backups |

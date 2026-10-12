@@ -105,6 +105,10 @@ and the two SSL enrolment settings Cloudflare serves from the zone settings path
 | `GetAutomaticSslAsync(zoneId)` | `GET …/settings/ssl_automatic_mode` | `{id, editable, modified_on, value, next_scheduled_scan?}`; `value` is `auto` (enrolled) or `custom` (not) |
 | `SetAutomaticSslAsync(mode, zoneId)` | `PATCH …/settings/ssl_automatic_mode` | body `{"value":"auto"\|"custom"}`; any other value is refused locally, because Cloudflare answers it with error 1008, "Invalid SSL/TLS encryption configuration value, only auto or custom accepted" |
 | `EnableAutomaticSslAsync(zoneId)` / `DisableAutomaticSslAsync(zoneId)` | `PATCH …/settings/ssl_automatic_mode` | the same call with `auto` / `custom` |
+| `GetOriginTlsComplianceModesAsync(zoneId)` | `GET /zones/{zone_id}/settings/origin_tls_compliance_modes` | `{id, editable, value[], modified_on}`; `null` on 404. `value` is an **array**, not the scalar `value` most zone settings use, so the generic `ZoneSetting` model would leave it in `AdditionalData` |
+| `ReplaceOriginTlsComplianceModesAsync(UpdateOriginTlsComplianceModesRequest, zoneId)` | `PUT …/settings/origin_tls_compliance_modes` | body `{"value":["fips","pqh"]}` - the complete new list. An empty list clears the constraint; a missing one is refused locally |
+| `ChangeOriginTlsComplianceModesAsync(UpdateOriginTlsComplianceModesRequest, zoneId)` | `PATCH …/settings/origin_tls_compliance_modes` | **also a full replace, not a merge** - same body, same effect, different verb |
+| `ClearOriginTlsComplianceModesAsync(zoneId)` | `DELETE …/settings/origin_tls_compliance_modes` | the delete response drops `value` and returns only `{id, editable, modified_on}` |
 | `AnalyzeCertificateAsync(AnalyzeSslCertificateRequest, zoneId)` | `POST …/ssl/analyze` | body `{certificate?, bundle_method?}` with `bundle_method` one of `ubiquitous`/`optimal`/`force`. Returns **raw `JsonElement?`** on purpose - see below |
 | `GetRecommendationAsync(zoneId)` | `GET …/ssl/recommendation` | **deprecated**, and the path is **singular** - `recommendation`, not `recommendations`. It reports the automatic-mode setting rather than a suggested encryption mode, so prefer `GetAutomaticSslAsync` |
 
@@ -178,9 +182,28 @@ would produce a model that looks like a contract and is really a guess, so `Anal
 put `geo_restrictions` in `AdditionalData` until the field names were confirmed, and they now are, so it is
 typed.
 
-⛔ The origin TLS settings that constrain Auto-Origin TLS KEX (`origin_tls_compliance_modes`,
-`origin_tls_client_auth/settings`) - a separate resource rather than part of `ssl`. SSL for SaaS custom
-hostnames are a separate resource too, and have their own section below.
+**`origin_tls_compliance_modes` is the fence Auto-Origin TLS KEX runs inside.** Each mode narrows the key
+exchanges the scan is allowed to prefer: `fips` keeps it to FIPS-approved curves, `pqh` asks for a
+post-quantum hybrid one. Several modes combine as the **intersection** of the algorithms each permits, and a
+combination whose intersection is empty is rejected rather than quietly loosened - which is a 4xx this library
+cannot predict without Cloudflare's current algorithm tables, so it does not try.
+
+**Both write verbs replace the whole list.** Cloudflare documents `PATCH` here as a full replace too, not a
+merge, so removing one mode means sending the others; `ReplaceOriginTlsComplianceModesAsync` (PUT) and
+`ChangeOriginTlsComplianceModesAsync` (PATCH) therefore send identical bytes and differ only in the verb, and
+a unit test asserts exactly that. `UpdateOriginTlsComplianceModesRequest.Clear()` sends `{"value":[]}`, which
+is how the constraint is cleared without deleting the setting.
+
+**Modes are strings, not an enum.** The schema says future modes may appear - it names `cnsa2` as an example -
+and that clients should treat unknown values as opaque strings, so `Value` is a `List<string>` and
+`OriginTlsComplianceModeValues.All` lists only the two documented today. Nothing rejects a mode this release
+has not heard of, in either direction. (Cloudflare's own description of the response's `id` calls it "the
+identifier of the caching setting", which is a copy-paste mistake in the published schema: nothing here
+caches.)
+
+⛔ `origin_tls_client_auth` - mutual TLS towards the origin, across its `hostnames`, `hostname_certificates`
+and `settings` subresources - is still unwrapped. SSL for SaaS custom hostnames are a separate resource too,
+and have their own section below.
 
 ## SSL for SaaS (custom hostnames)
 
@@ -222,8 +245,29 @@ the three sets differ and are modelled separately: `CustomHostnameCertificateAut
 certificates, so the library checks what it can - one or two pairs, each with both halves - and leaves the
 algorithm requirement to Cloudflare.
 
-⛔ `custom_hostnames/fallback_origin`, the zone-wide origin these hostnames fall back to, is the one
-subresource here still unwrapped.
+### The fallback origin
+
+`/zones/{zone_id}/custom_hostnames/fallback_origin` - one origin for the whole zone, used by every custom
+hostname that does not name a `custom_origin_server` of its own.
+
+| Method | Endpoint | Notes |
+| --- | --- | --- |
+| `GetFallbackOriginAsync(zoneId)` | `GET …/custom_hostnames/fallback_origin` | `{origin, status, created_at, updated_at, errors[]}`; `null` on 404 |
+| `SetFallbackOriginAsync(UpdateCustomHostnameFallbackOriginRequest, zoneId)` | `PUT …/custom_hostnames/fallback_origin` | body is exactly `{"origin":"fallback.example.com"}` - one field, `PUT`, nothing to merge |
+| `SetFallbackOriginAsync(origin, zoneId)` | `PUT …/custom_hostnames/fallback_origin` | the same call for the common case |
+| `DeleteFallbackOriginAsync(zoneId)` | `DELETE …/custom_hostnames/fallback_origin` | leaves hostnames without their own origin nowhere to fall back to until one is set again |
+
+**Read it back after setting it.** This response carries an `errors` list of its own, and it is **an array of
+plain strings**, not the envelope's `{code, message}` objects: activation problems Cloudflare hit while
+bringing the origin up, reported inside an otherwise successful call. A fallback origin can therefore be on
+its way to `active` and broken at the same time. `HasErrors` says which, and `status` is one of six
+(`initializing`, `pending_deployment`, `pending_deletion`, `active`, `deployment_timed_out`,
+`deletion_timed_out`). Permissions are the same `SSL and Certificates Read`/`Write` as the hostnames
+themselves.
+
+Every endpoint in this resource family is wrapped now. The one origin-side TLS resource still outstanding,
+`origin_tls_client_auth`, is noted with the SSL settings above rather than here: it is mutual TLS towards the
+origin, not part of SSL for SaaS.
 
 ## Users and accounts
 

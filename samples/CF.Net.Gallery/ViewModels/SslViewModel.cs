@@ -3,9 +3,10 @@ using CFNet.Models.Ssl;
 namespace CFNet.Gallery.ViewModels;
 
 /// <summary>
-/// SSL: certificate packs, what it takes to get one issued, Universal SSL, the two enrolment settings
-/// Cloudflare files under SSL but serves from the zone settings path, and the SSL for SaaS custom hostnames
-/// that sit beside them.
+/// SSL: certificate packs, what it takes to get one issued, Universal SSL, the enrolment settings Cloudflare
+/// files under SSL but serves from the zone settings path, the origin TLS compliance modes that constrain
+/// what Auto-Origin TLS KEX may pick, and the SSL for SaaS custom hostnames that sit beside them - including
+/// the zone-wide fallback origin they share.
 /// </summary>
 public sealed class SslViewModel : ModuleViewModelBase
 {
@@ -19,6 +20,8 @@ public sealed class SslViewModel : ModuleViewModelBase
     private string _hostnameStatus = string.Empty;
     private string _hostnamePerPage = "20";
     private string _hostnameOrigin = string.Empty;
+    private string _complianceModes = OriginTlsComplianceModeValues.Fips;
+    private string _fallbackOrigin = string.Empty;
 
     private string _listDeploy = string.Empty;
     private string _listStatus = string.Empty;
@@ -83,6 +86,15 @@ public sealed class SslViewModel : ModuleViewModelBase
         RetryHostnameValidationCommand = new RelayCommand(RetryHostnameValidationAsync);
         SetHostnameOriginCommand = new RelayCommand(SetHostnameOriginAsync);
         DeleteHostnameCommand = new RelayCommand(DeleteHostnameAsync);
+
+        GetComplianceModesCommand = new RelayCommand(GetComplianceModesAsync);
+        ReplaceComplianceModesCommand = new RelayCommand(ReplaceComplianceModesAsync);
+        ChangeComplianceModesCommand = new RelayCommand(ChangeComplianceModesAsync);
+        ClearComplianceModesCommand = new RelayCommand(ClearComplianceModesAsync);
+
+        GetFallbackOriginCommand = new RelayCommand(GetFallbackOriginAsync);
+        SetFallbackOriginCommand = new RelayCommand(SetFallbackOriginAsync);
+        DeleteFallbackOriginCommand = new RelayCommand(DeleteFallbackOriginAsync);
     }
 
     /// <inheritdoc />
@@ -90,7 +102,7 @@ public sealed class SslViewModel : ModuleViewModelBase
 
     /// <inheritdoc />
     public override string Description =>
-        "Certificate packs and how they get issued, Universal SSL, validation details, and the two enrolment settings Cloudflare serves from /zones/{zone_id}/settings.";
+        "Certificate packs and how they get issued, Universal SSL, validation details, the enrolment settings Cloudflare serves from /zones/{zone_id}/settings, the origin TLS compliance modes that bound them, and the SSL for SaaS custom hostnames with their zone-wide fallback origin.";
 
     /// <summary><c>deploy</c> values offered in the list filter; empty sends none.</summary>
     public IReadOnlyList<string> Deploys { get; } = new[]
@@ -160,6 +172,27 @@ public sealed class SslViewModel : ModuleViewModelBase
     /// <summary>Removes one, and its certificate.</summary>
     public RelayCommand DeleteHostnameCommand { get; }
 
+    /// <summary>Reads the origin TLS compliance modes.</summary>
+    public RelayCommand GetComplianceModesCommand { get; }
+
+    /// <summary>Replaces them with <c>PUT</c>.</summary>
+    public RelayCommand ReplaceComplianceModesCommand { get; }
+
+    /// <summary>Replaces them with <c>PATCH</c>, which is a full replace too.</summary>
+    public RelayCommand ChangeComplianceModesCommand { get; }
+
+    /// <summary>Clears the constraint with <c>DELETE</c>.</summary>
+    public RelayCommand ClearComplianceModesCommand { get; }
+
+    /// <summary>Reads the zone-wide fallback origin for custom hostnames.</summary>
+    public RelayCommand GetFallbackOriginCommand { get; }
+
+    /// <summary>Sets it with <c>PUT</c>.</summary>
+    public RelayCommand SetFallbackOriginCommand { get; }
+
+    /// <summary>Removes it.</summary>
+    public RelayCommand DeleteFallbackOriginCommand { get; }
+
     /// <summary>Id of the custom hostname the single-hostname calls operate on.</summary>
     public string HostnameId { get => _hostnameId; set => SetProperty(ref _hostnameId, value); }
 
@@ -183,6 +216,16 @@ public sealed class SslViewModel : ModuleViewModelBase
 
     /// <summary>Origin to route the hostname to.</summary>
     public string HostnameOrigin { get => _hostnameOrigin; set => SetProperty(ref _hostnameOrigin, value); }
+
+    /// <summary>
+    /// Compliance modes to put in force, comma separated: <c>fips</c> and <c>pqh</c> today, and Cloudflare
+    /// says to treat anything it adds later as an opaque string. Empty sends an empty list, which clears the
+    /// constraint.
+    /// </summary>
+    public string ComplianceModes { get => _complianceModes; set => SetProperty(ref _complianceModes, value); }
+
+    /// <summary>Origin hostname that custom hostnames without one of their own fall back to.</summary>
+    public string FallbackOrigin { get => _fallbackOrigin; set => SetProperty(ref _fallbackOrigin, value); }
 
     /// <summary>The validation methods a custom hostname can use - no <c>cname</c> among them.</summary>
     public IReadOnlyList<string> DcvMethods { get; } = CustomHostnameDcvMethods.All;
@@ -456,11 +499,45 @@ public sealed class SslViewModel : ModuleViewModelBase
     private Task DeleteHostnameAsync() => RunVoidAsync("Delete custom hostname", () =>
         Client.CustomHostnames.DeleteAsync(RequireHostnameId(), Zone));
 
+    private Task GetComplianceModesAsync() => RunAsync("Read origin TLS compliance modes", async () =>
+        await Client.Ssl.GetOriginTlsComplianceModesAsync(Zone));
+
+    private Task ReplaceComplianceModesAsync() => RunAsync(
+        $"Replace origin TLS compliance modes with {ComplianceModes}",
+        async () => await Client.Ssl.ReplaceOriginTlsComplianceModesAsync(Modes(), Zone));
+
+    private Task ChangeComplianceModesAsync() => RunAsync(
+        $"Change origin TLS compliance modes to {ComplianceModes}",
+        async () => await Client.Ssl.ChangeOriginTlsComplianceModesAsync(Modes(), Zone));
+
+    private Task ClearComplianceModesAsync() => RunAsync("Clear the origin TLS compliance modes", async () =>
+        await Client.Ssl.ClearOriginTlsComplianceModesAsync(Zone));
+
+    private Task GetFallbackOriginAsync() => RunAsync("Read the fallback origin", async () =>
+        await Client.CustomHostnames.GetFallbackOriginAsync(Zone));
+
+    private Task SetFallbackOriginAsync() => RunAsync($"Set the fallback origin to {FallbackOrigin}", async () =>
+        await Client.CustomHostnames.SetFallbackOriginAsync(
+            UpdateCustomHostnameFallbackOriginRequest.For(RequireFallbackOrigin()),
+            Zone));
+
+    private Task DeleteFallbackOriginAsync() => RunVoidAsync("Delete the fallback origin", () =>
+        Client.CustomHostnames.DeleteFallbackOriginAsync(Zone));
+
+    /// <summary>Turns the picker text into the complete replacement list both write verbs expect.</summary>
+    private UpdateOriginTlsComplianceModesRequest Modes() =>
+        UpdateOriginTlsComplianceModesRequest.With(
+            ComplianceModes
+                .Split(new[] { ',', ' ', ';' }, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries));
+
     private string RequireHostnameId() =>
         Blank(HostnameId) ?? throw new ArgumentException("Enter a custom hostname id - list them first.");
 
     private string RequireHostname() =>
         Blank(Hostname) ?? throw new ArgumentException("Enter the hostname to add, for example shop.customer.com.");
+
+    private string RequireFallbackOrigin() =>
+        Blank(FallbackOrigin) ?? throw new ArgumentException("Enter the origin hostname to fall back to.");
 
     private string RequirePackId() =>
         Blank(PackId) ?? throw new ArgumentException("Enter a certificate pack UUID.");

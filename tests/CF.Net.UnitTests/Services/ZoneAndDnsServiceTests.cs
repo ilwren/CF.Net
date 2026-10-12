@@ -1352,3 +1352,107 @@ public class SslCertificatePackOrderTests
         Assert.Equal(SslCertificatePackTypes.Advanced, ValidOrder().Type);
     }
 }
+
+public class SslCertificatePackUpdateTests
+{
+    private const string PackPath = "/client/v4/zones/zone-5678/ssl/certificate_packs/pack-1";
+
+    [Fact]
+    public async Task SetCloudflareBrandingAsync_patches_the_pack()
+    {
+        using var harness = CloudflareHarness.Create();
+        harness.RespondWithResult("{\"id\":\"pack-1\",\"status\":\"pending_validation\"}");
+
+        var pack = await harness.Client.Ssl.SetCloudflareBrandingAsync("pack-1", true);
+
+        Assert.Equal(HttpMethod.Patch, harness.LastRequest.Method);
+        Assert.Equal(PackPath, harness.LastRequest.Path);
+        Assert.Equal("{\"cloudflare_branding\":true}", harness.LastRequest.Body);
+        Assert.Equal("pack-1", pack.Id);
+    }
+
+    [Fact]
+    public async Task SetCloudflareBrandingAsync_can_take_branding_off_again()
+    {
+        using var harness = CloudflareHarness.Create();
+        harness.RespondWithResult("{\"id\":\"pack-1\"}");
+
+        await harness.Client.Ssl.SetCloudflareBrandingAsync("pack-1", false);
+
+        // false has to be sent explicitly: omitting the field would leave the setting alone.
+        Assert.Equal("{\"cloudflare_branding\":false}", harness.LastRequest.Body);
+    }
+
+    [Fact]
+    public async Task RestartValidationAsync_sends_an_empty_body()
+    {
+        using var harness = CloudflareHarness.Create();
+        harness.RespondWithResult("{\"id\":\"pack-1\",\"status\":\"pending_validation\"}");
+
+        var pack = await harness.Client.Ssl.RestartValidationAsync("pack-1");
+
+        Assert.Equal(HttpMethod.Patch, harness.LastRequest.Method);
+        Assert.Equal(PackPath, harness.LastRequest.Path);
+        // An empty object is how "restart validation" is spelled: cloudflare_branding is the only field
+        // this endpoint accepts, so sending nothing else is what asks for the validation restart.
+        Assert.Equal("{}", harness.LastRequest.Body);
+        Assert.Equal(SslCertificatePackStatuses.PendingValidation, pack.Status);
+    }
+
+    [Fact]
+    public async Task UpdateAsync_percent_encodes_the_pack_id()
+    {
+        using var harness = CloudflareHarness.Create();
+        harness.RespondWithResult("{\"id\":\"pack/1\"}");
+
+        await harness.Client.Ssl.UpdateAsync("pack/1", UpdateSslCertificatePackRequest.ToRestartValidation());
+
+        Assert.Contains("/ssl/certificate_packs/pack%2F1", harness.LastRequest.Uri!.OriginalString, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task UpdateAsync_needs_a_pack_id_and_a_request()
+    {
+        using var harness = CloudflareHarness.Create();
+
+        await Assert.ThrowsAsync<CloudflareConfigurationException>(
+            () => harness.Client.Ssl.UpdateAsync("  ", UpdateSslCertificatePackRequest.ToRestartValidation()));
+        await Assert.ThrowsAsync<ArgumentNullException>(
+            () => harness.Client.Ssl.UpdateAsync("pack-1", null!));
+        await Assert.ThrowsAsync<CloudflareConfigurationException>(
+            () => harness.Client.Ssl.RestartValidationAsync(""));
+
+        Assert.Equal(0, harness.RequestCount);
+    }
+
+    [Fact]
+    public async Task An_update_without_a_result_payload_raises()
+    {
+        using var harness = CloudflareHarness.Create();
+        harness.RespondWithResult("null");
+
+        var exception = await Assert.ThrowsAsync<CloudflareApiException>(
+            () => harness.Client.Ssl.SetCloudflareBrandingAsync("pack-1", true));
+
+        Assert.Contains("without a result payload", exception.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void The_update_request_knows_which_of_the_two_operations_it_is()
+    {
+        Assert.True(UpdateSslCertificatePackRequest.ToRestartValidation().IsEmpty);
+        Assert.False(UpdateSslCertificatePackRequest.ForCloudflareBranding(false).IsEmpty);
+        Assert.Equal("restart validation", UpdateSslCertificatePackRequest.ToRestartValidation().ToString());
+        Assert.Equal("cloudflare_branding=True", UpdateSslCertificatePackRequest.ForCloudflareBranding(true).ToString());
+    }
+
+    [Fact]
+    public void The_status_constants_cover_the_issuance_steps()
+    {
+        Assert.Equal("pending_validation", SslCertificatePackStatuses.PendingValidation);
+        Assert.Equal("validation_timed_out", SslCertificatePackStatuses.ValidationTimedOut);
+        Assert.Equal("pending_issuance", SslCertificatePackStatuses.PendingIssuance);
+        Assert.Equal("pending_deployment", SslCertificatePackStatuses.PendingDeployment);
+        Assert.Equal("backup_issued", SslCertificatePackStatuses.BackupIssued);
+    }
+}

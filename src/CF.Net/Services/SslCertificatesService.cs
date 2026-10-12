@@ -74,6 +74,55 @@ public interface ISslCertificatesService
         string? zoneId = null,
         CancellationToken cancellationToken = default);
 
+    /// <summary>
+    /// Changes an Advanced Certificate Manager pack via
+    /// <c>PATCH /zones/{zone_id}/ssl/certificate_packs/{certificate_pack_id}</c>.
+    /// </summary>
+    /// <param name="certificatePackId">The pack id.</param>
+    /// <param name="request">
+    /// What to change. <see cref="UpdateSslCertificatePackRequest.ForCloudflareBranding"/> sets branding;
+    /// <see cref="UpdateSslCertificatePackRequest.ToRestartValidation"/> sends an empty body, which is how
+    /// validation is restarted.
+    /// </param>
+    /// <param name="zoneId">Zone id; falls back to the configured default when null.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>The pack as Cloudflare reports it after the change.</returns>
+    /// <remarks>Needs <c>SSL and Certificates Write</c>.</remarks>
+    Task<SslCertificatePack> UpdateAsync(
+        string certificatePackId,
+        UpdateSslCertificatePackRequest request,
+        string? zoneId = null,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>Adds or removes Cloudflare branding on a pack.</summary>
+    /// <param name="certificatePackId">The pack id.</param>
+    /// <param name="enabled">
+    /// When true, Cloudflare adds a <c>sni.cloudflaressl.com</c> subdomain as the certificate's common name.
+    /// </param>
+    /// <param name="zoneId">Zone id; falls back to the configured default when null.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    Task<SslCertificatePack> SetCloudflareBrandingAsync(
+        string certificatePackId,
+        bool enabled,
+        string? zoneId = null,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>Restarts domain control validation on a pack whose validation timed out.</summary>
+    /// <param name="certificatePackId">The pack id.</param>
+    /// <param name="zoneId">Zone id; falls back to the configured default when null.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>The pack, usually back in <c>pending_validation</c>.</returns>
+    /// <remarks>
+    /// Sends an empty body, which is what Cloudflare reads as "restart validation". It is only a validation
+    /// operation for a pack in <see cref="SslCertificatePackStatuses.ValidationTimedOut"/>; on any other
+    /// pack Cloudflare rejects it rather than silently re-issuing. The challenge still has to be answered
+    /// afterwards - restarting only starts the clock again.
+    /// </remarks>
+    Task<SslCertificatePack> RestartValidationAsync(
+        string certificatePackId,
+        string? zoneId = null,
+        CancellationToken cancellationToken = default);
+
     /// <summary>Deletes an Advanced Certificate Manager pack via <c>DELETE /zones/{zone_id}/ssl/certificate_packs/{certificate_pack_id}</c>.</summary>
     /// <param name="certificatePackId">The pack id.</param>
     /// <param name="zoneId">Zone id; falls back to the configured default when null.</param>
@@ -180,6 +229,42 @@ public sealed class SslCertificatesService : CloudflareService, ISslCertificates
         var response = await Transport.SendAsync<SslCertificatePack>(httpRequest, cancellationToken).ConfigureAwait(false);
         return response.EnsureResult();
     }
+
+    /// <inheritdoc />
+    public async Task<SslCertificatePack> UpdateAsync(
+        string certificatePackId,
+        UpdateSslCertificatePackRequest request,
+        string? zoneId = null,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+
+        var zone = ResolveZoneId(zoneId);
+        var id = Require(certificatePackId, nameof(certificatePackId));
+
+        var httpRequest = CloudflareRequest.Patch(
+            $"{ZonePath(zone)}/ssl/certificate_packs/{CloudflareUrl.EncodeSegment(id)}",
+            request);
+        httpRequest.OperationName = request.IsEmpty ? "Restart SSL Certificate Pack Validation" : "Update SSL Certificate Pack";
+
+        var response = await Transport.SendAsync<SslCertificatePack>(httpRequest, cancellationToken).ConfigureAwait(false);
+        return response.EnsureResult();
+    }
+
+    /// <inheritdoc />
+    public Task<SslCertificatePack> SetCloudflareBrandingAsync(
+        string certificatePackId,
+        bool enabled,
+        string? zoneId = null,
+        CancellationToken cancellationToken = default) =>
+        UpdateAsync(certificatePackId, UpdateSslCertificatePackRequest.ForCloudflareBranding(enabled), zoneId, cancellationToken);
+
+    /// <inheritdoc />
+    public Task<SslCertificatePack> RestartValidationAsync(
+        string certificatePackId,
+        string? zoneId = null,
+        CancellationToken cancellationToken = default) =>
+        UpdateAsync(certificatePackId, UpdateSslCertificatePackRequest.ToRestartValidation(), zoneId, cancellationToken);
 
     /// <inheritdoc />
     public async Task<string?> DeleteAsync(

@@ -89,6 +89,9 @@ through `DnsRecord.Data` and `DnsRecord.GetData<T>()`.
 | `ListAllAsync(...)` | `GET …/ssl/certificate_packs` | walks the pages, keeps `deploy`/`status`/`per_page` on every call, and stops on a short page when `result_info` is absent |
 | `GetAsync(certificatePackId, zoneId)` | `GET …/ssl/certificate_packs/{certificate_pack_id}` | `null` on 404. A zone the token cannot see is answered with 403 (9109 unknown zone, 10000 out of scope) and raises, because that is a scoping problem, not a missing pack |
 | `OrderAsync(OrderSslCertificatePackRequest, zoneId)` | `POST …/ssl/certificate_packs/order` | note the `/order` suffix - posting to the collection itself is not the endpoint. Body `{type:"advanced", hosts[], validation_method, validity_days, certificate_authority, cloudflare_branding?}`, every field checked locally first |
+| `UpdateAsync(certificatePackId, UpdateSslCertificatePackRequest, zoneId)` | `PATCH …/ssl/certificate_packs/{certificate_pack_id}` | one endpoint, two unrelated operations: `cloudflare_branding` in the body changes branding, an **empty body** restarts validation |
+| `SetCloudflareBrandingAsync(certificatePackId, enabled, zoneId)` | `PATCH …/certificate_packs/{certificate_pack_id}` | sends `{"cloudflare_branding":true|false}` - `false` is sent explicitly, because omitting the field would leave the setting alone |
+| `RestartValidationAsync(certificatePackId, zoneId)` | `PATCH …/certificate_packs/{certificate_pack_id}` | sends `{}`; only a validation operation for a pack in `validation_timed_out`, and the challenge still has to be answered afterwards |
 | `DeleteAsync(certificatePackId, zoneId)` | `DELETE …/ssl/certificate_packs/{certificate_pack_id}` | Advanced Certificate Manager packs only; returns the `id` Cloudflare echoes back |
 
 Permissions are `SSL and Certificates Read` to list and read, `SSL and Certificates Write` to delete.
@@ -112,10 +115,12 @@ until then. `validity_days` accepts 14, 30, 90 and 365 (730, 1095 and 5475 belon
 `ssl_com`, and `type` is always `advanced`, which is the only value the endpoint defines. Anything this
 release does not model can still be sent through the request's `AdditionalData`.
 
-⛔ Restarting validation or changing branding (`PATCH …/certificate_packs/{certificate_pack_id}`), the quota
-(`GET …/certificate_packs/quota`), universal SSL settings (`/zones/{zone_id}/ssl/universal/settings`), DCV
-delegation and validation method (`/zones/{zone_id}/ssl/verification`), auto-origin TLS KEX and the SSL/TLS
-recommendation.
+`SslCertificatePackStatuses` also names `pending_issuance` and `pending_deployment`, the two steps between an
+answered challenge and a certificate being served.
+
+⛔ The quota (`GET …/certificate_packs/quota`), universal SSL settings
+(`/zones/{zone_id}/ssl/universal/settings`), DCV delegation and validation method
+(`/zones/{zone_id}/ssl/verification`), auto-origin TLS KEX and the SSL/TLS recommendation.
 
 ## Users and accounts
 

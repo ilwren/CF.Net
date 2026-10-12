@@ -92,6 +92,12 @@ public static class SslCertificatePackStatuses
     /// <summary>Waiting for the domain control validation to be answered.</summary>
     public const string PendingValidation = "pending_validation";
 
+    /// <summary>Validated and waiting for the authority to issue the certificate.</summary>
+    public const string PendingIssuance = "pending_issuance";
+
+    /// <summary>Issued and waiting to be deployed to the edge.</summary>
+    public const string PendingDeployment = "pending_deployment";
+
     /// <summary>Validation was never answered in time; restarting it is what the PATCH endpoint is for.</summary>
     public const string ValidationTimedOut = "validation_timed_out";
 
@@ -356,6 +362,46 @@ public static class SslCertificatePackValidityDays
 
     /// <summary>Every value Cloudflare accepts, shortest first.</summary>
     public static readonly IReadOnlyList<int> All = new[] { Fourteen, Thirty, Ninety, OneYear };
+}
+
+/// <summary>
+/// Body of <c>PATCH /zones/{zone_id}/ssl/certificate_packs/{certificate_pack_id}</c>.
+/// </summary>
+/// <remarks>
+/// The endpoint does two unrelated things and the body decides which. Sending
+/// <see cref="CloudflareBranding"/> adds or removes Cloudflare branding (a <c>sni.cloudflaressl.com</c>
+/// subdomain as the common name); sending nothing at all restarts validation, which Cloudflare only
+/// performs for a pack in <see cref="SslCertificatePackStatuses.ValidationTimedOut"/>. That is the whole
+/// schema - <c>cloudflare_branding</c> is the only field this PATCH accepts - so anything else has to go
+/// through <see cref="AdditionalData"/>.
+/// </remarks>
+public sealed class UpdateSslCertificatePackRequest
+{
+    /// <summary>Creates the body that turns Cloudflare branding on or off.</summary>
+    /// <param name="enabled">Whether the pack should carry Cloudflare branding.</param>
+    public static UpdateSslCertificatePackRequest ForCloudflareBranding(bool enabled) =>
+        new() { CloudflareBranding = enabled };
+
+    /// <summary>Creates the empty body that asks Cloudflare to restart validation.</summary>
+    public static UpdateSslCertificatePackRequest ToRestartValidation() => new();
+
+    /// <summary>Whether to add Cloudflare branding; <c>null</c> leaves it alone.</summary>
+    [JsonPropertyName("cloudflare_branding")]
+    public bool? CloudflareBranding { get; set; }
+
+    /// <summary>Anything this release does not model yet, serialised alongside the property above.</summary>
+    [JsonExtensionData]
+    public IDictionary<string, JsonElement>? AdditionalData { get; set; }
+
+    /// <summary>
+    /// True when the body carries nothing, which is how a validation restart is spelled.
+    /// </summary>
+    [JsonIgnore]
+    public bool IsEmpty => CloudflareBranding is null && AdditionalData is not { Count: > 0 };
+
+    /// <inheritdoc />
+    public override string ToString() =>
+        CloudflareBranding is { } branding ? $"cloudflare_branding={branding}" : "restart validation";
 }
 
 /// <summary>Query parameters of <c>GET /zones/{zone_id}/ssl/certificate_packs</c>.</summary>

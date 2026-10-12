@@ -391,6 +391,16 @@ you get the same `CloudflarePage<R2Bucket>` as everywhere else. Bucket names are
 (3–63 characters, lowercase letters/digits/single hyphens, must start and end alphanumeric, no
 `xn--` prefix).
 
+Changing a bucket's default storage class is a `PATCH` that carries the class in the
+`cf-r2-storage-class` header — that endpoint takes no request body, which is why
+`UpdateBucketAsync` accepts the class as an argument rather than a request object.
+
+Everything the v4 API does not cover lives on R2's S3-compatible endpoint, bucket CORS rules
+(`PutBucketCors` / `GetBucketCors`) above all. `CloudflareDefaults.R2.S3Endpoint(accountId)` builds
+`https://{account_id}.r2.cloudflarestorage.com` for you to point an S3 SDK or the AWS CLI at; it
+authenticates with AWS Signature Version 4 and the R2 access keys from the dashboard, not with your
+Cloudflare API token, so CF.Net builds the URL but does not sign requests for it.
+
 ## 11. Handling failures
 
 ```csharp

@@ -10,11 +10,9 @@ namespace CFNet.Services;
 /// </summary>
 /// <remarks>
 /// Listing and reading need the <c>SSL and Certificates Read</c> permission (or <c>Write</c>); ordering,
-/// changing and deleting packs need <c>SSL and Certificates Write</c>. Not wrapped by this release: the
-/// certificate pack quota (<c>GET …/certificate_packs/quota</c>, whose result the published index only
-/// describes as <c>{ advanced }</c>), DCV delegation and validation method
-/// (<c>/zones/{zone_id}/ssl/verification</c>), auto-origin TLS KEX, automatic SSL/TLS enrolment and the
-/// SSL/TLS recommendation.
+/// changing and deleting packs need <c>SSL and Certificates Write</c>. Not wrapped by this release: DCV
+/// delegation and validation method (<c>/zones/{zone_id}/ssl/verification</c>), auto-origin TLS KEX,
+/// automatic SSL/TLS enrolment and the SSL/TLS recommendation.
 /// </remarks>
 public interface ISslService
 {
@@ -121,6 +119,18 @@ public interface ISslService
     /// </remarks>
     Task<SslCertificatePack> RestartValidationAsync(
         string certificatePackId,
+        string? zoneId = null,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>Reads the certificate pack quota via <c>GET /zones/{zone_id}/ssl/certificate_packs/quota</c>.</summary>
+    /// <param name="zoneId">Zone id; falls back to the configured default when null.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>How many advanced packs are allocated and used, plus <see cref="SslCertificatePackQuota.Remaining"/>.</returns>
+    /// <remarks>
+    /// Worth calling before <see cref="OrderAsync"/>: ordering past the quota fails, and the quota is the
+    /// only place Cloudflare reports how much room is left.
+    /// </remarks>
+    Task<SslCertificatePackQuota> GetQuotaAsync(
         string? zoneId = null,
         CancellationToken cancellationToken = default);
 
@@ -292,6 +302,19 @@ public sealed class SslService : CloudflareService, ISslService
         string? zoneId = null,
         CancellationToken cancellationToken = default) =>
         UpdateAsync(certificatePackId, UpdateSslCertificatePackRequest.ToRestartValidation(), zoneId, cancellationToken);
+
+    /// <inheritdoc />
+    public async Task<SslCertificatePackQuota> GetQuotaAsync(
+        string? zoneId = null,
+        CancellationToken cancellationToken = default)
+    {
+        var zone = ResolveZoneId(zoneId);
+        var request = CloudflareRequest.Get($"{ZonePath(zone)}/ssl/certificate_packs/quota");
+        request.OperationName = "Get SSL Certificate Pack Quota";
+
+        var response = await Transport.SendAsync<SslCertificatePackQuota>(request, cancellationToken).ConfigureAwait(false);
+        return response.EnsureResult();
+    }
 
     /// <inheritdoc />
     public async Task<UniversalSslSettings> GetUniversalSettingsAsync(

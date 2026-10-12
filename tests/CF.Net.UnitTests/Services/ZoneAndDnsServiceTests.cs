@@ -1547,3 +1547,166 @@ public class UniversalSslSettingsTests
         Assert.Equal(2, harness.RequestCount);
     }
 }
+
+public class SslCertificatePackQuotaTests
+{
+    private const string QuotaPath = "/client/v4/zones/zone-5678/ssl/certificate_packs/quota";
+
+    [Fact]
+    public async Task GetQuotaAsync_reads_the_advanced_certificate_quota()
+    {
+        using var harness = CloudflareHarness.Create();
+        harness.RespondWithResult("{\"advanced\":{\"allocated\":10,\"used\":3}}");
+
+        var quota = await harness.Client.Ssl.GetQuotaAsync();
+
+        Assert.Equal(HttpMethod.Get, harness.LastRequest.Method);
+        Assert.Equal(QuotaPath, harness.LastRequest.Path);
+        Assert.Equal(10, quota.Advanced!.Allocated);
+        Assert.Equal(3, quota.Advanced.Used);
+        Assert.Equal(7, quota.Remaining);
+        Assert.Equal("advanced 3/10", quota.ToString());
+        Assert.Equal("3/10", quota.Advanced.ToString());
+    }
+
+    [Fact]
+    public async Task GetQuotaAsync_reports_no_quota_when_the_zone_has_none()
+    {
+        using var harness = CloudflareHarness.Create();
+        harness.RespondWithResult("{}");
+
+        var quota = await harness.Client.Ssl.GetQuotaAsync();
+
+        Assert.Null(quota.Advanced);
+        Assert.Null(quota.Remaining);
+        Assert.Equal("no quota reported", quota.ToString());
+        Assert.Equal("0/0", new SslAdvancedCertificateQuota().ToString());
+    }
+
+    [Fact]
+    public async Task Remaining_needs_both_halves_of_the_quota()
+    {
+        using var harness = CloudflareHarness.Create();
+        harness
+            .RespondWithResult("{\"advanced\":{\"allocated\":10}}")
+            .RespondWithResult("{\"advanced\":{\"used\":4}}");
+
+        Assert.Null((await harness.Client.Ssl.GetQuotaAsync()).Remaining);
+        Assert.Null((await harness.Client.Ssl.GetQuotaAsync()).Remaining);
+    }
+
+    [Fact]
+    public async Task GetQuotaAsync_honours_an_explicit_zone_id()
+    {
+        using var harness = CloudflareHarness.Create();
+        harness.RespondWithResult("{\"advanced\":{\"allocated\":1,\"used\":1}}");
+
+        var quota = await harness.Client.Ssl.GetQuotaAsync("zone-other");
+
+        Assert.Equal("/client/v4/zones/zone-other/ssl/certificate_packs/quota", harness.LastRequest.Path);
+        Assert.Equal(0, quota.Remaining);
+    }
+
+    [Fact]
+    public async Task A_quota_without_a_result_payload_raises()
+    {
+        using var harness = CloudflareHarness.Create();
+        harness.RespondWithResult("null");
+
+        var exception = await Assert.ThrowsAsync<CloudflareApiException>(() => harness.Client.Ssl.GetQuotaAsync());
+
+        Assert.Contains("without a result payload", exception.Message, StringComparison.Ordinal);
+    }
+}
+
+public class SslCertificateValidationTests
+{
+    private const string PackJson =
+        """
+        {
+          "id": "pack-1",
+          "hosts": ["example.com", "*.example.com"],
+          "status": "pending_validation",
+          "type": "advanced",
+          "certificate_authority": "lets_encrypt",
+          "validation_method": "txt",
+          "validity_days": 90,
+          "created_on": "2026-05-05T13:00:15Z",
+          "primary_certificate": "cert-1",
+          "validation_records": [
+            {
+              "txt_name": "_acme-challenge.example.com",
+              "txt_value": "ca3-abcdef",
+              "cname": "_acme-challenge.example.com",
+              "cname_target": "dcv.cloudflare.com",
+              "emails": ["admin@example.com"],
+              "status": "pending",
+              "http_url": "http://example.com/.well-known/pki-validation/x.txt"
+            }
+          ],
+          "validation_errors": [{"message": "DNS record missing for example.com"}]
+        }
+        """;
+
+    [Fact]
+    public async Task A_pack_carries_everything_needed_to_answer_the_challenge()
+    {
+        using var harness = CloudflareHarness.Create();
+        harness.RespondWithResult(PackJson);
+
+        var pack = await harness.Client.Ssl.GetAsync("pack-1");
+
+        Assert.Equal(SslValidationMethods.Txt, pack!.ValidationMethod);
+        Assert.Equal(90, pack.ValidityDays);
+        Assert.Equal(new DateTimeOffset(2026, 5, 5, 13, 0, 15, TimeSpan.Zero), pack.CreatedOn);
+        Assert.Equal("cert-1", pack.PrimaryCertificate);
+
+        var record = Assert.Single(pack.ValidationRecords!);
+        Assert.Equal("_acme-challenge.example.com", record.TxtName);
+        Assert.Equal("ca3-abcdef", record.TxtValue);
+        Assert.Equal("_acme-challenge.example.com", record.Cname);
+        Assert.Equal("dcv.cloudflare.com", record.CnameTarget);
+        Assert.Equal(new[] { "admin@example.com" }, record.Emails);
+        Assert.Equal("pending", record.Status);
+        Assert.Equal("_acme-challenge.example.com", record.ToString());
+        // The HTTP challenge detail is not modelled, so it survives in the extension data.
+        Assert.Contains("http_url", record.AdditionalData!.Keys, StringComparer.Ordinal);
+
+        var error = Assert.Single(pack.ValidationErrors!);
+        Assert.Equal("DNS record missing for example.com", error.Message);
+        Assert.Equal("DNS record missing for example.com", error.ToString());
+    }
+
+    [Fact]
+    public async Task The_txt_challenge_can_be_handed_straight_to_the_dns_service()
+    {
+        using var harness = CloudflareHarness.Create();
+        harness
+            .RespondWithResult(PackJson)
+            .RespondWithResult("{\"id\":\"rec-1\",\"type\":\"TXT\",\"name\":\"_acme-challenge.example.com\"}");
+
+        var pack = await harness.Client.Ssl.GetAsync("pack-1");
+        var record = Assert.Single(pack!.ValidationRecords!);
+
+        await harness.Client.DnsRecords.CreateTxtRecordAsync(record.TxtName!, record.TxtValue!);
+
+        Assert.Equal("/client/v4/zones/zone-5678/dns_records", harness.LastRequest.Path);
+        Assert.Contains("_acme-challenge.example.com", harness.LastRequest.Body, StringComparison.Ordinal);
+        Assert.Contains("ca3-abcdef", harness.LastRequest.Body, StringComparison.Ordinal);
+        Assert.Contains("\"TXT\"", harness.LastRequest.Body, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task A_pack_with_no_validation_details_yet_reads_as_empty()
+    {
+        using var harness = CloudflareHarness.Create();
+        harness.RespondWithResult("{\"id\":\"pack-2\",\"status\":\"initializing\"}");
+
+        var pack = await harness.Client.Ssl.GetAsync("pack-2");
+
+        Assert.Null(pack!.ValidationRecords);
+        Assert.Null(pack.ValidationErrors);
+        Assert.Null(pack.PrimaryCertificate);
+        Assert.Null(pack.ValidityDays);
+    }
+}

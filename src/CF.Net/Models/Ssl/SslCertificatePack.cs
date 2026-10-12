@@ -67,6 +67,37 @@ public sealed class SslCertificatePack
     [JsonPropertyName("uploaded_on")]
     public DateTimeOffset? UploadedOn { get; set; }
 
+    /// <summary>When the pack was ordered.</summary>
+    [JsonPropertyName("created_on")]
+    public DateTimeOffset? CreatedOn { get; set; }
+
+    /// <summary>How long the certificate is valid for, in days.</summary>
+    [JsonPropertyName("validity_days")]
+    public int? ValidityDays { get; set; }
+
+    /// <summary>The validation method selected for the order: <c>txt</c>, <c>http</c> or <c>email</c>.</summary>
+    [JsonPropertyName("validation_method")]
+    public string? ValidationMethod { get; set; }
+
+    /// <summary>Identifier of the primary certificate in the pack.</summary>
+    /// <remarks>
+    /// The published schema types this as a string. Older API responses returned an index instead, so a
+    /// number here is a Cloudflare-side change rather than something this library can paper over.
+    /// </remarks>
+    [JsonPropertyName("primary_certificate")]
+    public string? PrimaryCertificate { get; set; }
+
+    /// <summary>
+    /// What has to be published for the authority to validate the hosts - a TXT record, a CNAME for DCV
+    /// delegation, or the addresses an e-mail challenge would go to. Empty until the order exists.
+    /// </summary>
+    [JsonPropertyName("validation_records")]
+    public List<SslValidationRecord>? ValidationRecords { get; set; }
+
+    /// <summary>Domain validation errors the certificate authority has reported.</summary>
+    [JsonPropertyName("validation_errors")]
+    public List<SslValidationError>? ValidationErrors { get; set; }
+
     /// <summary>Captures any field Cloudflare adds in the future.</summary>
     [JsonExtensionData]
     public IDictionary<string, JsonElement>? AdditionalData { get; set; }
@@ -402,6 +433,112 @@ public sealed class UpdateSslCertificatePackRequest
     /// <inheritdoc />
     public override string ToString() =>
         CloudflareBranding is { } branding ? $"cloudflare_branding={branding}" : "restart validation";
+}
+
+/// <summary>
+/// What a certificate authority wants to see before it validates a hostname, from a pack's
+/// <c>validation_records</c>.
+/// </summary>
+/// <remarks>
+/// Which of these are populated depends on the pack's validation method: a <c>txt</c> order carries
+/// <see cref="TxtName"/> and <see cref="TxtValue"/>, a <c>cname</c> order (DCV delegation) carries
+/// <see cref="Cname"/> and <see cref="CnameTarget"/>, and an <c>email</c> order carries
+/// <see cref="Emails"/>. This is exactly what <see cref="Services.IDnsRecordsService.CreateTxtRecordAsync"/>
+/// needs to answer a TXT challenge, so the two services are meant to be used together.
+/// </remarks>
+public sealed class SslValidationRecord
+{
+    /// <summary>The CNAME record hostname for DCV delegation.</summary>
+    [JsonPropertyName("cname")]
+    public string? Cname { get; set; }
+
+    /// <summary>The CNAME record target value for DCV delegation.</summary>
+    [JsonPropertyName("cname_target")]
+    public string? CnameTarget { get; set; }
+
+    /// <summary>The addresses the certificate authority will use to complete domain validation.</summary>
+    [JsonPropertyName("emails")]
+    public List<string>? Emails { get; set; }
+
+    /// <summary>The hostname the authority checks for a TXT record during domain validation.</summary>
+    [JsonPropertyName("txt_name")]
+    public string? TxtName { get; set; }
+
+    /// <summary>The TXT record the authority will check during domain validation.</summary>
+    [JsonPropertyName("txt_value")]
+    public string? TxtValue { get; set; }
+
+    /// <summary>Status of this validation record.</summary>
+    [JsonPropertyName("status")]
+    public string? Status { get; set; }
+
+    /// <summary>
+    /// Captures the rest - the HTTP challenge details and anything Cloudflare adds - rather than guessing
+    /// at field names this release has not seen documented.
+    /// </summary>
+    [JsonExtensionData]
+    public IDictionary<string, JsonElement>? AdditionalData { get; set; }
+
+    /// <inheritdoc />
+    public override string ToString() => TxtName ?? Cname ?? Status ?? string.Empty;
+}
+
+/// <summary>A domain validation error the certificate authority reported.</summary>
+public sealed class SslValidationError
+{
+    /// <summary>A domain validation error.</summary>
+    [JsonPropertyName("message")]
+    public string? Message { get; set; }
+
+    /// <summary>Captures any field Cloudflare adds in the future.</summary>
+    [JsonExtensionData]
+    public IDictionary<string, JsonElement>? AdditionalData { get; set; }
+
+    /// <inheritdoc />
+    public override string ToString() => Message ?? string.Empty;
+}
+
+/// <summary>
+/// The <c>result</c> of <c>GET /zones/{zone_id}/ssl/certificate_packs/quota</c>: how many advanced
+/// certificate packs this zone may have, and how many it has.
+/// </summary>
+public sealed class SslCertificatePackQuota
+{
+    /// <summary>The Advanced Certificate Manager part of the quota.</summary>
+    [JsonPropertyName("advanced")]
+    public SslAdvancedCertificateQuota? Advanced { get; set; }
+
+    /// <summary>Captures any field Cloudflare adds in the future.</summary>
+    [JsonExtensionData]
+    public IDictionary<string, JsonElement>? AdditionalData { get; set; }
+
+    /// <summary>How many more advanced packs may be ordered, or <c>null</c> when Cloudflare did not say.</summary>
+    [JsonIgnore]
+    public int? Remaining =>
+        Advanced?.Allocated is { } allocated && Advanced?.Used is { } used ? allocated - used : null;
+
+    /// <inheritdoc />
+    public override string ToString() =>
+        Advanced is { } advanced ? $"advanced {advanced.Used ?? 0}/{advanced.Allocated ?? 0}" : "no quota reported";
+}
+
+/// <summary>The allocated and used halves of a certificate quota.</summary>
+public sealed class SslAdvancedCertificateQuota
+{
+    /// <summary>Quantity allocated.</summary>
+    [JsonPropertyName("allocated")]
+    public int? Allocated { get; set; }
+
+    /// <summary>Quantity used.</summary>
+    [JsonPropertyName("used")]
+    public int? Used { get; set; }
+
+    /// <summary>Captures any field Cloudflare adds in the future.</summary>
+    [JsonExtensionData]
+    public IDictionary<string, JsonElement>? AdditionalData { get; set; }
+
+    /// <inheritdoc />
+    public override string ToString() => $"{Used ?? 0}/{Allocated ?? 0}";
 }
 
 /// <summary>Query parameters of <c>GET /zones/{zone_id}/ssl/certificate_packs</c>.</summary>

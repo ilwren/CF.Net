@@ -93,6 +93,7 @@ through `DnsRecord.Data` and `DnsRecord.GetData<T>()`.
 | `SetCloudflareBrandingAsync(certificatePackId, enabled, zoneId)` | `PATCH …/certificate_packs/{certificate_pack_id}` | sends `{"cloudflare_branding":true|false}` - `false` is sent explicitly, because omitting the field would leave the setting alone |
 | `RestartValidationAsync(certificatePackId, zoneId)` | `PATCH …/certificate_packs/{certificate_pack_id}` | sends `{}`; only a validation operation for a pack in `validation_timed_out`, and the challenge still has to be answered afterwards |
 | `DeleteAsync(certificatePackId, zoneId)` | `DELETE …/ssl/certificate_packs/{certificate_pack_id}` | Advanced Certificate Manager packs only; returns the `id` Cloudflare echoes back |
+| `GetQuotaAsync(zoneId)` | `GET …/ssl/certificate_packs/quota` | `{"advanced":{"allocated":…,"used":…}}`, plus `Remaining`; worth calling before ordering, since ordering past the quota fails |
 | `GetUniversalSettingsAsync(zoneId)` | `GET /zones/{zone_id}/ssl/universal/settings` | one boolean, `enabled` |
 | `SetUniversalSslAsync(enabled, zoneId)` | `PATCH …/ssl/universal/settings` | body `{"enabled":true|false}` - `false` is sent explicitly, because an empty PATCH would leave the setting alone |
 
@@ -127,10 +128,14 @@ Opportunistic Encryption, Onion Routing and any page rule redirecting to HTTPS t
 instead of a fallback to HTTP. `UniversalSslSettings` keeps `Enabled` nullable and reports `unknown` when
 Cloudflare omits it, so "off" and "not answered" are never the same thing.
 
-⛔ The quota (`GET …/certificate_packs/quota` - the published index describes its result only as
-`{ advanced }`, so the inner shape is not documented where this library can check it), DCV delegation and
-validation method (`/zones/{zone_id}/ssl/verification`), auto-origin TLS KEX, automatic SSL/TLS enrolment and
-the SSL/TLS recommendation.
+A pack also carries what it takes to finish validating it: `validation_method`, `validation_records` (a
+`txt_name`/`txt_value` pair for a TXT challenge, a `cname`/`cname_target` pair for DCV delegation, `emails`
+for an e-mail challenge, plus that record's `status`) and `validation_errors`, alongside `created_on`,
+`validity_days` and `primary_certificate`. The TXT pair is exactly what `client.DnsRecords.CreateTxtRecordAsync`
+takes, so answering a challenge is two calls in this library and no copy-pasting from the dashboard.
+
+⛔ DCV delegation and validation method (`/zones/{zone_id}/ssl/verification`), auto-origin TLS KEX, automatic
+SSL/TLS enrolment and the SSL/TLS recommendation.
 
 ## Users and accounts
 

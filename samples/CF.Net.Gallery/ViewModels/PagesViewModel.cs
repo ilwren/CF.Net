@@ -13,6 +13,7 @@ public sealed class PagesViewModel : ModuleViewModelBase
     private string _productionBranch = "main";
     private string _deploymentId = string.Empty;
     private string _deploymentBranch = string.Empty;
+    private string _deploymentEnv = string.Empty;
     private string _domainName = string.Empty;
     private bool _domainVerified = true;
 
@@ -31,6 +32,12 @@ public sealed class PagesViewModel : ModuleViewModelBase
         GetDeploymentCommand = new RelayCommand(GetDeploymentAsync);
         CreateDeploymentCommand = new RelayCommand(CreateDeploymentAsync);
         DeleteDeploymentCommand = new RelayCommand(DeleteDeploymentAsync);
+        RetryDeploymentCommand = new RelayCommand(RetryDeploymentAsync);
+        RollbackDeploymentCommand = new RelayCommand(RollbackDeploymentAsync);
+        GetDeploymentLogsCommand = new RelayCommand(GetDeploymentLogsAsync);
+        GetUploadTokenCommand = new RelayCommand(GetUploadTokenAsync);
+        PurgeBuildCacheCommand = new RelayCommand(PurgeBuildCacheAsync);
+        GetDomainCommand = new RelayCommand(GetDomainAsync);
         ListDomainsCommand = new RelayCommand(ListDomainsAsync);
         AddDomainCommand = new RelayCommand(AddDomainAsync);
         VerifyDomainCommand = new RelayCommand(VerifyDomainAsync);
@@ -61,6 +68,17 @@ public sealed class PagesViewModel : ModuleViewModelBase
 
     /// <summary>Branch for a new direct-upload deployment.</summary>
     public string DeploymentBranch { get => _deploymentBranch; set => SetProperty(ref _deploymentBranch, value); }
+
+    /// <summary>Environment filter for the deployment list; blank sends none.</summary>
+    public string DeploymentEnv { get => _deploymentEnv; set => SetProperty(ref _deploymentEnv, value); }
+
+    /// <summary>The <c>env</c> values the deployment list accepts, plus blank for "both".</summary>
+    public IReadOnlyList<string> Environments { get; } = new[]
+    {
+        string.Empty,
+        PagesDeploymentEnvironments.Production,
+        PagesDeploymentEnvironments.Preview,
+    };
 
     /// <summary>Custom domain name.</summary>
     public string DomainName { get => _domainName; set => SetProperty(ref _domainName, value); }
@@ -97,6 +115,24 @@ public sealed class PagesViewModel : ModuleViewModelBase
 
     /// <summary>Deletes a deployment.</summary>
     public RelayCommand DeleteDeploymentCommand { get; }
+
+    /// <summary>Runs a failed deployment's build again.</summary>
+    public RelayCommand RetryDeploymentCommand { get; }
+
+    /// <summary>Points production at an earlier deployment that already succeeded.</summary>
+    public RelayCommand RollbackDeploymentCommand { get; }
+
+    /// <summary>Reads a deployment's build log.</summary>
+    public RelayCommand GetDeploymentLogsCommand { get; }
+
+    /// <summary>Fetches the short-lived Direct Upload JWT.</summary>
+    public RelayCommand GetUploadTokenCommand { get; }
+
+    /// <summary>Throws away the project's cached build artefacts.</summary>
+    public RelayCommand PurgeBuildCacheCommand { get; }
+
+    /// <summary>Reads one custom domain.</summary>
+    public RelayCommand GetDomainCommand { get; }
 
     /// <summary>Lists custom domains.</summary>
     public RelayCommand ListDomainsCommand { get; }
@@ -147,8 +183,28 @@ public sealed class PagesViewModel : ModuleViewModelBase
         await Client.Pages.ListDeploymentsAsync(Project(), new PagesDeploymentListParameters
         {
             PerPage = OptionalInt(ListPerPage),
+            // env is the filter the schema documents; branch is not, and is only sent when filled in.
+            Env = Blank(DeploymentEnv),
             Branch = Blank(DeploymentBranch),
         }));
+
+    private Task RetryDeploymentAsync() => RunAsync("Retry Pages deployment", async () =>
+        await Client.Pages.RetryDeploymentAsync(Project(), Deployment()));
+
+    private Task RollbackDeploymentAsync() => RunAsync("Roll back Pages production", async () =>
+        await Client.Pages.RollbackDeploymentAsync(Project(), Deployment()));
+
+    private Task GetDeploymentLogsAsync() => RunAsync("Read Pages deployment logs", async () =>
+        await Client.Pages.GetDeploymentLogsAsync(Project(), Deployment()));
+
+    private Task GetUploadTokenAsync() => RunAsync("Get Pages upload token", async () =>
+        await Client.Pages.GetUploadTokenAsync(Project()));
+
+    private Task PurgeBuildCacheAsync() => RunVoidAsync("Purge Pages build cache", () =>
+        Client.Pages.PurgeBuildCacheAsync(Project()));
+
+    private Task GetDomainAsync() => RunAsync("Get Pages domain", async () =>
+        await Client.Pages.GetDomainAsync(Project(), Domain()));
 
     private Task GetDeploymentAsync() => RunAsync("Get Pages deployment", async () =>
         await Client.Pages.GetDeploymentAsync(Project(), Deployment()));

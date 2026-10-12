@@ -303,11 +303,12 @@ so a missing recording fails loudly with `CassetteMissException` instead of quie
 dotnet run --project samples/CF.Net.Gallery
 ```
 
-- **Left-hand navigation**, one page per module: Domains, Workers, Pages, D1, KV, R2 — plus a Credentials page.
+- **Left-hand navigation**, one page per module: Domains, Workers, Pages, D1, KV, R2, SSL — plus a Credentials page.
 - **Credentials page** takes an API token or the legacy global key + email, the default account and zone ids, base address, timeout, retries and `ThrowOnApiError`. Values are pre-filled from the `CLOUDFLARE_*` environment variables and can optionally be saved to `%APPDATA%/CF.Net.Gallery/credentials.json` (plain text — opt-in, and off by default).
 - **Every page** lists the real operations with the real endpoint in its heading, and each button runs the corresponding library call.
 - **The inspector at the bottom** shows, live: the outgoing request (method, path, query, per-request headers, JSON or multipart body), the response (status, timing, `CF-RAY`, headers, pretty-printed body, `errors`, `messages`), the **typed result** re-serialized so you can see what the models captured, and a session history.
-- The gallery never renders `Authorization`, `X-Auth-Key` or `X-Auth-Email`, so a screenshot or a screen share cannot leak a credential.
+- The gallery never renders `Authorization`, `X-Auth-Key` or `X-Auth-Email`, so a screenshot or a screen share cannot leak a credential. One credential does travel in a response *body* — the Pages Direct Upload JWT — so that page says as much next to the button, and the model's `ToString()` reports the token's length rather than the token.
+- The SSL page keeps the four different "try again" calls visible side by side, because guessing which one you need means waiting on a certificate for no reason, and labels the Universal SSL switch with what turning it off actually breaks.
 
 It works by decorating the transport — `RecordingTransport : ICloudflareTransport` — which is also the clearest demonstration of the extension point the library is built around.
 

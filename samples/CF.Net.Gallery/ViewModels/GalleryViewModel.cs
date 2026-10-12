@@ -41,6 +41,7 @@ public sealed class GalleryViewModel : ObservableObject, IDisposable
             new D1ViewModel(this),
             new KvViewModel(this),
             new R2ViewModel(this),
+            new SslViewModel(this),
             Settings,
         };
 
@@ -126,7 +127,7 @@ public sealed class GalleryViewModel : ObservableObject, IDisposable
     /// <summary>Credentials and transport settings.</summary>
     public SettingsViewModel Settings { get; }
 
-    /// <summary>Every page shown in the sidebar: the six Cloudflare modules plus credentials.</summary>
+    /// <summary>Every page shown in the sidebar: the seven Cloudflare modules plus credentials.</summary>
     public IReadOnlyList<PageViewModelBase> Navigation { get; }
 
     /// <summary>Currently selected page.</summary>

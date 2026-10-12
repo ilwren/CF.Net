@@ -50,9 +50,10 @@
               <Button Classes="run" Content="Get" Command="{Binding GetCommand}" Margin="0,0,8,0" />
               <Button Content="Create" Command="{Binding CreateCommand}" Margin="0,0,8,0" />
               <Button Content="Update branch" Command="{Binding UpdateCommand}" Margin="0,0,8,0" />
+              <Button Content="Purge build cache" Command="{Binding PurgeBuildCacheCommand}" Margin="0,0,8,0" />
               <Button Content="Delete" Command="{Binding DeleteCommand}" />
             </WrapPanel>
-            <TextBlock Classes="hint" Text="Project names are lowercase letters, digits and hyphens, must start with a letter or digit and are at most 58 characters - the library checks that before sending." />
+            <TextBlock Classes="hint" Text="Project names are lowercase letters, digits and hyphens, must start with a letter or digit and are at most 58 characters - the library checks that before sending. Purging the build cache deletes nothing; it only means the next build cannot reuse cached artefacts, which is the fix for a build that keeps picking up something stale." />
           </StackPanel>
         </Border>
 
@@ -61,7 +62,11 @@
             <TextBlock Classes="h2" Text="Deployments  -  /accounts/{account_id}/pages/projects/{project_name}/deployments" />
             <WrapPanel Orientation="Horizontal">
               <StackPanel Orientation="Vertical" Spacing="3" Margin="0,0,16,8">
-                <TextBlock Classes="hint" Text="Branch filter" />
+                <TextBlock Classes="hint" Text="Environment" />
+                <ComboBox ItemsSource="{Binding Environments}" SelectedItem="{Binding DeploymentEnv, Mode=TwoWay}" Width="150" />
+              </StackPanel>
+              <StackPanel Orientation="Vertical" Spacing="3" Margin="0,0,16,8">
+                <TextBlock Classes="hint" Text="Branch filter (not in the schema)" />
                 <TextBox Text="{Binding DeploymentBranch, Mode=TwoWay}" Width="220" />
               </StackPanel>
               <StackPanel Orientation="Vertical" Spacing="3" Margin="0,0,16,8">
@@ -75,7 +80,14 @@
               <Button Content="Create (direct upload)" Command="{Binding CreateDeploymentCommand}" Margin="0,0,8,0" />
               <Button Content="Delete" Command="{Binding DeleteDeploymentCommand}" />
             </WrapPanel>
-            <TextBlock Classes="hint" Text="A direct-upload deployment returns an upload URL; pushing the assets themselves is an S3-style PUT that is outside the v4 JSON API." />
+            <WrapPanel Orientation="Horizontal">
+              <Button Content="Retry build" Command="{Binding RetryDeploymentCommand}" Margin="0,0,8,0" />
+              <Button Content="Roll back production" Command="{Binding RollbackDeploymentCommand}" Margin="0,0,8,0" />
+              <Button Content="Read build logs" Command="{Binding GetDeploymentLogsCommand}" Margin="0,0,8,0" />
+              <Button Content="Get upload token" Command="{Binding GetUploadTokenCommand}" />
+            </WrapPanel>
+            <TextBlock Classes="hint" Text="Retry runs the build again, which is what a deployment that failed on something transient needs; rollback does the other thing and points production at a build that already succeeded. Reading the logs is the only way to see a failed build's output through the API - total can be larger than the number of lines returned, and that truncation is normal, not an error. A Direct Upload deployment never runs a build, so it has no logs to read." TextWrapping="Wrap" />
+            <TextBlock Classes="hint" Text="The upload token is the one documented piece of Direct Upload: a short-lived JWT that the asset endpoints accept in place of your API token. Those asset endpoints are not in the published API reference and are keyed by a BLAKE3 hash of the file's base64 text plus its extension, where a wrong key is accepted silently and every asset then 404s - so this library stops at the token and leaves the bytes to wrangler. Treat the token as a secret: it appears in both panes below, so do not paste either into a bug report." TextWrapping="Wrap" />
           </StackPanel>
         </Border>
 
@@ -91,6 +103,7 @@
             </StackPanel>
             <WrapPanel Orientation="Horizontal">
               <Button Classes="run" Content="List domains" Command="{Binding ListDomainsCommand}" Margin="0,0,8,0" />
+              <Button Content="Get domain" Command="{Binding GetDomainCommand}" Margin="0,0,8,0" />
               <Button Content="Add domain" Command="{Binding AddDomainCommand}" Margin="0,0,8,0" />
               <Button Content="Set verified" Command="{Binding VerifyDomainCommand}" Margin="0,0,8,0" />
               <Button Content="Delete domain" Command="{Binding DeleteDomainCommand}" />

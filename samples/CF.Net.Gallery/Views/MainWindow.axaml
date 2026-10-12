@@ -32,6 +32,9 @@
     <DataTemplate DataType="vm:R2ViewModel">
       <views:R2View />
     </DataTemplate>
+    <DataTemplate DataType="vm:SslViewModel">
+      <views:SslView />
+    </DataTemplate>
     <DataTemplate DataType="vm:SettingsViewModel">
       <views:SettingsView />
     </DataTemplate>

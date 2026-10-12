@@ -52,9 +52,15 @@
               <Button Classes="run" Content="Get by uuid" Command="{Binding GetCommand}" Margin="0,0,8,0" />
               <Button Content="Get by name" Command="{Binding GetByNameCommand}" Margin="0,0,8,0" />
               <Button Content="Create" Command="{Binding CreateCommand}" Margin="0,0,8,0" />
-              <Button Content="Delete" Command="{Binding DeleteCommand}" />
+              <Button Content="Delete" Command="{Binding DeleteCommand}" Margin="0,0,8,0" />
+              <Button Content="Undelete" Command="{Binding UndeleteCommand}" />
             </WrapPanel>
-            <TextBlock Classes="hint" Text="Get-by-name lists the databases and filters locally, because D1 has no lookup-by-name endpoint." />
+            <StackPanel Orientation="Horizontal" Spacing="10">
+              <TextBlock Text="Read replication" Width="140" VerticalAlignment="Center" />
+              <ComboBox ItemsSource="{Binding ReadReplicationModes}" SelectedItem="{Binding ReadReplicationMode, Mode=TwoWay}" Width="140" />
+              <Button Content="Set" Command="{Binding ReadReplicationCommand}" VerticalAlignment="Center" />
+            </StackPanel>
+            <TextBlock Classes="hint" Text="Get-by-name lists the databases and filters locally, because D1 has no lookup-by-name endpoint. Undelete works only while D1 still keeps the deleted database; after that window the call fails and the data is gone. Read replication is the one thing the PUT and the PATCH both accept: auto creates replicas and lets D1 place them around the world, disabled uses none, and removing replicas that already exist can take a few hours." TextWrapping="Wrap" />
           </StackPanel>
         </Border>
 
@@ -81,6 +87,77 @@
                      FontFamily="Cascadia Mono,Consolas,Menlo,DejaVu Sans Mono,monospace" FontSize="12"
                      PlaceholderText='[{"sql":"CREATE TABLE t (id INTEGER)"},{"sql":"INSERT INTO t VALUES (?)","params":[1]}]' />
             <Button Classes="run" Content="Run batch" Command="{Binding BatchCommand}" />
+          </StackPanel>
+        </Border>
+
+        <Border Classes="card">
+          <StackPanel Orientation="Vertical" Spacing="10">
+            <TextBlock Classes="h2" Text="Raw endpoint  -  POST /accounts/{account_id}/d1/database/{database_id}/raw" />
+            <WrapPanel Orientation="Horizontal">
+              <Button Classes="run" Content="Query raw (array rows)" Command="{Binding QueryRawCommand}" Margin="0,0,8,0" />
+              <Button Content="Batch raw" Command="{Binding BatchRawCommand}" Margin="0,0,8,0" />
+            </WrapPanel>
+            <TextBlock Classes="hint" Text="Request body, sent verbatim by the two buttons below" />
+            <TextBox Text="{Binding RawJson, Mode=TwoWay}" AcceptsReturn="True" Height="90"
+                     FontFamily="Cascadia Mono,Consolas,Menlo,DejaVu Sans Mono,monospace" FontSize="12"
+                     PlaceholderText='{"sql":"SELECT 1 AS answer"}' />
+            <WrapPanel Orientation="Horizontal">
+              <Button Content="Execute on /query" Command="{Binding ExecuteCommand}" Margin="0,0,8,0" />
+              <Button Content="Execute on /raw" Command="{Binding ExecuteRawCommand}" />
+            </WrapPanel>
+            <TextBlock Classes="hint" Text="Same body and same permissions as /query - Cloudflare documents /raw as the performance-optimised version - but the rows come back as arrays of column values instead of objects, so Rows and FirstColumn have no column names to work with and RowArrays is what to read. Sending the body verbatim is also how you try a field this page has no box for." TextWrapping="Wrap" />
+          </StackPanel>
+        </Border>
+
+        <Border Classes="card">
+          <StackPanel Orientation="Vertical" Spacing="10">
+            <TextBlock Classes="h2" Text="Export  -  POST /accounts/{account_id}/d1/database/{database_id}/export" />
+            <StackPanel Orientation="Vertical" Spacing="3">
+              <TextBlock Classes="hint" Text="Tables to include, one per line - blank means every table" />
+              <TextBox Text="{Binding DumpTables, Mode=TwoWay}" AcceptsReturn="True" Height="60" TextWrapping="Wrap"
+                       PlaceholderText="users&#x0a;orders" />
+            </StackPanel>
+            <WrapPanel Orientation="Horizontal">
+              <CheckBox IsChecked="{Binding DumpNoData, Mode=TwoWay}" Content="Definitions only (no_data)" VerticalAlignment="Center" Margin="0,0,16,0" />
+              <CheckBox IsChecked="{Binding DumpNoSchema, Mode=TwoWay}" Content="Contents only (no_schema)" VerticalAlignment="Center" />
+            </WrapPanel>
+            <StackPanel Orientation="Horizontal" Spacing="10">
+              <TextBlock Text="at_bookmark" Width="140" VerticalAlignment="Center" />
+              <TextBox Text="{Binding ExportBookmark, Mode=TwoWay}" MinWidth="380" PlaceholderText="blank starts a new export, a bookmark polls the running one" />
+            </StackPanel>
+            <WrapPanel Orientation="Horizontal">
+              <Button Classes="run" Content="Export (one call)" Command="{Binding ExportCommand}" Margin="0,0,8,0" />
+              <Button Content="Export and wait" Command="{Binding ExportAndWaitCommand}" />
+            </WrapPanel>
+            <TextBlock Classes="hint" Text="An export is a conversation: start it, then send the at_bookmark it hands back until the status is complete, at which point the response carries a signed_url. Fetching that URL is an ordinary HTTP GET that needs no Cloudflare authentication. The database cannot serve queries while a large export runs, and Cloudflare cancels an export that stops being polled - which is the case for Export and wait. A failed export arrives as a 200 with status error rather than as an exception, so read the status, do not wait for a throw." TextWrapping="Wrap" />
+          </StackPanel>
+        </Border>
+
+        <Border Classes="card">
+          <StackPanel Orientation="Vertical" Spacing="10">
+            <TextBlock Classes="h2" Text="Import  -  POST /accounts/{account_id}/d1/database/{database_id}/import" />
+            <StackPanel Orientation="Horizontal" Spacing="10">
+              <TextBlock Text="etag (MD5)" Width="140" VerticalAlignment="Center" />
+              <TextBox Text="{Binding Etag, Mode=TwoWay}" MinWidth="380" PlaceholderText="the SQL file's MD5" />
+            </StackPanel>
+            <WrapPanel Orientation="Horizontal">
+              <Button Content="Compute from the SQL box" Command="{Binding ComputeEtagCommand}" />
+            </WrapPanel>
+            <StackPanel Orientation="Horizontal" Spacing="10">
+              <TextBlock Text="File name" Width="140" VerticalAlignment="Center" />
+              <TextBox Text="{Binding ImportFilename, Mode=TwoWay}" MinWidth="380" PlaceholderText="dump.sql" />
+            </StackPanel>
+            <StackPanel Orientation="Horizontal" Spacing="10">
+              <TextBlock Text="final_bookmark" Width="140" VerticalAlignment="Center" />
+              <TextBox Text="{Binding ImportBookmark, Mode=TwoWay}" MinWidth="380" PlaceholderText="from the ingest response" />
+            </StackPanel>
+            <WrapPanel Orientation="Horizontal">
+              <Button Classes="run" Content="init - get an upload URL" Command="{Binding ImportInitCommand}" Margin="0,0,8,0" />
+              <Button Content="ingest" Command="{Binding ImportIngestCommand}" Margin="0,0,8,0" />
+              <Button Content="poll once" Command="{Binding ImportPollCommand}" Margin="0,0,8,0" />
+              <Button Content="poll until done" Command="{Binding ImportWaitCommand}" />
+            </WrapPanel>
+            <TextBlock Classes="hint" Text="Three actions on one endpoint. init returns a presigned upload_url; you PUT the SQL file to it yourself; ingest starts the load and returns a final_bookmark to poll with. That PUT is deliberately not in this library: it is not a Cloudflare API call, it needs no token, and this library's transport would attach one and break the signature. The etag is how D1 recognises a file that is already there, which is what makes a retried import cheap." TextWrapping="Wrap" />
           </StackPanel>
         </Border>
 

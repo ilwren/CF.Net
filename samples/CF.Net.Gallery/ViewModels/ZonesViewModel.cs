@@ -1,6 +1,8 @@
 using CFNet.Models.Common;
 using CFNet.Models.Dns;
 using CFNet.Models.Zones;
+using CFNet.Serialization;
+using System.Text.Json;
 
 namespace CFNet.Gallery.ViewModels;
 
@@ -38,6 +40,14 @@ public sealed class ZonesViewModel : ModuleViewModelBase
     private string _dnsRecordId = string.Empty;
     private string _dnsUpdateContent = string.Empty;
     private string _dnsFindName = string.Empty;
+    private string _settingZoneId = string.Empty;
+    private string _settingId = "always_online";
+    private string _settingValueJson = string.Empty;
+    private bool _settingOn = true;
+    private string _settingBodyJson = string.Empty;
+    private string _bulkSettingsJson = string.Empty;
+    private string _zoneFile = string.Empty;
+    private string _importProxied = string.Empty;
 
     /// <summary>Creates the page.</summary>
     /// <param name="gallery">Owning shell.</param>
@@ -60,6 +70,18 @@ public sealed class ZonesViewModel : ModuleViewModelBase
         DnsCreateCommand = new RelayCommand(DnsCreateAsync);
         DnsUpdateCommand = new RelayCommand(DnsUpdateAsync);
         DnsDeleteCommand = new RelayCommand(DnsDeleteAsync);
+        ListSettingsCommand = new RelayCommand(ListSettingsAsync);
+        GetSettingCommand = new RelayCommand(GetSettingAsync);
+        SetSettingValueCommand = new RelayCommand(SetSettingValueAsync);
+        SetSettingOnOffCommand = new RelayCommand(SetSettingOnOffAsync);
+        UpdateSettingCommand = new RelayCommand(UpdateSettingAsync);
+        BulkUpdateSettingsCommand = new RelayCommand(BulkUpdateSettingsAsync);
+        ExportZoneFileCommand = new RelayCommand(ExportZoneFileAsync);
+        ImportZoneFileCommand = new RelayCommand(ImportZoneFileAsync);
+        DnsReplaceCommand = new RelayCommand(DnsReplaceAsync);
+        DnsCreateAddressCommand = new RelayCommand(DnsCreateAddressAsync);
+        DnsCreateCnameCommand = new RelayCommand(DnsCreateCnameAsync);
+        DnsCreateTxtCommand = new RelayCommand(DnsCreateTxtAsync);
     }
 
     /// <inheritdoc />
@@ -237,6 +259,66 @@ public sealed class ZonesViewModel : ModuleViewModelBase
     /// <summary>Deletes a DNS record.</summary>
     public RelayCommand DnsDeleteCommand { get; }
 
+    /// <summary>Lists every setting on the zone.</summary>
+    public RelayCommand ListSettingsCommand { get; }
+
+    /// <summary>Reads one setting.</summary>
+    public RelayCommand GetSettingCommand { get; }
+
+    /// <summary>Sends the value box as one setting's value.</summary>
+    public RelayCommand SetSettingValueCommand { get; }
+
+    /// <summary>Sends <c>"on"</c> or <c>"off"</c> for one setting.</summary>
+    public RelayCommand SetSettingOnOffCommand { get; }
+
+    /// <summary>Patches one setting with a hand-written body.</summary>
+    public RelayCommand UpdateSettingCommand { get; }
+
+    /// <summary>Patches several settings in one call.</summary>
+    public RelayCommand BulkUpdateSettingsCommand { get; }
+
+    /// <summary>Downloads the zone file.</summary>
+    public RelayCommand ExportZoneFileCommand { get; }
+
+    /// <summary>Uploads a BIND zone file.</summary>
+    public RelayCommand ImportZoneFileCommand { get; }
+
+    /// <summary>Replaces a record wholesale with a PUT.</summary>
+    public RelayCommand DnsReplaceCommand { get; }
+
+    /// <summary>Creates an A or AAAA record without naming the type.</summary>
+    public RelayCommand DnsCreateAddressCommand { get; }
+
+    /// <summary>Creates a CNAME record without naming the type.</summary>
+    public RelayCommand DnsCreateCnameCommand { get; }
+
+    /// <summary>Creates a TXT record, which is never proxied.</summary>
+    public RelayCommand DnsCreateTxtCommand { get; }
+
+    /// <summary>Zone the settings and zone-file calls run against; blank uses the configured default.</summary>
+    public string SettingZoneId { get => _settingZoneId; set => SetProperty(ref _settingZoneId, value); }
+
+    /// <summary>Setting id, for example <c>always_online</c>.</summary>
+    public string SettingId { get => _settingId; set => SetProperty(ref _settingId, value); }
+
+    /// <summary>The value to send, as JSON - a string, a number or an object, depending on the setting.</summary>
+    public string SettingValueJson { get => _settingValueJson; set => SetProperty(ref _settingValueJson, value); }
+
+    /// <summary>What the on/off switch sends.</summary>
+    public bool SettingOn { get => _settingOn; set => SetProperty(ref _settingOn, value); }
+
+    /// <summary>Hand-written body for the single-setting PATCH.</summary>
+    public string SettingBodyJson { get => _settingBodyJson; set => SetProperty(ref _settingBodyJson, value); }
+
+    /// <summary>Hand-written array of changes for the bulk PATCH.</summary>
+    public string BulkSettingsJson { get => _bulkSettingsJson; set => SetProperty(ref _bulkSettingsJson, value); }
+
+    /// <summary>BIND zone file to import.</summary>
+    public string ZoneFile { get => _zoneFile; set => SetProperty(ref _zoneFile, value); }
+
+    /// <summary>Import <c>proxied</c> field; blank lets Cloudflare decide.</summary>
+    public string ImportProxied { get => _importProxied; set => SetProperty(ref _importProxied, value); }
+
     private Task ListAsync() => RunAsync("List zones", async () =>
         await Client.Zones.ListAsync(new ZoneListParameters
         {
@@ -274,6 +356,136 @@ public sealed class ZonesViewModel : ModuleViewModelBase
 
     private Task ActivationCheckAsync() => RunAsync("Activation check", () =>
         Client.Zones.RunActivationCheckAsync(ZoneIdFor(GetZoneId)));
+
+    private Task ListSettingsAsync() => RunAsync("List zone settings", async () =>
+        await Client.Zones.ListSettingsAsync(SettingsZone()));
+
+    private Task GetSettingAsync() => RunAsync("Get zone setting", async () =>
+        await Client.Zones.GetSettingAsync(Setting(), SettingsZone()));
+
+    private Task SetSettingValueAsync() => RunAsync($"Set {SettingId}", async () =>
+        await Client.Zones.SetSettingValueAsync(Setting(), SettingValue(), SettingsZone()));
+
+    private Task SetSettingOnOffAsync() => RunAsync($"Switch {SettingId} {(SettingOn ? "on" : "off")}", async () =>
+        await Client.Zones.SetSettingOnOffAsync(Setting(), SettingOn, SettingsZone()));
+
+    private Task UpdateSettingAsync() => RunAsync("Patch zone setting (hand-written body)", async () =>
+        await Client.Zones.UpdateSettingAsync(
+            Setting(),
+            Parse<UpdateZoneSettingRequest>(SettingBodyJson, "setting body"),
+            SettingsZone()));
+
+    private Task BulkUpdateSettingsAsync() => RunAsync("Patch several zone settings", async () =>
+        await Client.Zones.UpdateSettingsAsync(
+            ParseList<ZoneSettingChange>(BulkSettingsJson, "array of changes"),
+            SettingsZone()));
+
+    private Task ExportZoneFileAsync() => RunAsync("Export the zone file", async () =>
+        await Client.DnsRecords.ExportAsync(SettingsZone()));
+
+    private Task ImportZoneFileAsync() => RunAsync("Import a zone file", async () =>
+        await Client.DnsRecords.ImportAsync(ZoneFileText(), OptionalBool(ImportProxied), SettingsZone()));
+
+    private string? SettingsZone() => Blank(SettingZoneId);
+
+    private string Setting() =>
+        Blank(SettingId) ?? throw new ArgumentException("Enter a setting id, for example always_online.");
+
+    private object? SettingValue()
+    {
+        var text = Blank(SettingValueJson);
+        if (text is null)
+        {
+            return null;
+        }
+
+        try
+        {
+            // Settings take strings, numbers, booleans and objects alike, so send whatever the JSON says.
+            return JsonSerializer.Deserialize<JsonElement>(text, CloudflareJson.Default);
+        }
+        catch (JsonException)
+        {
+            return text;
+        }
+    }
+
+    private string ZoneFileText() =>
+        Blank(ZoneFile) ?? throw new ArgumentException("Paste a BIND zone file, or export one first.");
+
+    private static T Parse<T>(string? json, string what)
+        where T : class
+    {
+        var text = Blank(json) ?? throw new ArgumentException($"Enter the {what} as JSON.");
+
+        try
+        {
+            return JsonSerializer.Deserialize<T>(text, CloudflareJson.Default)
+                ?? throw new ArgumentException($"The {what} deserialized to nothing.");
+        }
+        catch (JsonException exception)
+        {
+            throw new ArgumentException($"The {what} is not valid JSON: {exception.Message}", exception);
+        }
+    }
+
+    private static List<T> ParseList<T>(string? json, string what)
+    {
+        var text = Blank(json) ?? throw new ArgumentException($"Enter the {what} as JSON.");
+
+        try
+        {
+            return JsonSerializer.Deserialize<List<T>>(text, CloudflareJson.Default) ?? new List<T>();
+        }
+        catch (JsonException exception)
+        {
+            throw new ArgumentException($"The {what} is not valid JSON: {exception.Message}", exception);
+        }
+    }
+
+    private Task DnsReplaceAsync() => RunAsync("Replace DNS record (PUT)", () =>
+        Client.DnsRecords.ReplaceAsync(
+            RecordId(),
+            new DnsRecord
+            {
+                Type = DnsCreateType,
+                Name = RecordName(),
+                Content = RecordContent(),
+                Ttl = OptionalInt(DnsCreateTtl) ?? 1,
+                Priority = OptionalInt(DnsCreatePriority),
+                Comment = Blank(DnsCreateComment),
+                Proxied = DnsCreateProxied,
+            },
+            ZoneIdFor(DnsCreateZoneId)));
+
+    private Task DnsCreateAddressAsync() => RunAsync("Create an address record", async () =>
+        await Client.DnsRecords.CreateAddressRecordAsync(
+            RecordName(),
+            RecordContent(),
+            DnsCreateProxied,
+            OptionalInt(DnsCreateTtl) ?? 1,
+            ZoneIdFor(DnsCreateZoneId)));
+
+    private Task DnsCreateCnameAsync() => RunAsync("Create a CNAME record", async () =>
+        await Client.DnsRecords.CreateCnameRecordAsync(
+            RecordName(),
+            RecordContent(),
+            DnsCreateProxied,
+            OptionalInt(DnsCreateTtl) ?? 1,
+            ZoneIdFor(DnsCreateZoneId)));
+
+    private Task DnsCreateTxtAsync() => RunAsync("Create a TXT record", async () =>
+        await Client.DnsRecords.CreateTxtRecordAsync(
+            RecordName(),
+            RecordContent(),
+            OptionalInt(DnsCreateTtl) ?? 1,
+            ZoneIdFor(DnsCreateZoneId)));
+
+    private string RecordName() =>
+        Blank(DnsCreateName) ?? throw new ArgumentException("Enter a record name.");
+
+    private string RecordContent() =>
+        Blank(DnsCreateContent) ?? throw new ArgumentException("Enter the record's content.");
 
     private Task PurgeCacheAsync() => RunAsync("Purge cache", () =>
     {

@@ -182,14 +182,20 @@
                   <TextBlock Text="Zone id" Width="110" VerticalAlignment="Center" />
                   <TextBox Text="{Binding DnsCreateZoneId, Mode=TwoWay}" MinWidth="420" PlaceholderText="blank = default zone id" />
                 </StackPanel>
-                <Button Classes="run" Content="Create record" Command="{Binding DnsCreateCommand}" />
+                <WrapPanel Orientation="Horizontal">
+                  <Button Classes="run" Content="Create record" Command="{Binding DnsCreateCommand}" Margin="0,0,8,0" />
+                  <Button Content="as A / AAAA" Command="{Binding DnsCreateAddressCommand}" Margin="0,0,8,0" />
+                  <Button Content="as CNAME" Command="{Binding DnsCreateCnameCommand}" Margin="0,0,8,0" />
+                  <Button Content="as TXT" Command="{Binding DnsCreateTxtCommand}" />
+                </WrapPanel>
+                <TextBlock Classes="hint" Text="The three buttons on the right are the convenience overloads: they fill in the type for you from the boxes above, and the TXT one drops the proxied flag because a TXT record cannot be proxied. Same endpoint, same body, less to get wrong." TextWrapping="Wrap" />
                 <TextBlock Classes="hint" Text="The library picks the type from DnsRecordTypes and validates the record before sending, so an A record without an address fails here rather than in Cloudflare." />
               </StackPanel>
             </Border>
 
             <Border Classes="card">
               <StackPanel Orientation="Vertical" Spacing="10">
-                <TextBlock Classes="h2" Text="One record  -  GET / PATCH / DELETE /zones/{zone_id}/dns_records/{record_id}" />
+                <TextBlock Classes="h2" Text="One record  -  GET / PATCH / PUT / DELETE /zones/{zone_id}/dns_records/{record_id}" />
                 <StackPanel Orientation="Horizontal" Spacing="10">
                   <TextBlock Text="Record id" Width="110" VerticalAlignment="Center" />
                   <TextBox Text="{Binding DnsRecordId, Mode=TwoWay}" MinWidth="420" PlaceholderText="copy it from a list result" />
@@ -201,8 +207,92 @@
                 <WrapPanel Orientation="Horizontal">
                   <Button Classes="run" Content="Get" Command="{Binding DnsGetCommand}" Margin="0,0,8,0" />
                   <Button Content="Update (PATCH)" Command="{Binding DnsUpdateCommand}" Margin="0,0,8,0" />
+                  <Button Content="Replace (PUT)" Command="{Binding DnsReplaceCommand}" Margin="0,0,8,0" />
                   <Button Content="Delete" Command="{Binding DnsDeleteCommand}" />
                 </WrapPanel>
+                <TextBlock Classes="hint" Text="PATCH and PUT are not the same call. The PATCH above sends only the fields you filled in and leaves everything else alone; the PUT replaces the record wholesale with the boxes from the Create card, so a field you leave empty really does go empty. Use PUT when you mean 'this is the record now'." TextWrapping="Wrap" />
+              </StackPanel>
+            </Border>
+
+            <Border Classes="card">
+              <StackPanel Orientation="Vertical" Spacing="10">
+                <TextBlock Classes="h2" Text="Zone file  -  GET and POST /zones/{zone_id}/dns_records/export and /import" />
+                <StackPanel Orientation="Vertical" Spacing="3">
+                  <TextBlock Classes="hint" Text="BIND zone file to import - export one first, edit it, paste it back" />
+                  <TextBox Text="{Binding ZoneFile, Mode=TwoWay}" AcceptsReturn="True" Height="120"
+                           FontFamily="Cascadia Mono,Consolas,Menlo,DejaVu Sans Mono,monospace" FontSize="12"
+                           PlaceholderText=";; A records&#x0a;www.example.com.  1 IN A 192.0.2.1" />
+                </StackPanel>
+                <StackPanel Orientation="Horizontal" Spacing="10">
+                  <TextBlock Text="proxied" Width="110" VerticalAlignment="Center" />
+                  <TextBox Text="{Binding ImportProxied, Mode=TwoWay}" MinWidth="200" PlaceholderText="true / false / blank" />
+                  <Button Content="Export" Command="{Binding ExportZoneFileCommand}" Margin="16,0,8,0" VerticalAlignment="Center" />
+                  <Button Classes="run" Content="Import" Command="{Binding ImportZoneFileCommand}" VerticalAlignment="Center" />
+                </StackPanel>
+                <TextBlock Classes="hint" Text="Export answers with the zone file itself rather than a JSON envelope, so the typed result is the text verbatim, and empty when the zone has no records. Import posts it as a multipart form - which is why the request pane below shows a file part instead of JSON - and proxied is documented as the strings true and false rather than a JSON boolean. Leaving it blank lets Cloudflare keep whatever each record's own comment says." TextWrapping="Wrap" />
+              </StackPanel>
+            </Border>
+
+          </StackPanel>
+        </TabItem>
+
+        <!-- ============================ settings ============================ -->
+        <TabItem Header="Settings">
+          <StackPanel Orientation="Vertical" MaxWidth="900" HorizontalAlignment="Left" Margin="0,10,0,0">
+
+            <Border Classes="card">
+              <StackPanel Orientation="Vertical" Spacing="10">
+                <TextBlock Classes="h2" Text="Every setting  -  GET /zones/{zone_id}/settings" />
+                <StackPanel Orientation="Horizontal" Spacing="10">
+                  <TextBlock Text="Zone" Width="140" VerticalAlignment="Center" />
+                  <TextBox Text="{Binding SettingZoneId, Mode=TwoWay}" MinWidth="380" PlaceholderText="blank uses the zone from the Credentials page" />
+                </StackPanel>
+                <Button Classes="run" Content="List settings" Command="{Binding ListSettingsCommand}" />
+                <TextBlock Classes="hint" Text="Cloudflare marks this deprecated in favour of reading one setting at a time, but it is still the only way to discover which settings a zone has and what shape each value takes - which ones exist depends on the plan. It is also the cheapest snapshot to take before changing anything, and the result is a plain array, so there is nothing to page through." TextWrapping="Wrap" />
+              </StackPanel>
+            </Border>
+
+            <Border Classes="card">
+              <StackPanel Orientation="Vertical" Spacing="10">
+                <TextBlock Classes="h2" Text="One setting  -  GET and PATCH /zones/{zone_id}/settings/{setting_id}" />
+                <StackPanel Orientation="Horizontal" Spacing="10">
+                  <TextBlock Text="Setting id" Width="140" VerticalAlignment="Center" />
+                  <TextBox Text="{Binding SettingId, Mode=TwoWay}" MinWidth="380" PlaceholderText="always_online, ssl, security_level ..." />
+                </StackPanel>
+                <WrapPanel Orientation="Horizontal">
+                  <Button Classes="run" Content="Get" Command="{Binding GetSettingCommand}" Margin="0,0,8,0" />
+                  <CheckBox IsChecked="{Binding SettingOn, Mode=TwoWay}" Content="on" VerticalAlignment="Center" Margin="0,0,8,0" />
+                  <Button Content="Switch on / off" Command="{Binding SetSettingOnOffCommand}" Margin="0,0,8,0" />
+                </WrapPanel>
+                <StackPanel Orientation="Vertical" Spacing="3">
+                  <TextBlock Classes="hint" Text="Value to send, as JSON - a string, a number, an object or an array" />
+                  <TextBox Text="{Binding SettingValueJson, Mode=TwoWay}" MinWidth="520" HorizontalAlignment="Left"
+                           FontFamily="Cascadia Mono,Consolas,Menlo,DejaVu Sans Mono,monospace" FontSize="12"
+                           PlaceholderText='"on"' />
+                </StackPanel>
+                <Button Content="Set value" Command="{Binding SetSettingValueCommand}" />
+                <StackPanel Orientation="Vertical" Spacing="3">
+                  <TextBlock Classes="hint" Text='Or write the body yourself: {"value": ...} or {"enabled": ...}' />
+                  <TextBox Text="{Binding SettingBodyJson, Mode=TwoWay}" MinWidth="520" HorizontalAlignment="Left"
+                           FontFamily="Cascadia Mono,Consolas,Menlo,DejaVu Sans Mono,monospace" FontSize="12"
+                           PlaceholderText='{"value":"under_attack"}' />
+                </StackPanel>
+                <Button Content="Patch with this body" Command="{Binding UpdateSettingCommand}" />
+                <TextBlock Classes="hint" Text="Values are not all the same shape: some settings take a string such as on, some a number, some an object, and the switch sends the strings on and off rather than a boolean. Each entry reports editable, so read before writing. A hand-written body must carry either a value or an enabled flag - sending neither, or both, is refused here rather than by Cloudflare." TextWrapping="Wrap" />
+              </StackPanel>
+            </Border>
+
+            <Border Classes="card">
+              <StackPanel Orientation="Vertical" Spacing="10">
+                <TextBlock Classes="h2" Text="Several settings  -  PATCH /zones/{zone_id}/settings" />
+                <StackPanel Orientation="Vertical" Spacing="3">
+                  <TextBlock Classes="hint" Text="Array of changes, each with an id and a value" />
+                  <TextBox Text="{Binding BulkSettingsJson, Mode=TwoWay}" AcceptsReturn="True" Height="110"
+                           FontFamily="Cascadia Mono,Consolas,Menlo,DejaVu Sans Mono,monospace" FontSize="12"
+                           PlaceholderText='[{"id":"always_online","value":"on"},{"id":"security_level","value":"high"}]' />
+                </StackPanel>
+                <Button Classes="run" Content="Patch all of them" Command="{Binding BulkUpdateSettingsCommand}" />
+                <TextBlock Classes="hint" Text="The body is an array of {id, value} objects, not an object keyed by setting id, which is the shape that is easy to get wrong. Cloudflare marks this endpoint deprecated too, and applies it all-or-nothing: one setting it rejects fails the whole call and nothing changes." TextWrapping="Wrap" />
               </StackPanel>
             </Border>
 

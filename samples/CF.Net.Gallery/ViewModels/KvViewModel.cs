@@ -38,6 +38,8 @@ public sealed class KvViewModel : ModuleViewModelBase
         GetValueCommand = new RelayCommand(GetValueAsync);
         PutValueCommand = new RelayCommand(PutValueAsync);
         DeleteValueCommand = new RelayCommand(DeleteValueAsync);
+        GetStringCommand = new RelayCommand(GetStringAsync);
+        PutStringCommand = new RelayCommand(PutStringAsync);
         BulkWriteCommand = new RelayCommand(BulkWriteAsync);
     }
 
@@ -164,6 +166,18 @@ public sealed class KvViewModel : ModuleViewModelBase
 
         return keys;
     });
+
+    /// <summary>Reads the value as UTF-8 text.</summary>
+    public RelayCommand GetStringCommand { get; }
+
+    /// <summary>Writes the value box as UTF-8 text.</summary>
+    public RelayCommand PutStringCommand { get; }
+
+    private Task GetStringAsync() => RunAsync("Get KV value as text", async () =>
+        await Client.Kv.GetStringAsync(Namespace(), KeyName()));
+
+    private Task PutStringAsync() => RunVoidAsync("Put KV value as text", () =>
+        Client.Kv.PutStringAsync(Namespace(), KeyName(), Value ?? string.Empty, OptionalInt(ValueTtl)));
 
     private Task GetValueAsync() => RunAsync("Get KV value", async () =>
         await Client.Kv.GetValueAsync(Namespace(), KeyName()));

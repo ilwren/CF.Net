@@ -110,6 +110,41 @@
           </StackPanel>
         </Border>
 
+        <Border Classes="card">
+          <StackPanel Orientation="Vertical" Spacing="10">
+            <TextBlock Classes="h2" Text="Custom domains  -  /accounts/{account_id}/workers/domains" />
+            <WrapPanel Orientation="Horizontal">
+              <StackPanel Orientation="Vertical" Spacing="3" Margin="0,0,16,8">
+                <TextBlock Classes="hint" Text="Hostname to attach" />
+                <TextBox Text="{Binding DomainHostname, Mode=TwoWay}" Width="260" PlaceholderText="app.example.com" />
+              </StackPanel>
+              <StackPanel Orientation="Vertical" Spacing="3" Margin="0,0,16,8">
+                <TextBlock Classes="hint" Text="Zone id (blank uses the default)" />
+                <TextBox Text="{Binding DomainZoneId, Mode=TwoWay}" Width="260" />
+              </StackPanel>
+              <StackPanel Orientation="Vertical" Spacing="3" Margin="0,0,16,8">
+                <TextBlock Classes="hint" Text="Attachment id" />
+                <TextBox Text="{Binding DomainId, Mode=TwoWay}" Width="260" PlaceholderText="copy it from a list result" />
+              </StackPanel>
+            </WrapPanel>
+            <WrapPanel Orientation="Horizontal">
+              <CheckBox IsChecked="{Binding DomainEnabled, Mode=TwoWay}" Content="enabled" VerticalAlignment="Center" Margin="0,0,16,0" />
+              <CheckBox IsChecked="{Binding DomainPreviewsEnabled, Mode=TwoWay}" Content="previews enabled" VerticalAlignment="Center" />
+            </WrapPanel>
+            <WrapPanel Orientation="Horizontal">
+              <Button Classes="run" Content="List every attachment" Command="{Binding ListDomainsCommand}" Margin="0,0,8,0" />
+              <Button Content="List this worker's" Command="{Binding ListDomainsForWorkerCommand}" Margin="0,0,8,0" />
+              <Button Content="Get" Command="{Binding GetDomainCommand}" Margin="0,0,8,0" />
+            </WrapPanel>
+            <WrapPanel Orientation="Horizontal">
+              <Button Classes="run" Content="Attach (PUT)" Command="{Binding AttachDomainCommand}" Margin="0,0,8,0" />
+              <Button Content="Attach with the flags above" Command="{Binding AttachDomainWithFlagsCommand}" Margin="0,0,8,0" />
+              <Button Content="Detach" Command="{Binding DeleteDomainCommand}" />
+            </WrapPanel>
+            <TextBlock Classes="hint" Text="Attach is a PUT to the collection rather than a POST, which is the shape Cloudflare chose for an idempotent upsert: attaching the same hostname twice leaves one attachment. The hostname has to sit inside a zone on the account, and Cloudflare issues a certificate for it, which can take a moment to become active - the response carries the certificate id. There is no script-scoped domain endpoint in v4, so listing one worker's domains lists the whole account once and filters on service locally, case insensitively; the two buttons cost the same." TextWrapping="Wrap" />
+          </StackPanel>
+        </Border>
+
       </StackPanel>
     </ScrollViewer>
 

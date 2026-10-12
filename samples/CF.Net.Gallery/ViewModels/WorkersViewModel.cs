@@ -29,6 +29,11 @@ public sealed class WorkersViewModel : ModuleViewModelBase
     private string _subdomain = string.Empty;
     private bool _subdomainEnabled = true;
     private bool _scriptSubdomainEnabled = true;
+    private string _domainId = string.Empty;
+    private string _domainHostname = string.Empty;
+    private string _domainZoneId = string.Empty;
+    private bool _domainEnabled = true;
+    private bool _domainPreviewsEnabled;
 
     /// <summary>Creates the page.</summary>
     /// <param name="gallery">Owning shell.</param>
@@ -48,6 +53,12 @@ public sealed class WorkersViewModel : ModuleViewModelBase
         UpdateSubdomainCommand = new RelayCommand(UpdateSubdomainAsync);
         GetScriptSubdomainCommand = new RelayCommand(GetScriptSubdomainAsync);
         UpdateScriptSubdomainCommand = new RelayCommand(UpdateScriptSubdomainAsync);
+        ListDomainsCommand = new RelayCommand(ListDomainsAsync);
+        ListDomainsForWorkerCommand = new RelayCommand(ListDomainsForWorkerAsync);
+        GetDomainCommand = new RelayCommand(GetDomainAsync);
+        AttachDomainCommand = new RelayCommand(AttachDomainAsync);
+        AttachDomainWithFlagsCommand = new RelayCommand(AttachDomainWithFlagsAsync);
+        DeleteDomainCommand = new RelayCommand(DeleteDomainAsync);
     }
 
     /// <inheritdoc />
@@ -92,6 +103,39 @@ public sealed class WorkersViewModel : ModuleViewModelBase
 
     /// <summary>Whether this script is published on the subdomain.</summary>
     public bool ScriptSubdomainEnabled { get => _scriptSubdomainEnabled; set => SetProperty(ref _scriptSubdomainEnabled, value); }
+
+    /// <summary>Lists every custom domain attachment in the account.</summary>
+    public RelayCommand ListDomainsCommand { get; }
+
+    /// <summary>Lists the attachments that point at the script named above.</summary>
+    public RelayCommand ListDomainsForWorkerCommand { get; }
+
+    /// <summary>Reads one attachment by id.</summary>
+    public RelayCommand GetDomainCommand { get; }
+
+    /// <summary>Attaches the hostname to the script, the short form.</summary>
+    public RelayCommand AttachDomainCommand { get; }
+
+    /// <summary>Attaches it with the routing flags spelled out.</summary>
+    public RelayCommand AttachDomainWithFlagsCommand { get; }
+
+    /// <summary>Detaches a hostname.</summary>
+    public RelayCommand DeleteDomainCommand { get; }
+
+    /// <summary>Attachment id, as the list reports it.</summary>
+    public string DomainId { get => _domainId; set => SetProperty(ref _domainId, value); }
+
+    /// <summary>Hostname to attach, for example <c>app.example.com</c>.</summary>
+    public string DomainHostname { get => _domainHostname; set => SetProperty(ref _domainHostname, value); }
+
+    /// <summary>Zone the hostname lives in; blank uses the configured default.</summary>
+    public string DomainZoneId { get => _domainZoneId; set => SetProperty(ref _domainZoneId, value); }
+
+    /// <summary>Whether the attachment routes traffic.</summary>
+    public bool DomainEnabled { get => _domainEnabled; set => SetProperty(ref _domainEnabled, value); }
+
+    /// <summary>Whether preview deployments answer on this hostname.</summary>
+    public bool DomainPreviewsEnabled { get => _domainPreviewsEnabled; set => SetProperty(ref _domainPreviewsEnabled, value); }
 
     /// <summary>Lists scripts.</summary>
     public RelayCommand ListCommand { get; }
@@ -221,6 +265,37 @@ public sealed class WorkersViewModel : ModuleViewModelBase
         {
             Enabled = ScriptSubdomainEnabled,
         }));
+
+    private Task ListDomainsAsync() => RunAsync("List worker domains", async () =>
+        await Client.Workers.ListDomainsAsync());
+
+    private Task ListDomainsForWorkerAsync() => RunAsync("List this worker's domains", async () =>
+        await Client.Workers.ListDomainsForWorkerAsync(Script()));
+
+    private Task GetDomainAsync() => RunAsync("Get worker domain", async () =>
+        await Client.Workers.GetDomainAsync(Domain()));
+
+    private Task AttachDomainAsync() => RunAsync("Attach a hostname to this worker", async () =>
+        await Client.Workers.AttachDomainAsync(Hostname(), Script(), Blank(DomainZoneId)));
+
+    private Task AttachDomainWithFlagsAsync() => RunAsync("Attach a hostname with routing flags", () =>
+        Client.Workers.AttachDomainAsync(new AttachWorkerDomainRequest
+        {
+            Hostname = Hostname(),
+            Service = Script(),
+            ZoneId = Blank(DomainZoneId),
+            Enabled = DomainEnabled,
+            PreviewsEnabled = DomainPreviewsEnabled,
+        }));
+
+    private Task DeleteDomainAsync() => RunVoidAsync("Delete worker domain", () =>
+        Client.Workers.DeleteDomainAsync(Domain()));
+
+    private string Domain() =>
+        Blank(DomainId) ?? throw new ArgumentException("Enter a domain id - list the domains first.");
+
+    private string Hostname() =>
+        Blank(DomainHostname) ?? throw new ArgumentException("Enter a hostname, for example app.example.com.");
 
     private string Script() =>
         Blank(ScriptName) ?? throw new ArgumentException("Enter a script name.");

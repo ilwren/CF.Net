@@ -96,7 +96,11 @@
               <Button Content="Put value" Command="{Binding PutValueCommand}" Margin="0,0,8,0" />
               <Button Content="Delete value" Command="{Binding DeleteValueCommand}" />
             </WrapPanel>
-            <TextBlock Classes="hint" Text="The value travels as the raw HTTP body, never inside a JSON envelope, and per-key metadata comes back in the CF-KV-Metadata response header." />
+            <WrapPanel Orientation="Horizontal">
+              <Button Content="Get as text" Command="{Binding GetStringCommand}" Margin="0,0,8,0" />
+              <Button Content="Put as text" Command="{Binding PutStringCommand}" />
+            </WrapPanel>
+            <TextBlock Classes="hint" Text="The value travels as the raw HTTP body, never inside a JSON envelope, and per-key metadata comes back in the CF-KV-Metadata response header. The two text buttons hit the same endpoints as the two above and only differ in what you hand them: Get as text decodes the bytes as UTF-8 and returns null when the key is missing, Put as text sends the value box as it stands. Reach for the byte calls when the value is not text." TextWrapping="Wrap" />
           </StackPanel>
         </Border>
 

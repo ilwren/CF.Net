@@ -303,7 +303,8 @@ so a missing recording fails loudly with `CassetteMissException` instead of quie
 dotnet run --project samples/CF.Net.Gallery
 ```
 
-- **Left-hand navigation**, one page per module: Domains, Workers, Pages, D1, KV, R2, SSL — plus a Credentials page.
+- **Left-hand navigation**, one page per module: Domains, Workers, Pages, D1, KV, R2, SSL — plus a Credentials page. The Domains page is tabbed, because zones, DNS records and zone settings are three different conversations.
+- **Every public service method is reachable from a button**, with two deliberate exceptions: `IUserService.VerifyTokenAsync` and `VerifyAccountTokenAsync`, which the Credentials page's connection check already drives — it tries the user-owned endpoint, then the account-owned one, and reports which answered.
 - **Credentials page** takes an API token or the legacy global key + email, the default account and zone ids, base address, timeout, retries and `ThrowOnApiError`. Values are pre-filled from the `CLOUDFLARE_*` environment variables and can optionally be saved to `%APPDATA%/CF.Net.Gallery/credentials.json` (plain text — opt-in, and off by default).
 - **Every page** lists the real operations with the real endpoint in its heading, and each button runs the corresponding library call.
 - **The inspector at the bottom** shows, live: the outgoing request (method, path, query, per-request headers, JSON or multipart body), the response (status, timing, `CF-RAY`, headers, pretty-printed body, `errors`, `messages`), the **typed result** re-serialized so you can see what the models captured, and a session history.

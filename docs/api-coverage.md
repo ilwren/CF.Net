@@ -105,6 +105,7 @@ and the two SSL enrolment settings Cloudflare serves from the zone settings path
 | `GetAutomaticSslAsync(zoneId)` | `GET …/settings/ssl_automatic_mode` | `{id, editable, modified_on, value, next_scheduled_scan?}`; `value` is `auto` (enrolled) or `custom` (not) |
 | `SetAutomaticSslAsync(mode, zoneId)` | `PATCH …/settings/ssl_automatic_mode` | body `{"value":"auto"\|"custom"}`; any other value is refused locally, because Cloudflare answers it with error 1008, "Invalid SSL/TLS encryption configuration value, only auto or custom accepted" |
 | `EnableAutomaticSslAsync(zoneId)` / `DisableAutomaticSslAsync(zoneId)` | `PATCH …/settings/ssl_automatic_mode` | the same call with `auto` / `custom` |
+| `AnalyzeCertificateAsync(AnalyzeSslCertificateRequest, zoneId)` | `POST …/ssl/analyze` | body `{certificate?, bundle_method?}` with `bundle_method` one of `ubiquitous`/`optimal`/`force`. Returns **raw `JsonElement?`** on purpose - see below |
 | `GetRecommendationAsync(zoneId)` | `GET …/ssl/recommendation` | **deprecated**, and the path is **singular** - `recommendation`, not `recommendations`. It reports the automatic-mode setting rather than a suggested encryption mode, so prefer `GetAutomaticSslAsync` |
 
 Permissions are `SSL and Certificates Read` to list and read, `SSL and Certificates Write` to delete. The
@@ -112,8 +113,9 @@ verification endpoints accept any one of four: `SSL and Certificates` or `Access
 read or write.
 
 `SslCertificatePack` maps `id`, `zone_id`, `hosts`, `status`, `type`, `certificate_authority`, `priority`,
-`signature`, `uploaded_on` and the `certificates` array (each with `id`, `hosts`, `status`, `bundle_method`
-and `expires_on`). `status` has more values than the schema names in one place, so it stays a
+`signature`, `uploaded_on` and the `certificates` array (each with `id`, `hosts`, `status`, `bundle_method`,
+`expires_on`, `issuer`, `signature`, `priority`, `uploaded_on`, `modified_on`, `zone_id` and
+`geo_restrictions.label`, the last being `us`, `eu` or `highest_security`). `status` has more values than the schema names in one place, so it stays a
 string — `SslCertificatePackStatuses` holds the seven the documentation names (`initializing`,
 `pending_validation`, `validation_timed_out`, `inactive`, `backup_issued`, `holding_deployment`, `deleted`)
 and an unlisted one is never a deserialisation failure. `SslCertificatePackTypes` is the complete set of
@@ -168,9 +170,17 @@ they prefer, and send it first in the TLS ClientHello; it may only choose from w
 SSL/TLS `auto` enrols the zone so Cloudflare manages its encryption mode, `custom` leaves that to the zone -
 and opting out does not itself change the mode the zone is on.
 
-⛔ Certificate analysis (`POST /zones/{zone_id}/ssl/analyze`), the origin TLS settings that constrain
-Auto-Origin TLS KEX (`origin_tls_compliance_modes`, `origin_tls_client_auth/settings`) and SSL for SaaS custom
-hostnames, which are a separate resource rather than part of `ssl`.
+**`ssl/analyze` returns raw JSON, and that is not laziness.** Cloudflare's own schema types the result as
+`unknown` - the official Go SDK declares `AnalyzeNewResponse = interface{}` - and only the prose describes it
+("the set of hostnames, the signature algorithm, and the expiration date"). Inventing property names for that
+would produce a model that looks like a contract and is really a guess, so `AnalyzeCertificateAsync` types the
+*request* (`certificate`, `bundle_method`) and hands back the `JsonElement` for the answer. The same reasoning
+put `geo_restrictions` in `AdditionalData` until the field names were confirmed, and they now are, so it is
+typed.
+
+⛔ The origin TLS settings that constrain Auto-Origin TLS KEX (`origin_tls_compliance_modes`,
+`origin_tls_client_auth/settings`) and SSL for SaaS custom hostnames - both separate resources rather than part
+of `ssl`.
 
 ## Users and accounts
 

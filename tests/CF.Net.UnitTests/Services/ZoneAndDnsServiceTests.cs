@@ -1,4 +1,5 @@
 using System.Net;
+using System.Text.Json;
 using CFNet.Exceptions;
 using CFNet.Http;
 using CFNet.Models.Common;
@@ -1071,7 +1072,10 @@ public class SslCertificatePacksTests
               "validation_method": "txt",
               "validity_days": 90,
               "some_field_this_release_does_not_know": "kept",
-              "certificates": [{ "id": "cert-1", "geo_restrictions": { "label": "highest_security" } }]
+              "certificates": [{
+                "id": "cert-1",
+                "geo_restrictions": { "label": "highest_security", "some_new_region_field": 3 }
+              }]
             }]
             """,
             page: 1,
@@ -1087,9 +1091,11 @@ public class SslCertificatePacksTests
         Assert.False(pack.AdditionalData.ContainsKey("validation_method"));
         Assert.False(pack.AdditionalData.ContainsKey("validity_days"));
 
-        // The restriction label is still unmodelled, so it stays available rather than being dropped.
+        // geo_restrictions is typed now, and what the model still does not name survives inside it.
         var certificate = Assert.Single(pack.Certificates!);
-        Assert.Equal("highest_security", certificate.AdditionalData!["geo_restrictions"].GetProperty("label").GetString());
+        Assert.Equal(SslGeoRestrictionLabels.HighestSecurity, certificate.GeoRestrictions!.Label);
+        Assert.Equal(3, certificate.GeoRestrictions.AdditionalData!["some_new_region_field"].GetInt32());
+        Assert.Null(certificate.AdditionalData);
     }
 
     [Fact]
@@ -1283,8 +1289,7 @@ public class SslCertificatePackOrderTests
         Assert.Equal(new[] { "example.com" }, certificate.Hosts);
         Assert.Equal("ubiquitous", certificate.BundleMethod);
         Assert.Equal(new DateTimeOffset(2027, 1, 2, 3, 4, 5, TimeSpan.Zero), certificate.ExpiresOn);
-        // geo_restrictions is not modelled, so it survives in the extension data instead of being dropped.
-        Assert.Equal("eu", certificate.AdditionalData!["geo_restrictions"].GetProperty("label").GetString());
+        Assert.Equal(SslGeoRestrictionLabels.Eu, certificate.GeoRestrictions!.Label);
     }
 
     [Fact]
@@ -2124,5 +2129,146 @@ public class SslEnrolmentSettingsTests
         Assert.Equal("auto_origin_tls_kex", ZoneSettingIds.AutoOriginTlsKex);
         Assert.Equal("ssl_automatic_mode", ZoneSettingIds.SslAutomaticMode);
         Assert.Equal(new[] { "auto", "custom" }, SslAutomaticModes.All);
+    }
+}
+
+public class SslCertificateAnalysisTests
+{
+    private const string AnalyzePath = "/client/v4/zones/zone-5678/ssl/analyze";
+    private const string FakePem = "-----BEGIN CERTIFICATE----- MIIBfake MIIBfake -----END CERTIFICATE-----";
+
+    [Fact]
+    public async Task AnalyzeCertificateAsync_posts_the_pem_and_returns_the_answer_as_raw_json()
+    {
+        using var harness = CloudflareHarness.Create();
+        harness.RespondWithResult(
+            """
+            {
+              "hosts": ["example.com", "www.example.com"],
+              "signature": "SHA256WithRSA",
+              "expires_on": "2027-01-02T03:04:05Z"
+            }
+            """);
+
+        var analysis = await harness.Client.Ssl.AnalyzeCertificateAsync(
+            AnalyzeSslCertificateRequest.ForCertificate(FakePem, SslBundleMethods.Ubiquitous));
+
+        Assert.Equal(HttpMethod.Post, harness.LastRequest.Method);
+        Assert.Equal(AnalyzePath, harness.LastRequest.Path);
+        Assert.Contains("\"certificate\":\"-----BEGIN CERTIFICATE-----", harness.LastRequest.Body, StringComparison.Ordinal);
+        Assert.Contains("\"bundle_method\":\"ubiquitous\"", harness.LastRequest.Body, StringComparison.Ordinal);
+
+        // The schema types this result as unknown, so the caller reads it rather than the library guessing.
+        Assert.NotNull(analysis);
+        Assert.Equal(JsonValueKind.Object, analysis!.Value.ValueKind);
+        Assert.Equal("SHA256WithRSA", analysis.Value.GetProperty("signature").GetString());
+        Assert.Equal(2, analysis.Value.GetProperty("hosts").GetArrayLength());
+        Assert.Equal("example.com", analysis.Value.GetProperty("hosts")[0].GetString());
+        Assert.Equal("2027-01-02T03:04:05Z", analysis.Value.GetProperty("expires_on").GetString());
+    }
+
+    [Fact]
+    public async Task AnalyzeCertificateAsync_leaves_the_bundle_method_out_when_it_was_not_chosen()
+    {
+        using var harness = CloudflareHarness.Create();
+        harness.RespondWithResult("{\"signature\":\"SHA256WithRSA\"}");
+
+        await harness.Client.Ssl.AnalyzeCertificateAsync(AnalyzeSslCertificateRequest.ForCertificate(FakePem));
+
+        Assert.DoesNotContain("bundle_method", harness.LastRequest.Body, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task AnalyzeCertificateAsync_reads_a_response_that_carries_no_result_as_null()
+    {
+        using var harness = CloudflareHarness.Create();
+        harness.RespondWithResult("null");
+
+        Assert.Null(await harness.Client.Ssl.AnalyzeCertificateAsync(
+            AnalyzeSslCertificateRequest.ForCertificate(FakePem)));
+    }
+
+    [Fact]
+    public async Task AnalyzeCertificateAsync_refuses_an_unknown_bundle_method_before_any_request()
+    {
+        using var harness = CloudflareHarness.Create();
+
+        var exception = await Assert.ThrowsAsync<CloudflareConfigurationException>(
+            () => harness.Client.Ssl.AnalyzeCertificateAsync(
+                AnalyzeSslCertificateRequest.ForCertificate(FakePem, "shortest")));
+
+        Assert.Contains("not one of ubiquitous, optimal, force", exception.Message, StringComparison.Ordinal);
+        Assert.Equal(0, harness.RequestCount);
+    }
+
+    [Fact]
+    public void A_certificate_that_was_set_but_is_blank_is_refused_locally()
+    {
+        var request = AnalyzeSslCertificateRequest.ForCertificate("   ");
+
+        var exception = Assert.Throws<CloudflareConfigurationException>(() => request.EnsureValid());
+        Assert.Contains("was set but is empty", exception.Message, StringComparison.Ordinal);
+
+        // Both fields are optional in the schema, so an otherwise empty body is legitimate.
+        new AnalyzeSslCertificateRequest().EnsureValid();
+        Assert.Equal("(no certificate)", new AnalyzeSslCertificateRequest().ToString());
+        Assert.Equal("certificate, optimal bundle", AnalyzeSslCertificateRequest
+            .ForCertificate(FakePem, SslBundleMethods.Optimal).ToString());
+        Assert.Equal(new[] { "ubiquitous", "optimal", "force" }, SslBundleMethods.All);
+        Assert.Equal(new[] { "us", "eu", "highest_security" }, SslGeoRestrictionLabels.All);
+    }
+
+    [Fact]
+    public async Task AnalyzeCertificateAsync_honours_an_explicit_zone_id()
+    {
+        using var harness = CloudflareHarness.Create();
+        harness.RespondWithResult("{}");
+
+        await harness.Client.Ssl.AnalyzeCertificateAsync(
+            AnalyzeSslCertificateRequest.ForCertificate(FakePem),
+            "zone-other");
+
+        Assert.Equal("/client/v4/zones/zone-other/ssl/analyze", harness.LastRequest.Path);
+    }
+
+    [Fact]
+    public async Task A_certificate_inside_a_pack_is_fully_typed()
+    {
+        using var harness = CloudflareHarness.Create();
+        harness.RespondWithResult(
+            """
+            {
+              "id": "pack-1",
+              "certificates": [{
+                "id": "cert-1",
+                "hosts": ["example.com"],
+                "status": "active",
+                "bundle_method": "optimal",
+                "expires_on": "2027-01-02T03:04:05Z",
+                "issuer": "Let's Encrypt",
+                "signature": "SHA256WithRSA",
+                "priority": 1.5,
+                "uploaded_on": "2026-01-02T03:04:05Z",
+                "modified_on": "2026-01-03T03:04:05Z",
+                "zone_id": "zone-5678",
+                "geo_restrictions": { "label": "us" }
+              }]
+            }
+            """);
+
+        var pack = await harness.Client.Ssl.GetAsync("pack-1");
+
+        var certificate = Assert.Single(pack!.Certificates!);
+        Assert.Equal("Let's Encrypt", certificate.Issuer);
+        Assert.Equal("SHA256WithRSA", certificate.Signature);
+        Assert.Equal(1.5, certificate.Priority);
+        Assert.Equal(new DateTimeOffset(2026, 1, 2, 3, 4, 5, TimeSpan.Zero), certificate.UploadedOn);
+        Assert.Equal(new DateTimeOffset(2026, 1, 3, 3, 4, 5, TimeSpan.Zero), certificate.ModifiedOn);
+        Assert.Equal("zone-5678", certificate.ZoneId);
+        Assert.Equal(SslBundleMethods.Optimal, certificate.BundleMethod);
+        Assert.Equal(SslGeoRestrictionLabels.Us, certificate.GeoRestrictions!.Label);
+        Assert.Equal("us", certificate.GeoRestrictions.ToString());
+        Assert.Equal("(no restriction)", new SslCertificateGeoRestrictions().ToString());
+        Assert.Null(certificate.AdditionalData);
     }
 }

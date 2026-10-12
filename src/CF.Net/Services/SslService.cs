@@ -1,4 +1,5 @@
 using System.Runtime.CompilerServices;
+using System.Text.Json;
 using CFNet.Http;
 using CFNet.Models.Ssl;
 using CFNet.Models.Zones;
@@ -15,8 +16,9 @@ namespace CFNet.Services;
 /// Listing and reading need the <c>SSL and Certificates Read</c> permission (or <c>Write</c>); ordering,
 /// changing and deleting packs need <c>SSL and Certificates Write</c>. The verification endpoints accept
 /// either the SSL and Certificates or the Mutual TLS Certificates permission, read or write. Not wrapped by
-/// this release: certificate analysis (<c>POST /zones/{zone_id}/ssl/analyze</c>) and the origin TLS
-/// compliance modes that limit what Auto-Origin TLS KEX may choose.
+/// this release: the origin TLS settings that limit what Auto-Origin TLS KEX may choose
+/// (<c>origin_tls_compliance_modes</c>, <c>origin_tls_client_auth/settings</c>), which are separate
+/// resources rather than part of SSL.
 /// </remarks>
 public interface ISslService
 {
@@ -204,6 +206,25 @@ public interface ISslService
     /// </remarks>
     Task<UniversalSslSettings> SetUniversalSslAsync(
         bool enabled,
+        string? zoneId = null,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>Inspects a certificate via <c>POST /zones/{zone_id}/ssl/analyze</c>.</summary>
+    /// <param name="request">The PEM to inspect, and optionally how to bundle its chain.</param>
+    /// <param name="zoneId">Zone id; falls back to the configured default when null.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>
+    /// Cloudflare's answer as raw JSON, or <c>null</c> when the response carries no result.
+    /// </returns>
+    /// <remarks>
+    /// The published schema types this result as <c>unknown</c> - the official Go SDK maps it to
+    /// <c>interface{}</c> - and only the prose says what is in it: the hostnames the certificate covers, its
+    /// signature algorithm and its expiration date. Returning the raw JSON is deliberate; a typed model here
+    /// would be a guess dressed up as a contract. Read what you need out of the
+    /// <see cref="JsonElement"/>, and everything the envelope carried is still on the response.
+    /// </remarks>
+    Task<JsonElement?> AnalyzeCertificateAsync(
+        AnalyzeSslCertificateRequest request,
         string? zoneId = null,
         CancellationToken cancellationToken = default);
 
@@ -542,6 +563,23 @@ public sealed class SslService : CloudflareService, ISslService
 
         var response = await Transport.SendAsync<UniversalSslSettings>(request, cancellationToken).ConfigureAwait(false);
         return response.EnsureResult();
+    }
+
+    /// <inheritdoc />
+    public async Task<JsonElement?> AnalyzeCertificateAsync(
+        AnalyzeSslCertificateRequest request,
+        string? zoneId = null,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        request.EnsureValid();
+
+        var zone = ResolveZoneId(zoneId);
+        var httpRequest = CloudflareRequest.Post($"{ZonePath(zone)}/ssl/analyze", request);
+        httpRequest.OperationName = "Analyze SSL Certificate";
+
+        var response = await Transport.SendAsync<JsonElement?>(httpRequest, cancellationToken).ConfigureAwait(false);
+        return response.Result;
     }
 
     /// <inheritdoc />

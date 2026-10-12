@@ -222,15 +222,92 @@ public sealed class SslCertificate
     [JsonPropertyName("expires_on")]
     public DateTimeOffset? ExpiresOn { get; set; }
 
-    /// <summary>
-    /// Captures the rest - <c>geo_restrictions</c>, issuer, signature and so on - rather than guessing at
-    /// field names this release has not seen documented.
-    /// </summary>
+    /// <summary>The certificate authority that issued the certificate.</summary>
+    [JsonPropertyName("issuer")]
+    public string? Issuer { get; set; }
+
+    /// <summary>The type of hash used for the certificate, e.g. <c>SHA256WithRSA</c>.</summary>
+    [JsonPropertyName("signature")]
+    public string? Signature { get; set; }
+
+    /// <summary>The order in which the certificate will be used; the pack's own priority is separate.</summary>
+    [JsonPropertyName("priority")]
+    public double? Priority { get; set; }
+
+    /// <summary>When the certificate was uploaded to Cloudflare.</summary>
+    [JsonPropertyName("uploaded_on")]
+    public DateTimeOffset? UploadedOn { get; set; }
+
+    /// <summary>When the certificate was last modified.</summary>
+    [JsonPropertyName("modified_on")]
+    public DateTimeOffset? ModifiedOn { get; set; }
+
+    /// <summary>The zone the certificate belongs to.</summary>
+    [JsonPropertyName("zone_id")]
+    public string? ZoneId { get; set; }
+
+    /// <summary>Where the private key may be held, when the zone restricts it.</summary>
+    [JsonPropertyName("geo_restrictions")]
+    public SslCertificateGeoRestrictions? GeoRestrictions { get; set; }
+
+    /// <summary>Captures any field Cloudflare adds in the future.</summary>
     [JsonExtensionData]
     public IDictionary<string, JsonElement>? AdditionalData { get; set; }
 
     /// <inheritdoc />
     public override string ToString() => Id ?? string.Empty;
+}
+
+/// <summary>The <c>geo_restrictions</c> of a certificate inside a pack.</summary>
+public sealed class SslCertificateGeoRestrictions
+{
+    /// <summary>Region label; see <see cref="SslGeoRestrictionLabels"/>.</summary>
+    [JsonPropertyName("label")]
+    public string? Label { get; set; }
+
+    /// <summary>Captures any field Cloudflare adds in the future.</summary>
+    [JsonExtensionData]
+    public IDictionary<string, JsonElement>? AdditionalData { get; set; }
+
+    /// <inheritdoc />
+    public override string ToString() => Label ?? "(no restriction)";
+}
+
+/// <summary>The region labels a certificate's <c>geo_restrictions</c> may carry.</summary>
+public static class SslGeoRestrictionLabels
+{
+    /// <summary>United States.</summary>
+    public const string Us = "us";
+
+    /// <summary>European Union.</summary>
+    public const string Eu = "eu";
+
+    /// <summary>The most restricted jurisdiction Cloudflare offers.</summary>
+    public const string HighestSecurity = "highest_security";
+
+    /// <summary>Every value the schema lists.</summary>
+    public static readonly IReadOnlyList<string> All = new[] { Us, Eu, HighestSecurity };
+}
+
+/// <summary>The <c>bundle_method</c> values Cloudflare accepts for a certificate chain.</summary>
+/// <remarks>
+/// A ubiquitous bundle has the highest probability of being verified everywhere, even by clients with
+/// outdated or unusual trust stores; an optimal bundle uses the shortest chain and the newest intermediates;
+/// force verifies the chain but does not otherwise modify it.
+/// </remarks>
+public static class SslBundleMethods
+{
+    /// <summary>Widest compatibility, longest chain.</summary>
+    public const string Ubiquitous = "ubiquitous";
+
+    /// <summary>Shortest chain, newest intermediates.</summary>
+    public const string Optimal = "optimal";
+
+    /// <summary>Verify the chain, change nothing else.</summary>
+    public const string Force = "force";
+
+    /// <summary>Every value the schema lists.</summary>
+    public static readonly IReadOnlyList<string> All = new[] { Ubiquitous, Optimal, Force };
 }
 
 /// <summary>

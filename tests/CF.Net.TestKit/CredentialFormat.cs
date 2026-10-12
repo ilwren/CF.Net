@@ -121,6 +121,20 @@ public static class CredentialFormat
         Normalise(value) is string email && EmailPattern.IsMatch(email);
 
     /// <summary>
+    /// Reports a value that <see cref="Normalise"/> had to clean up. The fixture configures the client
+    /// with what was actually set, not with the cleaned copy, so a quoted paste has to be fixed by the
+    /// human rather than quietly repaired here.
+    /// </summary>
+    /// <param name="value">The raw configured value.</param>
+    /// <param name="normalised">What it looks like once cleaned up.</param>
+    /// <param name="name">What to call it in the message, usually the variable name.</param>
+    /// <returns>The warning, or <see langword="null"/> when the value needed no cleaning.</returns>
+    private static string? ExplainQuoting(string value, string normalised, string name) =>
+        string.Equals(value, normalised, StringComparison.Ordinal)
+            ? null
+            : $"{name} has quotes or extra whitespace around it. Paste the bare value: Cloudflare compares it exactly, and nothing strips the quotes for you.";
+
+    /// <summary>
     /// Describes what is wrong with an account or zone id, or returns <see langword="null"/> when it
     /// looks right. An absent value is not malformed — "it is required" is a different message, and
     /// the caller already has one.
@@ -131,14 +145,20 @@ public static class CredentialFormat
     public static string? ExplainId(string? value, string name, string hint)
     {
         var id = Normalise(value);
-        if (id is null || IdPattern.IsMatch(id))
+        if (id is null)
         {
             return null;
         }
 
-        if (!string.Equals(id, value?.Trim(), StringComparison.Ordinal))
+        if (ExplainQuoting(value!, id, name) is string quoting)
         {
-            return $"{name} has quotes or extra whitespace around it ({Quote(id)}). Paste the bare value.";
+            // An id is not a secret, so showing the cleaned value is the fastest way to confirm it.
+            return $"{quoting} Without them it reads {Quote(id)}.";
+        }
+
+        if (IdPattern.IsMatch(id))
+        {
+            return null;
         }
 
         return $"{name} does not look like a Cloudflare id: expected 32 hexadecimal characters, got {Quote(id)}. {hint}";
@@ -153,7 +173,17 @@ public static class CredentialFormat
     public static string? ExplainApiToken(string? value, string name = "CLOUDFLARE_API_TOKEN")
     {
         var token = Normalise(value);
-        if (token is null || IsWellFormedApiToken(token))
+        if (token is null)
+        {
+            return null;
+        }
+
+        if (ExplainQuoting(value!, token, name) is string quoting)
+        {
+            return quoting;
+        }
+
+        if (IsWellFormedApiToken(token))
         {
             return null;
         }
@@ -190,7 +220,17 @@ public static class CredentialFormat
     public static string? ExplainGlobalApiKey(string? value, string name = "CLOUDFLARE_GLOBAL_API_KEY")
     {
         var key = Normalise(value);
-        if (key is null || IsWellFormedGlobalApiKey(key))
+        if (key is null)
+        {
+            return null;
+        }
+
+        if (ExplainQuoting(value!, key, name) is string quoting)
+        {
+            return quoting;
+        }
+
+        if (IsWellFormedGlobalApiKey(key))
         {
             return null;
         }
@@ -217,7 +257,17 @@ public static class CredentialFormat
     public static string? ExplainEmail(string? value, string name = "CLOUDFLARE_API_EMAIL")
     {
         var email = Normalise(value);
-        if (email is null || EmailPattern.IsMatch(email))
+        if (email is null)
+        {
+            return null;
+        }
+
+        if (ExplainQuoting(value!, email, name) is string quoting)
+        {
+            return quoting;
+        }
+
+        if (EmailPattern.IsMatch(email))
         {
             return null;
         }

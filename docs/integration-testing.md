@@ -286,14 +286,15 @@ env:
   CLOUDFLARE_IT_RECORD: ${{ inputs.cassette && 'true' || 'false' }}
 ```
 
-and the job adds one of its own, because `runner.temp` is only available at job level:
+One more variable is set inside the steps that need it, from the runner's own `$RUNNER_TEMP`:
 
-```yaml
-jobs:
-  integration:
-    env:
-      CLOUDFLARE_IT_REPORT: ${{ runner.temp }}/integration-report.tsv
+```bash
+export CLOUDFLARE_IT_REPORT="${CLOUDFLARE_IT_REPORT:-$RUNNER_TEMP/integration-report.tsv}"
 ```
+
+It is deliberately *not* a workflow- or job-level `env:` entry: the `runner` context is only available
+to step-level `env`, and referencing it higher up makes GitHub reject the entire file with
+`Unrecognized named-value: 'runner'` — which shows up as a red run with no jobs at all, on every push.
 
 Job-level `env:` is what makes them visible as process environment variables to `dotnet test`.
 GitHub masks every secret value in all log output automatically, and the tests never print a

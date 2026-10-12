@@ -95,6 +95,26 @@ public class CredentialFormatTests
     }
 
     [Fact]
+    public void A_quoted_token_is_reported_without_being_echoed()
+    {
+        var problem = CredentialFormat.ExplainApiToken($"\"{NewUserToken}\"");
+
+        Assert.NotNull(problem);
+        Assert.Contains("quotes", problem, StringComparison.Ordinal);
+        Assert.DoesNotContain(NewUserToken, problem, StringComparison.Ordinal);
+        Assert.DoesNotContain("cfut_", problem, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Trailing_whitespace_from_a_copy_is_reported()
+    {
+        var problem = CredentialFormat.ExplainGlobalApiKey(NewGlobalKey + "  ");
+
+        Assert.NotNull(problem);
+        Assert.Contains("whitespace", problem, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void A_pasted_url_is_called_out()
     {
         var problem = CredentialFormat.ExplainApiToken("https://dash.cloudflare.com/profile/api-tokens");

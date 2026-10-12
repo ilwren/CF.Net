@@ -72,12 +72,6 @@ jobs:
     permissions:
       contents: write   # only used by the opt-in "commit the cassette" step
 
-    env:
-      # Every test that ends early appends one line here, and the "Summarise the run" step turns it
-      # into a table. xunit v2 has no dynamic skip, so without this a credential-less run would look
-      # exactly like a run that talked to Cloudflare 25 times.
-      CLOUDFLARE_IT_REPORT: ${{ runner.temp }}/integration-report.tsv
-
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -187,6 +181,14 @@ jobs:
           EXTRA_FILTER: ${{ inputs.filter }}
         run: |
           set -o pipefail
+
+          # Every test that ends early appends one line here and every Cloudflare call another, and
+          # the "Summarise the run" step turns the file into tables. xunit v2 has no dynamic skip, so
+          # without it a credential-less run would look exactly like one that talked to Cloudflare 25
+          # times. It is set from the shell variable here rather than from the runner context in a
+          # job-level env:, which GitHub does not allow - the whole file is rejected if you try.
+          export CLOUDFLARE_IT_REPORT="${CLOUDFLARE_IT_REPORT:-$RUNNER_TEMP/integration-report.tsv}"
+
           filter="Category=Integration"
           if [ -n "${EXTRA_FILTER:-}" ]; then
             filter="Category=Integration&${EXTRA_FILTER}"
@@ -210,6 +212,7 @@ jobs:
         shell: bash
         run: |
           set -o pipefail
+          export CLOUDFLARE_IT_REPORT="${CLOUDFLARE_IT_REPORT:-$RUNNER_TEMP/integration-report.tsv}"
           PY=$(command -v python3 || command -v python || true)
           if [ -z "$PY" ]; then echo "no python"; exit 0; fi
           "$PY" - <<'PY'

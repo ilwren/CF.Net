@@ -1409,7 +1409,7 @@ public class PagesDirectUploadAndLogsTests
         using var harness = CloudflareHarness.Create();
         harness
             .RespondWithResult("""{"name":"shop.example.com","project_name":"site","status":"active"}""")
-            .Respond(HttpStatusCode.NotFound, "{\"success\":false,\"errors\":[],\"result\":null}");
+            .Respond("{\"success\":false,\"errors\":[],\"messages\":[],\"result\":null}", HttpStatusCode.NotFound);
 
         var domain = await harness.Client.Pages.GetDomainAsync("site", "shop.example.com");
         Assert.Equal(ProjectPath("/domains/shop.example.com"), harness.LastRequest.Path);

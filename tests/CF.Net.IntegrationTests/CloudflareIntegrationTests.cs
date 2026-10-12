@@ -1,4 +1,5 @@
 using CFNet.Exceptions;
+using CFNet.Http;
 using CFNet.Models.Common;
 using CFNet.Models.D1;
 using CFNet.Models.Dns;

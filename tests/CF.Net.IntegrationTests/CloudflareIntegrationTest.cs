@@ -271,7 +271,7 @@ public abstract class CloudflareIntegrationTest : IDisposable
 
     /// <summary>Reports a problem once per process, to the test output and to the run report.</summary>
     /// <param name="problem">The message, or <see langword="null"/> when there is nothing to say.</param>
-    private void Warn(string? problem)
+    protected void Warn(string? problem)
     {
         if (problem is null)
         {

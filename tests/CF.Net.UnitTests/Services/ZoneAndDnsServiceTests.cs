@@ -1046,16 +1046,50 @@ public class SslCertificatePacksTests
     }
 
     [Fact]
-    public async Task A_field_the_model_does_not_name_is_kept_rather_than_dropped()
+    public async Task A_newly_modelled_field_arrives_typed_and_leaves_the_extension_data()
     {
         using var harness = CloudflareHarness.Create();
         harness.RespondWithPage($"[{PackJson}]", page: 1, totalPages: 1, count: 1, totalCount: 1);
 
         var pack = Assert.Single((await harness.Client.Ssl.ListAsync()).Items);
 
-        Assert.NotNull(pack.AdditionalData);
-        Assert.Equal("txt", pack.AdditionalData!["validation_method"].GetString());
-        Assert.Equal(365, pack.AdditionalData["validity_days"].GetInt32());
+        // validation_method and validity_days were extension data until this release modelled them; they now
+        // arrive typed, and nothing else in that payload is unknown, so nothing is left to catch.
+        Assert.Equal(SslValidationMethods.Txt, pack.ValidationMethod);
+        Assert.Equal(365, pack.ValidityDays);
+        Assert.Null(pack.AdditionalData);
+    }
+
+    [Fact]
+    public async Task A_field_the_model_does_not_name_is_kept_rather_than_dropped()
+    {
+        using var harness = CloudflareHarness.Create();
+        harness.RespondWithPage(
+            """
+            [{
+              "id": "pack-1",
+              "validation_method": "txt",
+              "validity_days": 90,
+              "some_field_this_release_does_not_know": "kept",
+              "certificates": [{ "id": "cert-1", "geo_restrictions": { "label": "highest_security" } }]
+            }]
+            """,
+            page: 1,
+            totalPages: 1,
+            count: 1,
+            totalCount: 1);
+
+        var pack = Assert.Single((await harness.Client.Ssl.ListAsync()).Items);
+
+        Assert.Equal(SslValidationMethods.Txt, pack.ValidationMethod);
+        Assert.Equal(90, pack.ValidityDays);
+        Assert.Equal("kept", pack.AdditionalData!["some_field_this_release_does_not_know"].GetString());
+        Assert.False(pack.AdditionalData.ContainsKey("validation_method"));
+        Assert.False(pack.AdditionalData.ContainsKey("validity_days"));
+
+        // The restriction label is still unmodelled, so it stays available rather than being dropped.
+        var certificate = Assert.Single(pack.Certificates!);
+        Assert.Equal("highest_security", certificate.AdditionalData!["geo_restrictions"].GetProperty("label").GetString());
     }
 
     [Fact]

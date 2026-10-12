@@ -1235,3 +1235,213 @@ public class WorkerDomainFilterTests
         Assert.Equal(0, harness.RequestCount);
     }
 }
+
+public class PagesDirectUploadAndLogsTests
+{
+    private static string ProjectPath(string suffix) =>
+        $"/client/v4/accounts/{CloudflareHarness.TestAccountId}/pages/projects/site{suffix}";
+
+    [Fact]
+    public async Task PurgeBuildCacheAsync_posts_with_no_body()
+    {
+        using var harness = CloudflareHarness.Create();
+        harness.RespondWithResult("null");
+
+        await harness.Client.Pages.PurgeBuildCacheAsync("site");
+
+        Assert.Equal(HttpMethod.Post, harness.LastRequest.Method);
+        Assert.Equal(ProjectPath("/purge_build_cache"), harness.LastRequest.Path);
+        Assert.True(string.IsNullOrEmpty(harness.LastRequest.Body));
+    }
+
+    [Fact]
+    public async Task PurgeBuildCacheAsync_surfaces_a_rejection()
+    {
+        using var harness = CloudflareHarness.Create();
+        harness.RespondWithError(HttpStatusCode.Forbidden, 10000, "Not allowed to edit this resource");
+
+        var exception = await Assert.ThrowsAsync<CloudflareApiException>(
+            () => harness.Client.Pages.PurgeBuildCacheAsync("site"));
+
+        Assert.Equal(10000, exception.ErrorCode);
+    }
+
+    [Fact]
+    public async Task GetUploadTokenAsync_reads_the_jwt_without_ever_printing_it()
+    {
+        using var harness = CloudflareHarness.Create();
+        const string jwt = "eyJhbGciOiJIUzI1NiJ9.pages-upload-token";
+        harness.RespondWithResult($"{{\"jwt\":\"{jwt}\"}}");
+
+        var token = await harness.Client.Pages.GetUploadTokenAsync("site");
+
+        Assert.Equal(HttpMethod.Get, harness.LastRequest.Method);
+        Assert.Equal(ProjectPath("/upload-token"), harness.LastRequest.Path);
+        Assert.Equal(jwt, token.Jwt);
+        Assert.True(token.HasToken);
+        // A credential must not turn up in a log line, a watch window or an exception message.
+        Assert.Equal($"jwt, {jwt.Length} characters", token.ToString());
+        Assert.DoesNotContain(jwt, token.ToString(), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task GetUploadTokenAsync_without_a_result_payload_raises()
+    {
+        using var harness = CloudflareHarness.Create();
+        harness.RespondWithResult("null");
+
+        var exception = await Assert.ThrowsAsync<CloudflareApiException>(
+            () => harness.Client.Pages.GetUploadTokenAsync("site"));
+
+        Assert.Contains("without a result payload", exception.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task RetryDeploymentAsync_posts_to_the_retry_path_and_returns_the_deployment()
+    {
+        using var harness = CloudflareHarness.Create();
+        harness.RespondWithResult("""{"id":"d-1","latest_stage":{"name":"build","status":"active"}}""");
+
+        var deployment = await harness.Client.Pages.RetryDeploymentAsync("site", "d-1");
+
+        Assert.Equal(HttpMethod.Post, harness.LastRequest.Method);
+        Assert.Equal(ProjectPath("/deployments/d-1/retry"), harness.LastRequest.Path);
+        Assert.True(string.IsNullOrEmpty(harness.LastRequest.Body));
+        Assert.Equal("d-1", deployment.Id);
+        Assert.Equal("build", deployment.LatestStage!.Name);
+        Assert.Equal(PagesDeploymentStatusValues.Active, deployment.LatestStage.Status);
+    }
+
+    [Fact]
+    public async Task RetryDeploymentAsync_escapes_the_path_segments_and_requires_an_id()
+    {
+        using var harness = CloudflareHarness.Create();
+        harness.RespondWithResult("""{"id":"d/2"}""");
+
+        await harness.Client.Pages.RetryDeploymentAsync("a/b", "d/2");
+        Assert.Contains("/pages/projects/a%2Fb/deployments/d%2F2/retry", harness.LastRequest.Uri!.OriginalString, StringComparison.Ordinal);
+
+        await Assert.ThrowsAsync<CloudflareConfigurationException>(
+            () => harness.Client.Pages.RetryDeploymentAsync("site", "  "));
+    }
+
+    [Fact]
+    public async Task GetDeploymentLogsAsync_reads_the_lines_the_container_flag_and_the_total()
+    {
+        using var harness = CloudflareHarness.Create();
+        harness.RespondWithResult(
+            """
+            {
+              "data": [
+                { "line": "Installing dependencies", "ts": "2026-05-05T13:00:15Z" },
+                { "line": "Build failed: missing script", "ts": "2026-05-05T13:00:41Z" }
+              ],
+              "includes_container_logs": true,
+              "total": 42
+            }
+            """);
+
+        var logs = await harness.Client.Pages.GetDeploymentLogsAsync("site", "d-1");
+
+        Assert.Equal(HttpMethod.Get, harness.LastRequest.Method);
+        Assert.Equal(ProjectPath("/deployments/d-1/history/logs"), harness.LastRequest.Path);
+        Assert.Equal(2, logs.Data!.Count);
+        Assert.Equal("Installing dependencies", logs.Data[0].Line);
+        // Cloudflare types "ts" as a string, so it stays one rather than being parsed on a guess.
+        Assert.Equal("2026-05-05T13:00:15Z", logs.Data[0].Timestamp);
+        Assert.True(logs.IncludesContainerLogs);
+        Assert.Equal(42, logs.Total);
+        Assert.Equal("2 of 42 log lines", logs.ToString());
+
+        // A truncated log is normal: fewer lines returned than Cloudflare holds in total.
+        Assert.Contains("Installing dependencies", logs.Text, StringComparison.Ordinal);
+        Assert.Contains("Build failed: missing script", logs.Text, StringComparison.Ordinal);
+        Assert.EndsWith("\n", logs.Text, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task GetDeploymentLogsAsync_reads_a_deployment_with_no_logs()
+    {
+        using var harness = CloudflareHarness.Create();
+        harness.RespondWithResult("""{"data":[],"includes_container_logs":false,"total":0}""");
+
+        var logs = await harness.Client.Pages.GetDeploymentLogsAsync("site", "d-1");
+
+        Assert.Empty(logs.Data!);
+        Assert.Equal(string.Empty, logs.Text);
+        Assert.False(logs.IncludesContainerLogs);
+        Assert.Equal("0 of 0 log lines", logs.ToString());
+    }
+
+    [Fact]
+    public async Task Deployment_logs_keep_fields_this_release_does_not_name()
+    {
+        using var harness = CloudflareHarness.Create();
+        harness.RespondWithResult(
+            """
+            {
+              "data": [{ "line": "hi", "ts": "now", "level": "info" }],
+              "total": 1,
+              "truncated": true
+            }
+            """);
+
+        var logs = await harness.Client.Pages.GetDeploymentLogsAsync("site", "d-1");
+
+        Assert.True(logs.AdditionalData!["truncated"].GetBoolean());
+        Assert.Equal("info", logs.Data![0].AdditionalData!["level"].GetString());
+        Assert.Equal("hi", logs.Data[0].ToString());
+    }
+
+    [Fact]
+    public async Task GetDeploymentLogsAsync_without_a_result_payload_raises()
+    {
+        using var harness = CloudflareHarness.Create();
+        harness.RespondWithResult("null");
+
+        await Assert.ThrowsAsync<CloudflareApiException>(
+            () => harness.Client.Pages.GetDeploymentLogsAsync("site", "d-1"));
+    }
+
+    [Fact]
+    public async Task GetDomainAsync_reads_one_domain_and_returns_null_when_it_is_not_attached()
+    {
+        using var harness = CloudflareHarness.Create();
+        harness
+            .RespondWithResult("""{"name":"shop.example.com","project_name":"site","status":"active"}""")
+            .Respond(HttpStatusCode.NotFound, "{\"success\":false,\"errors\":[],\"result\":null}");
+
+        var domain = await harness.Client.Pages.GetDomainAsync("site", "shop.example.com");
+        Assert.Equal(ProjectPath("/domains/shop.example.com"), harness.LastRequest.Path);
+        Assert.Equal("shop.example.com", domain!.Name);
+        Assert.Equal("active", domain.Status);
+
+        Assert.Null(await harness.Client.Pages.GetDomainAsync("site", "missing.example.com"));
+    }
+
+    [Fact]
+    public async Task ListDeploymentsAsync_sends_the_documented_env_filter()
+    {
+        using var harness = CloudflareHarness.Create();
+        harness.RespondWithPage("[]", page: 1, totalPages: 1, count: 0, totalCount: 0);
+
+        await harness.Client.Pages.ListDeploymentsAsync(
+            "site",
+            new PagesDeploymentListParameters { Env = PagesDeploymentEnvironments.Preview, Page = 2, PerPage = 20 });
+
+        Assert.Equal(ProjectPath("/deployments"), harness.LastRequest.Path);
+        Assert.Equal("page=2&per_page=20&env=preview", harness.LastRequest.Query.TrimStart('?'));
+    }
+
+    [Fact]
+    public async Task ListDeploymentsAsync_sends_no_query_at_all_when_nothing_is_set()
+    {
+        using var harness = CloudflareHarness.Create();
+        harness.RespondWithPage("[]", page: 1, totalPages: 1, count: 0, totalCount: 0);
+
+        await harness.Client.Pages.ListDeploymentsAsync("site");
+
+        Assert.Equal(string.Empty, harness.LastRequest.Query);
+        Assert.Equal(new[] { "production", "preview" }, PagesDeploymentEnvironments.All);
+    }
+}

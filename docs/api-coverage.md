@@ -256,13 +256,18 @@ list, tails, observability configuration, and Workers AI.
 | `CreateAsync(string projectName, string productionBranch, accountId)` | `POST …/pages/projects` | |
 | `CreateAsync(CreatePagesProjectRequest, accountId)` | `POST …/pages/projects` | validates the project name locally (≤58 chars, lowercase/digit start, `[a-z0-9-]`) |
 | `UpdateAsync(projectName, UpdatePagesProjectRequest, accountId)` | `PATCH …/pages/projects/{project_name}` | |
+| `PurgeBuildCacheAsync(projectName, accountId)` | `POST …/pages/projects/{project_name}/purge_build_cache` | no body, no meaningful result - the next build starts from an empty cache |
+| `GetUploadTokenAsync(projectName, accountId)` | `GET …/pages/projects/{project_name}/upload-token` | `{jwt}` - the short-lived token the asset endpoints want instead of your API token. `ToString()` reports its length, never the token |
 | `DeleteAsync(projectName, accountId)` | `DELETE …/pages/projects/{project_name}` | |
-| `ListDeploymentsAsync(projectName, PagesDeploymentListParameters?, accountId)` | `GET …/pages/projects/{project_name}/deployments` | `page`, `per_page`, `branch`, `order`, `direction` |
+| `ListDeploymentsAsync(projectName, PagesDeploymentListParameters?, accountId)` | `GET …/pages/projects/{project_name}/deployments` | the schema documents `env` (`production`/`preview`), `page` and `per_page`; `branch`, `order` and `direction` are not in it and are only sent when set, the same caveat the project list carries for `search` |
 | `GetDeploymentAsync(projectName, deploymentId, accountId)` | `GET …/deployments/{deployment_id}` | `null` on 404 |
 | `CreateDeploymentAsync(projectName, CreatePagesDeploymentRequest?, accountId)` | `POST …/deployments` | direct-upload deployment |
 | `DeleteDeploymentAsync(projectName, deploymentId, accountId)` | `DELETE …/deployments/{deployment_id}` | |
+| `RetryDeploymentAsync(projectName, deploymentId, accountId)` | `POST …/deployments/{deployment_id}/retry` | no body; runs the build again, which is what a deployment that failed on something transient needs. Distinct from rollback, which points production at a build that already succeeded |
+| `GetDeploymentLogsAsync(projectName, deploymentId, accountId)` | `GET …/deployments/{deployment_id}/history/logs` | `{data:[{line,ts}], includes_container_logs, total}`. `Text` joins the lines for printing; `total` can exceed what came back, so a truncated log is not an error. The only way to read a failed build's output through the API |
 | `RollbackDeploymentAsync(projectName, deploymentId, accountId)` | `POST …/deployments/{deployment_id}/rollback` | rolls **production** back to the deployment in the path; no body, returns the deployment now serving |
 | `ListDomainsAsync(projectName, PagesDomainListParameters?, accountId)` | `GET …/pages/projects/{project_name}/domains` | |
+| `GetDomainAsync(projectName, domainName, accountId)` | `GET …/domains/{domain}` | `null` on 404 |
 | `AddDomainAsync(projectName, domainName, accountId)` | `POST …/domains` | |
 | `UpdateDomainAsync(projectName, domainName, UpdatePagesDomainRequest, accountId)` | `PATCH …/domains/{domain}` | `verified`, `ownership_verified` |
 | `DeleteDomainAsync(projectName, domainName, accountId)` | `DELETE …/domains/{domain}` | |
@@ -271,8 +276,19 @@ list, tails, observability configuration, and Workers AI.
 `PagesProjectSource`, `PagesEnvVar` and the Pages binding dictionaries are modelled; anything
 Cloudflare adds later is preserved in `AdditionalData`.
 
-⛔ Pushing deployment assets (the S3-style `PUT` to the returned upload URL), build logs,
-Functions routes, and the `pages/projects/{name}/bookmarks` family.
+**Pushing the assets themselves is deliberately not wrapped, and the reason matters.** Direct Upload is four
+calls: `GET …/upload-token` for a short-lived JWT, then `POST /client/v4/pages/assets/check-missing`,
+`/upload` and `/upsert-hashes` authenticated *with that JWT* rather than your API token, then
+`POST …/deployments` with the manifest. Only the first and the last are in the published API reference; the
+three asset endpoints are not, they carry no `/accounts/{id}` prefix, and they are keyed by a hash that is
+BLAKE3 over the file's **base64 text plus its extension without the dot** - not SHA-256 of the bytes. Getting
+that wrong is silent: the upload succeeds, the upsert succeeds, the deployment succeeds, `file_count` comes
+back positive, and every asset 404s forever. A wrapper that cannot be verified offline and fails without an
+error is worse than no wrapper, so this library hands over the token (`GetUploadTokenAsync`) and leaves the
+bytes to wrangler, which is the supported path.
+
+⛔ Functions routes and the `_headers`/`_redirects` equivalents. Build logs and the deployment lifecycle are
+covered above.
 
 ## D1
 

@@ -60,6 +60,40 @@ public interface IPagesProjectsService
     /// <param name="cancellationToken">Cancellation token.</param>
     Task DeleteAsync(string projectName, string? accountId = null, CancellationToken cancellationToken = default);
 
+    /// <summary>
+    /// Purges every cached build artefact of a project via
+    /// <c>POST /accounts/{account_id}/pages/projects/{project_name}/purge_build_cache</c>.
+    /// </summary>
+    /// <param name="projectName">Project name.</param>
+    /// <param name="accountId">Account id; falls back to the configured default when null.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <remarks>
+    /// The next build starts from an empty cache, which is the fix when a build keeps reusing a dependency or
+    /// image layer that has gone stale. Takes no body, and Cloudflare sends no meaningful result - the call
+    /// either succeeds or throws.
+    /// </remarks>
+    Task PurgeBuildCacheAsync(string projectName, string? accountId = null, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Fetches the short-lived Direct Upload JWT via
+    /// <c>GET /accounts/{account_id}/pages/projects/{project_name}/upload-token</c>.
+    /// </summary>
+    /// <param name="projectName">Project name.</param>
+    /// <param name="accountId">Account id; falls back to the configured default when null.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>The JWT that authenticates the Pages asset endpoints.</returns>
+    /// <remarks>
+    /// The token, not your API token, is what the asset endpoints accept - and those endpoints
+    /// (<c>/client/v4/pages/assets/check-missing</c>, <c>/upload</c>, <c>/upsert-hashes</c>) are not in the
+    /// published API reference, are keyed by a BLAKE3 hash of the base64 content plus the file extension, and
+    /// accept a wrong key silently, after which every asset 404s. This library therefore stops at the token;
+    /// use wrangler to push assets.
+    /// </remarks>
+    Task<PagesUploadToken> GetUploadTokenAsync(
+        string projectName,
+        string? accountId = null,
+        CancellationToken cancellationToken = default);
+
     /// <summary>Lists deployments of a project.</summary>
     /// <param name="projectName">Project name.</param>
     /// <param name="parameters">Optional filters and paging.</param>
@@ -100,6 +134,46 @@ public interface IPagesProjectsService
     /// <param name="cancellationToken">Cancellation token.</param>
     Task DeleteDeploymentAsync(string projectName, string deploymentId, string? accountId = null, CancellationToken cancellationToken = default);
 
+    /// <summary>
+    /// Retries a deployment via
+    /// <c>POST /accounts/{account_id}/pages/projects/{project_name}/deployments/{deployment_id}/retry</c>.
+    /// </summary>
+    /// <param name="projectName">Project name.</param>
+    /// <param name="deploymentId">Id of the deployment to run again.</param>
+    /// <param name="accountId">Account id; falls back to the configured default when null.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>The deployment as Cloudflare reports it after the retry was queued.</returns>
+    /// <remarks>
+    /// Needs <c>Pages Write</c>. Takes no body. Unlike <see cref="RollbackDeploymentAsync"/>, which points
+    /// production at a deployment that already succeeded, this one runs the build again - the right call for a
+    /// deployment that failed on something transient.
+    /// </remarks>
+    Task<PagesDeployment> RetryDeploymentAsync(
+        string projectName,
+        string deploymentId,
+        string? accountId = null,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Fetches a deployment's build logs via
+    /// <c>GET /accounts/{account_id}/pages/projects/{project_name}/deployments/{deployment_id}/history/logs</c>.
+    /// </summary>
+    /// <param name="projectName">Project name.</param>
+    /// <param name="deploymentId">Deployment whose logs to read.</param>
+    /// <param name="accountId">Account id; falls back to the configured default when null.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>The lines Cloudflare has, plus how many it holds in total.</returns>
+    /// <remarks>
+    /// This is the only way to read a failed build's output through the API. <see cref="PagesDeploymentLogs.Text"/>
+    /// joins the lines for printing; <see cref="PagesDeploymentLogs.Total"/> can exceed the number returned,
+    /// so a truncated log is not an error.
+    /// </remarks>
+    Task<PagesDeploymentLogs> GetDeploymentLogsAsync(
+        string projectName,
+        string deploymentId,
+        string? accountId = null,
+        CancellationToken cancellationToken = default);
+
     /// <summary>Lists the custom domains attached to a project.</summary>
     /// <param name="projectName">Project name.</param>
     /// <param name="parameters">Optional paging.</param>
@@ -108,6 +182,18 @@ public interface IPagesProjectsService
     Task<CloudflarePage<PagesDomain>> ListDomainsAsync(
         string projectName,
         PagesDomainListParameters? parameters = null,
+        string? accountId = null,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>Fetches one custom domain of a project.</summary>
+    /// <param name="projectName">Project name.</param>
+    /// <param name="domainName">Domain to read.</param>
+    /// <param name="accountId">Account id; falls back to the configured default when null.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>The domain, or <c>null</c> when the project has no such domain.</returns>
+    Task<PagesDomain?> GetDomainAsync(
+        string projectName,
+        string domainName,
         string? accountId = null,
         CancellationToken cancellationToken = default);
 
@@ -445,6 +531,86 @@ public sealed class PagesProjectsService : CloudflareService, IPagesProjectsServ
     /// Builds <c>accounts/{account_id}/pages/projects/{project_name}</c>. Pages addresses projects by
     /// name, and the name travels as a path segment, so it is escaped.
     /// </summary>
+    /// <inheritdoc />
+    public async Task PurgeBuildCacheAsync(
+        string projectName,
+        string? accountId = null,
+        CancellationToken cancellationToken = default)
+    {
+        var request = CloudflareRequest.Post(ProjectPath(ResolveAccountId(accountId), projectName) + "/purge_build_cache");
+        request.OperationName = "Purge Pages Build Cache";
+
+        await SendVoidAsync(request, cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <inheritdoc />
+    public async Task<PagesUploadToken> GetUploadTokenAsync(
+        string projectName,
+        string? accountId = null,
+        CancellationToken cancellationToken = default)
+    {
+        var request = CloudflareRequest.Get(ProjectPath(ResolveAccountId(accountId), projectName) + "/upload-token");
+        request.OperationName = "Get Pages Upload Token";
+
+        var response = await Transport.SendAsync<PagesUploadToken>(request, cancellationToken).ConfigureAwait(false);
+        return response.EnsureResult();
+    }
+
+    /// <inheritdoc />
+    public async Task<PagesDeployment> RetryDeploymentAsync(
+        string projectName,
+        string deploymentId,
+        string? accountId = null,
+        CancellationToken cancellationToken = default)
+    {
+        var account = ResolveAccountId(accountId);
+        var deployment = Require(deploymentId, nameof(deploymentId));
+
+        var request = CloudflareRequest.Post(
+            $"{ProjectPath(account, projectName)}/deployments/{CloudflareUrl.EncodeSegment(deployment)}/retry");
+        request.OperationName = "Retry Pages Deployment";
+
+        var response = await Transport.SendAsync<PagesDeployment>(request, cancellationToken).ConfigureAwait(false);
+        return response.EnsureResult();
+    }
+
+    /// <inheritdoc />
+    public async Task<PagesDeploymentLogs> GetDeploymentLogsAsync(
+        string projectName,
+        string deploymentId,
+        string? accountId = null,
+        CancellationToken cancellationToken = default)
+    {
+        var account = ResolveAccountId(accountId);
+        var deployment = Require(deploymentId, nameof(deploymentId));
+
+        var request = CloudflareRequest.Get(
+            $"{ProjectPath(account, projectName)}/deployments/{CloudflareUrl.EncodeSegment(deployment)}/history/logs");
+        request.OperationName = "Get Pages Deployment Logs";
+
+        var response = await Transport.SendAsync<PagesDeploymentLogs>(request, cancellationToken).ConfigureAwait(false);
+        return response.EnsureResult();
+    }
+
+    /// <inheritdoc />
+    public async Task<PagesDomain?> GetDomainAsync(
+        string projectName,
+        string domainName,
+        string? accountId = null,
+        CancellationToken cancellationToken = default)
+    {
+        var path = ProjectPath(ResolveAccountId(accountId), projectName);
+        var domain = Require(domainName, nameof(domainName));
+
+        var request = CloudflareRequest
+            .Get($"{path}/domains/{CloudflareUrl.EncodeSegment(domain)}")
+            .Tolerate(System.Net.HttpStatusCode.NotFound);
+        request.OperationName = "Get Pages Domain";
+
+        var response = await Transport.SendAsync<PagesDomain>(request, cancellationToken).ConfigureAwait(false);
+        return response.Result;
+    }
+
     private static string ProjectPath(string accountId, string projectName) =>
         $"{AccountPath(accountId)}/pages/projects/{CloudflareUrl.EncodeSegment(Require(projectName, nameof(projectName)))}";
 

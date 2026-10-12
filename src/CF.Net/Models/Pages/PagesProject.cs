@@ -487,3 +487,33 @@ public sealed class PagesProjectListParameters : CloudflarePagedParameters
         query.AddIfNotEmpty("search", Search);
     }
 }
+
+/// <summary>
+/// The short-lived JWT from <c>GET /accounts/{account_id}/pages/projects/{project_name}/upload-token</c>.
+/// </summary>
+/// <remarks>
+/// This is the only part of Pages Direct Upload that Cloudflare publishes. The JWT - not your API token - is
+/// what authenticates the asset endpoints (<c>/client/v4/pages/assets/check-missing</c>, <c>/upload</c>,
+/// <c>/upsert-hashes</c>), and those are absent from the API reference. They are also keyed by a hash that is
+/// easy to get wrong and impossible to detect: BLAKE3 over the file's base64 text plus its extension without
+/// the dot, and a deployment built with the wrong keys uploads, upserts and deploys without complaint before
+/// every asset 404s. <see cref="ToString"/> therefore reports the token's length rather than the token.
+/// Pushing assets is wrangler's job; this library hands you the token and says so.
+/// </remarks>
+public sealed class PagesUploadToken
+{
+    /// <summary>The JWT itself. Short-lived, account-scoped, and worth treating as a secret.</summary>
+    [JsonPropertyName("jwt")]
+    public string? Jwt { get; set; }
+
+    /// <summary>Captures any field Cloudflare adds in the future.</summary>
+    [JsonExtensionData]
+    public IDictionary<string, JsonElement>? AdditionalData { get; set; }
+
+    /// <summary>True when a token came back.</summary>
+    [JsonIgnore]
+    public bool HasToken => !string.IsNullOrWhiteSpace(Jwt);
+
+    /// <inheritdoc />
+    public override string ToString() => Jwt is null ? "(no token)" : $"jwt, {Jwt.Length} characters";
+}

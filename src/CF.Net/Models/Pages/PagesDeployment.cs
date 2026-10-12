@@ -121,6 +121,12 @@ public sealed class PagesDeploymentStage
 }
 
 /// <summary>Literal values Cloudflare uses for a deployment stage status.</summary>
+/// <remarks>
+/// The current schema lists <c>success</c>, <c>idle</c>, <c>active</c>, <c>failure</c>, <c>canceled</c> and
+/// <c>skipped</c>. <c>in_progress</c>, <c>pending</c>, <c>none</c> and <c>unknown</c> are kept as well:
+/// older responses and the dashboard still use them, and a status this library has never heard of is not a
+/// deserialisation failure - the field is a string precisely so that a new value cannot break a caller.
+/// </remarks>
 public static class PagesDeploymentStatusValues
 {
     /// <summary>Status was not reported.</summary>
@@ -129,7 +135,13 @@ public static class PagesDeploymentStatusValues
     /// <summary>The stage is waiting to run.</summary>
     public const string Queued = "queued";
 
-    /// <summary>The stage is running.</summary>
+    /// <summary>The stage has not started and nothing is waiting on it.</summary>
+    public const string Idle = "idle";
+
+    /// <summary>The stage is running - the schema's current spelling of "in flight".</summary>
+    public const string Active = "active";
+
+    /// <summary>The stage is running. Older spelling, still seen in responses.</summary>
     public const string InProgress = "in_progress";
 
     /// <summary>The stage finished successfully.</summary>
@@ -154,6 +166,12 @@ public static class PagesDeploymentStatusValues
 /// <summary>Query filters for the Pages deployments list endpoint.</summary>
 public sealed class PagesDeploymentListParameters : CloudflarePagedParameters
 {
+    /// <summary>
+    /// Which environment to return: <see cref="PagesDeploymentEnvironments.Production"/> or
+    /// <see cref="PagesDeploymentEnvironments.Preview"/>. Omit it for both.
+    /// </summary>
+    public string? Env { get; set; }
+
     /// <summary>Only deployments for this branch.</summary>
     public string? Branch { get; set; }
 
@@ -164,9 +182,16 @@ public sealed class PagesDeploymentListParameters : CloudflarePagedParameters
     public SortDirection? Direction { get; set; }
 
     /// <inheritdoc />
+    /// <remarks>
+    /// The published schema for this endpoint lists <c>env</c>, <c>page</c> and <c>per_page</c>.
+    /// <see cref="Branch"/>, <see cref="Order"/> and <see cref="Direction"/> are accepted by the service but
+    /// are not part of that schema, and are only sent when set - the same caveat the project list carries
+    /// for its <c>search</c> parameter.
+    /// </remarks>
     public override void Apply(QueryStringBuilder query)
     {
         base.Apply(query);
+        query.AddIfNotEmpty("env", Env);
         query.AddIfNotEmpty("branch", Branch);
         query.AddIfNotEmpty("order", Order);
         if (Direction.HasValue)
@@ -174,6 +199,19 @@ public sealed class PagesDeploymentListParameters : CloudflarePagedParameters
             query.Add("direction", QueryEnums.ToWire(Direction.Value));
         }
     }
+}
+
+/// <summary>The <c>env</c> values the deployment list accepts.</summary>
+public static class PagesDeploymentEnvironments
+{
+    /// <summary>Deployments serving the production branch and its aliases.</summary>
+    public const string Production = "production";
+
+    /// <summary>Preview deployments, each on its own <c>&lt;id&gt;.&lt;project&gt;.pages.dev</c> URL.</summary>
+    public const string Preview = "preview";
+
+    /// <summary>Every value the schema lists.</summary>
+    public static readonly IReadOnlyList<string> All = new[] { Production, Preview };
 }
 
 /// <summary>

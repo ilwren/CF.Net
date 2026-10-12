@@ -821,6 +821,86 @@ public class WriteIntegrationTests : CloudflareIntegrationTest
     }
 
     [Fact]
+    public async Task Pages_deployments_logs_and_upload_tokens_can_be_read()
+    {
+        if (!SkipWithoutAccount())
+        {
+            return;
+        }
+
+        var projects = await Client.Pages.ListAsync(new PagesProjectListParameters { PerPage = 20 });
+        var project = projects.Items.FirstOrDefault();
+        if (project?.Name is null)
+        {
+            SkipUnless(false, "This account has no Pages project, so there are no deployments to read.");
+            return;
+        }
+
+        // env is the filter the schema documents; branch, order and direction are not, so they stay unset
+        // and this run is evidence about the documented one only.
+        var deployments = await Client.Pages.ListDeploymentsAsync(
+            project.Name,
+            new PagesDeploymentListParameters { Env = PagesDeploymentEnvironments.Production, PerPage = 5 });
+        Log($"project {project.Name}: {deployments.Count} production deployments of {deployments.TotalCount}");
+
+        var deployment = deployments.Items.FirstOrDefault();
+        if (deployment?.Id is null)
+        {
+            Log("no production deployment yet, so there are no build logs to read");
+        }
+        else
+        {
+            Log($"deployment {deployment.Id} stage={deployment.LatestStage?.Name} status={deployment.Status}");
+            try
+            {
+                var logs = await Client.Pages.GetDeploymentLogsAsync(project.Name, deployment.Id);
+                Assert.NotNull(logs);
+                Log($"  logs: {logs}, container logs included={logs.IncludesContainerLogs}");
+                foreach (var line in (logs.Data ?? new List<PagesDeploymentLogLine>()).Take(3))
+                {
+                    Log($"    [{line.Timestamp}] {line.Line}");
+                }
+            }
+            catch (CloudflareApiException exception) when (exception.IsNotFound)
+            {
+                // A Direct Upload deployment never runs a build, so it has no build log to fetch.
+                Warn($"no build logs for deployment {deployment.Id} - it never ran a build");
+            }
+        }
+
+        // The token is the only documented piece of Direct Upload. It is a credential, so the run report
+        // gets its length rather than its value.
+        var token = await Client.Pages.GetUploadTokenAsync(project.Name);
+        Assert.True(token.HasToken);
+        Log($"upload token: {token}");
+
+        // A domain that was never attached reads as null rather than as a failure.
+        Assert.Null(await Client.Pages.GetDomainAsync(project.Name, "cfnet-it-missing.example.com"));
+    }
+
+    [Fact]
+    public async Task A_pages_project_build_cache_can_be_purged()
+    {
+        if (!SkipWithoutAccount() || !SkipWithoutWritePermission())
+        {
+            return;
+        }
+
+        var projects = await Client.Pages.ListAsync(new PagesProjectListParameters { PerPage = 20 });
+        var project = projects.Items.FirstOrDefault();
+        if (project?.Name is null)
+        {
+            SkipUnless(false, "This account has no Pages project whose build cache could be purged.");
+            return;
+        }
+
+        // Purging only throws away cached build artefacts: the next build is slower, nothing is deleted.
+        // Retrying a deployment is deliberately not exercised here, because that starts a real build.
+        await Client.Pages.PurgeBuildCacheAsync(project.Name);
+        Log($"purged the build cache of {project.Name}");
+    }
+
+    [Fact]
     public async Task The_cache_can_be_purged_by_url()
     {
         if (!SkipWithoutZone() || !SkipWithoutWritePermission())

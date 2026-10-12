@@ -422,6 +422,7 @@ Always safe. They run whenever credentials are present.
 | `Worker_scripts_can_be_listed` | `/workers/scripts` |
 | `The_workers_dev_subdomain_can_be_read` | `/workers/subdomain` |
 | `Pages_projects_can_be_listed` | `/pages/projects` |
+| `Pages_deployments_logs_and_upload_tokens_can_be_read` | `/pages/projects/{p}/deployments?env=production`, `…/deployments/{id}/history/logs` (a 404 is a warning, not a failure - a Direct Upload deployment never runs a build), `…/upload-token` logged as its length only because the JWT is a credential, and `…/domains/{name}` for a domain that was never attached reading as `null` |
 | `D1_databases_can_be_listed_and_queried` | `/d1/database`, plus `SELECT 1` and `FirstColumn<int>` |
 | `Kv_namespaces_can_be_listed` | `/storage/kv/namespaces` |
 | `R2_buckets_can_be_listed` | `/r2/buckets`, including the `{buckets:[…]}` unwrap |
@@ -442,6 +443,7 @@ assertion failure mid-test still removes the resource.
 | `A_worker_script_can_be_uploaded_and_removed` | a script with a `plain_text` binding | `DELETE` the script |
 | `A_pages_project_can_be_created_and_removed` | a project on branch `main` | `DELETE` the project |
 | `The_cache_can_be_purged_by_url` | nothing | n/a — purges one URL that does not exist |
+| `A_pages_project_build_cache_can_be_purged` | nothing | n/a — empties cached build artefacts, so the next build is slower |
 
 Resource names are generated with a timestamp and a random suffix (`cfnet-it-20260101120000-a1b2c3d4`)
 so concurrent runs never collide, and a failed cleanup leaves something obviously disposable.
@@ -451,6 +453,11 @@ but a Worker script counts towards your script limit, a D1 database towards your
 R2 bucket towards your bucket limit, and a cache purge is rate limited (30 per 15 minutes for
 `purge_everything`, 100 per 15 minutes otherwise). Run the write suite deliberately, not on a
 schedule.
+
+Two Pages calls are deliberately **not** exercised live. `RetryDeploymentAsync` starts a real build, which
+costs build minutes for no additional evidence that the endpoint works; and the Direct Upload asset endpoints
+are not in the published API reference at all, so there is nothing documented to verify against - see the
+Pages section of `api-coverage.md`.
 
 ---
 

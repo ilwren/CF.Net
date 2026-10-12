@@ -79,9 +79,10 @@ through `DnsRecord.Data` and `DnsRecord.GetData<T>()`.
 
 ---
 
-## SSL certificate packs
+## SSL
 
-`ISslService` — `client.Ssl`
+`ISslService` — `client.Ssl`. Certificate packs, Universal SSL, validation details, the pack quota,
+and the two SSL enrolment settings Cloudflare serves from the zone settings path.
 
 | Method | Endpoint | Notes |
 | --- | --- | --- |
@@ -99,6 +100,12 @@ through `DnsRecord.Data` and `DnsRecord.GetData<T>()`.
 | `GetQuotaAsync(zoneId)` | `GET …/ssl/certificate_packs/quota` | `{"advanced":{"allocated":…,"used":…}}`, plus `Remaining`; worth calling before ordering, since ordering past the quota fails |
 | `GetUniversalSettingsAsync(zoneId)` | `GET /zones/{zone_id}/ssl/universal/settings` | one boolean, `enabled` |
 | `SetUniversalSslAsync(enabled, zoneId)` | `PATCH …/ssl/universal/settings` | body `{"enabled":true|false}` - `false` is sent explicitly, because an empty PATCH would leave the setting alone |
+| `GetAutoOriginTlsKexAsync(zoneId)` | `GET /zones/{zone_id}/settings/auto_origin_tls_kex` | `{id, enabled, modified_on}` - note `enabled`, not the `value` almost every other zone setting uses, which is why it gets its own model instead of reusing `ZoneSetting` |
+| `SetAutoOriginTlsKexAsync(enabled, zoneId)` | `PATCH …/settings/auto_origin_tls_kex` | body `{"enabled":true|false}`; the flag is required by the schema and always sent explicitly |
+| `GetAutomaticSslAsync(zoneId)` | `GET …/settings/ssl_automatic_mode` | `{id, editable, modified_on, value, next_scheduled_scan?}`; `value` is `auto` (enrolled) or `custom` (not) |
+| `SetAutomaticSslAsync(mode, zoneId)` | `PATCH …/settings/ssl_automatic_mode` | body `{"value":"auto"\|"custom"}`; any other value is refused locally, because Cloudflare answers it with error 1008, "Invalid SSL/TLS encryption configuration value, only auto or custom accepted" |
+| `EnableAutomaticSslAsync(zoneId)` / `DisableAutomaticSslAsync(zoneId)` | `PATCH …/settings/ssl_automatic_mode` | the same call with `auto` / `custom` |
+| `GetRecommendationAsync(zoneId)` | `GET …/ssl/recommendation` | **deprecated**, and the path is **singular** - `recommendation`, not `recommendations`. It reports the automatic-mode setting rather than a suggested encryption mode, so prefer `GetAutomaticSslAsync` |
 
 Permissions are `SSL and Certificates Read` to list and read, `SSL and Certificates Write` to delete. The
 verification endpoints accept any one of four: `SSL and Certificates` or `Access: Mutual TLS Certificates`,
@@ -149,8 +156,21 @@ or `cname` - `cname`, meaning DCV delegation, is accepted here but *not* when or
 `SslValidationMethods.Cname` is deliberately absent from `SslValidationMethods.All`) and validates with it
 straight away.
 
-⛔ Auto-origin TLS KEX (`ssl/auto_origin_tls_kex`), automatic SSL/TLS enrolment, the SSL/TLS recommendation
-(`ssl/recommendations`) and SSL for SaaS custom hostnames.
+**Two of these are zone settings that Cloudflare files under SSL.** Auto-Origin TLS KEX and Automatic SSL/TLS
+enrolment are served from `/zones/{zone_id}/settings/…`, so `client.Zones.GetSettingAsync("auto_origin_tls_kex")`
+reaches them too - but the generic `ZoneSetting` model would leave their payload in `AdditionalData`, because one
+reports `enabled` instead of `value` and the other adds `next_scheduled_scan`. `client.Ssl` wraps both typed, and
+`ZoneSettingIds` now names the two ids.
+
+Auto-Origin TLS KEX has Cloudflare scan the zone's origins periodically, work out which key-exchange algorithm
+they prefer, and send it first in the TLS ClientHello; it may only choose from what the zone's
+`origin_tls_compliance_modes` setting allows, and turning it off returns to the default ordering. Automatic
+SSL/TLS `auto` enrols the zone so Cloudflare manages its encryption mode, `custom` leaves that to the zone -
+and opting out does not itself change the mode the zone is on.
+
+⛔ Certificate analysis (`POST /zones/{zone_id}/ssl/analyze`), the origin TLS settings that constrain
+Auto-Origin TLS KEX (`origin_tls_compliance_modes`, `origin_tls_client_auth/settings`) and SSL for SaaS custom
+hostnames, which are a separate resource rather than part of `ssl`.
 
 ## Users and accounts
 

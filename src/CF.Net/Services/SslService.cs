@@ -1,18 +1,22 @@
 using System.Runtime.CompilerServices;
 using CFNet.Http;
 using CFNet.Models.Ssl;
+using CFNet.Models.Zones;
 
 namespace CFNet.Services;
 
 /// <summary>
-/// SSL for a zone: the certificate packs under <c>/zones/{zone_id}/ssl/certificate_packs</c> and the
-/// Universal SSL switch under <c>/zones/{zone_id}/ssl/universal/settings</c>.
+/// SSL for a zone: the certificate packs under <c>/zones/{zone_id}/ssl/certificate_packs</c>, the
+/// Universal SSL switch under <c>/zones/{zone_id}/ssl/universal/settings</c>, validation details under
+/// <c>/zones/{zone_id}/ssl/verification</c>, and the two SSL enrolment settings Cloudflare files under SSL
+/// but serves from <c>/zones/{zone_id}/settings/…</c>.
 /// </summary>
 /// <remarks>
 /// Listing and reading need the <c>SSL and Certificates Read</c> permission (or <c>Write</c>); ordering,
 /// changing and deleting packs need <c>SSL and Certificates Write</c>. The verification endpoints accept
 /// either the SSL and Certificates or the Mutual TLS Certificates permission, read or write. Not wrapped by
-/// this release: auto-origin TLS KEX, automatic SSL/TLS enrolment and the SSL/TLS recommendation.
+/// this release: certificate analysis (<c>POST /zones/{zone_id}/ssl/analyze</c>) and the origin TLS
+/// compliance modes that limit what Auto-Origin TLS KEX may choose.
 /// </remarks>
 public interface ISslService
 {
@@ -200,6 +204,94 @@ public interface ISslService
     /// </remarks>
     Task<UniversalSslSettings> SetUniversalSslAsync(
         bool enabled,
+        string? zoneId = null,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Reads Auto-Origin TLS KEX enrolment via <c>GET /zones/{zone_id}/settings/auto_origin_tls_kex</c>.
+    /// </summary>
+    /// <param name="zoneId">Zone id; falls back to the configured default when null.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>Whether Cloudflare is picking the origin key-exchange algorithm for the zone.</returns>
+    Task<AutoOriginTlsKex> GetAutoOriginTlsKexAsync(
+        string? zoneId = null,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Enables or disables Auto-Origin TLS KEX via <c>PATCH /zones/{zone_id}/settings/auto_origin_tls_kex</c>.
+    /// </summary>
+    /// <param name="enabled">Whether Cloudflare should choose the key-exchange algorithm.</param>
+    /// <param name="zoneId">Zone id; falls back to the configured default when null.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>The setting as Cloudflare reports it after the change.</returns>
+    /// <remarks>
+    /// Sends <c>{"enabled":true|false}</c> - turning it off is explicit, never an empty body. When enabled,
+    /// Cloudflare periodically scans the zone's origins and sends the preferred algorithm first in the TLS
+    /// ClientHello, choosing only from what the zone's <c>origin_tls_compliance_modes</c> allows.
+    /// </remarks>
+    Task<AutoOriginTlsKex> SetAutoOriginTlsKexAsync(
+        bool enabled,
+        string? zoneId = null,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Reads Automatic SSL/TLS enrolment via <c>GET /zones/{zone_id}/settings/ssl_automatic_mode</c>.
+    /// </summary>
+    /// <param name="zoneId">Zone id; falls back to the configured default when null.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns><c>auto</c> when enrolled, <c>custom</c> when not, plus the next scheduled scan.</returns>
+    Task<SslAutomaticMode> GetAutomaticSslAsync(
+        string? zoneId = null,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Sets Automatic SSL/TLS enrolment via <c>PATCH /zones/{zone_id}/settings/ssl_automatic_mode</c>.
+    /// </summary>
+    /// <param name="mode"><c>auto</c> to enrol, <c>custom</c> to leave the mode alone.</param>
+    /// <param name="zoneId">Zone id; falls back to the configured default when null.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>The setting as Cloudflare reports it after the change.</returns>
+    /// <remarks>
+    /// Any other value is refused locally: Cloudflare answers it with error 1008, "Invalid SSL/TLS encryption
+    /// configuration value, only auto or custom accepted".
+    /// </remarks>
+    Task<SslAutomaticMode> SetAutomaticSslAsync(
+        string mode,
+        string? zoneId = null,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>Enrols the zone in Automatic SSL/TLS by sending <c>{"value":"auto"}</c>.</summary>
+    /// <param name="zoneId">Zone id; falls back to the configured default when null.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>The setting as Cloudflare reports it after the change.</returns>
+    Task<SslAutomaticMode> EnableAutomaticSslAsync(
+        string? zoneId = null,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>Takes the zone out of Automatic SSL/TLS by sending <c>{"value":"custom"}</c>.</summary>
+    /// <param name="zoneId">Zone id; falls back to the configured default when null.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>The setting as Cloudflare reports it after the change.</returns>
+    /// <remarks>
+    /// This stops Cloudflare managing the zone's encryption mode; it does not change the mode itself, so
+    /// whatever the zone is set to now is what stays.
+    /// </remarks>
+    Task<SslAutomaticMode> DisableAutomaticSslAsync(
+        string? zoneId = null,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Reads the SSL/TLS recommender via <c>GET /zones/{zone_id}/ssl/recommendation</c>.
+    /// </summary>
+    /// <param name="zoneId">Zone id; falls back to the configured default when null.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>The same shape as <see cref="GetAutomaticSslAsync"/> returns.</returns>
+    /// <remarks>
+    /// Deprecated by Cloudflare, and note the path is singular - <c>recommendation</c>, not
+    /// <c>recommendations</c>. It reports the automatic-mode setting rather than a suggested encryption
+    /// mode, so prefer <see cref="GetAutomaticSslAsync"/> unless the recommendation id itself is needed.
+    /// </remarks>
+    Task<SslAutomaticMode> GetRecommendationAsync(
         string? zoneId = null,
         CancellationToken cancellationToken = default);
 
@@ -449,6 +541,102 @@ public sealed class SslService : CloudflareService, ISslService
         request.OperationName = enabled ? "Enable Universal SSL" : "Disable Universal SSL";
 
         var response = await Transport.SendAsync<UniversalSslSettings>(request, cancellationToken).ConfigureAwait(false);
+        return response.EnsureResult();
+    }
+
+    /// <inheritdoc />
+    public async Task<AutoOriginTlsKex> GetAutoOriginTlsKexAsync(
+        string? zoneId = null,
+        CancellationToken cancellationToken = default)
+    {
+        var zone = ResolveZoneId(zoneId);
+        var request = CloudflareRequest.Get($"{ZonePath(zone)}/settings/{ZoneSettingIds.AutoOriginTlsKex}");
+        request.OperationName = "Get Auto-Origin TLS KEX";
+
+        var response = await Transport.SendAsync<AutoOriginTlsKex>(request, cancellationToken).ConfigureAwait(false);
+        return response.EnsureResult();
+    }
+
+    /// <inheritdoc />
+    public async Task<AutoOriginTlsKex> SetAutoOriginTlsKexAsync(
+        bool enabled,
+        string? zoneId = null,
+        CancellationToken cancellationToken = default)
+    {
+        var zone = ResolveZoneId(zoneId);
+        var body = UpdateAutoOriginTlsKexRequest.With(enabled);
+        body.EnsureValid();
+
+        var request = CloudflareRequest.Patch(
+            $"{ZonePath(zone)}/settings/{ZoneSettingIds.AutoOriginTlsKex}",
+            body);
+        request.OperationName = enabled ? "Enable Auto-Origin TLS KEX" : "Disable Auto-Origin TLS KEX";
+
+        var response = await Transport.SendAsync<AutoOriginTlsKex>(request, cancellationToken).ConfigureAwait(false);
+        return response.EnsureResult();
+    }
+
+    /// <inheritdoc />
+    public async Task<SslAutomaticMode> GetAutomaticSslAsync(
+        string? zoneId = null,
+        CancellationToken cancellationToken = default)
+    {
+        var zone = ResolveZoneId(zoneId);
+        var request = CloudflareRequest.Get($"{ZonePath(zone)}/settings/{ZoneSettingIds.SslAutomaticMode}");
+        request.OperationName = "Get Automatic SSL/TLS Enrolment";
+
+        return await SendAutomaticModeAsync(request, cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <inheritdoc />
+    public async Task<SslAutomaticMode> SetAutomaticSslAsync(
+        string mode,
+        string? zoneId = null,
+        CancellationToken cancellationToken = default)
+    {
+        Require(mode, nameof(mode));
+
+        var body = UpdateSslAutomaticModeRequest.With(mode);
+        body.EnsureValid();
+
+        var zone = ResolveZoneId(zoneId);
+        var request = CloudflareRequest.Patch(
+            $"{ZonePath(zone)}/settings/{ZoneSettingIds.SslAutomaticMode}",
+            body);
+        request.OperationName = $"Set Automatic SSL/TLS Enrolment to {body.Value}";
+
+        var response = await Transport.SendAsync<SslAutomaticMode>(request, cancellationToken).ConfigureAwait(false);
+        return response.EnsureResult();
+    }
+
+    /// <inheritdoc />
+    public Task<SslAutomaticMode> EnableAutomaticSslAsync(
+        string? zoneId = null,
+        CancellationToken cancellationToken = default) =>
+        SetAutomaticSslAsync(SslAutomaticModes.Auto, zoneId, cancellationToken);
+
+    /// <inheritdoc />
+    public Task<SslAutomaticMode> DisableAutomaticSslAsync(
+        string? zoneId = null,
+        CancellationToken cancellationToken = default) =>
+        SetAutomaticSslAsync(SslAutomaticModes.Custom, zoneId, cancellationToken);
+
+    /// <inheritdoc />
+    public async Task<SslAutomaticMode> GetRecommendationAsync(
+        string? zoneId = null,
+        CancellationToken cancellationToken = default)
+    {
+        var zone = ResolveZoneId(zoneId);
+        // Singular, and deprecated: it reports the automatic-mode setting, not a suggested encryption mode.
+        var request = CloudflareRequest.Get($"{ZonePath(zone)}/ssl/recommendation");
+        request.OperationName = "Get SSL/TLS Recommendation";
+
+        return await SendAutomaticModeAsync(request, cancellationToken).ConfigureAwait(false);
+    }
+
+    private async Task<SslAutomaticMode> SendAutomaticModeAsync(CloudflareRequest request, CancellationToken cancellationToken)
+    {
+        var response = await Transport.SendAsync<SslAutomaticMode>(request, cancellationToken).ConfigureAwait(false);
         return response.EnsureResult();
     }
 

@@ -136,6 +136,13 @@ public static class ZoneSettingIds
     /// <summary>Redirect every <c>http://</c> request to <c>https://</c>. Value <c>"on"</c> or <c>"off"</c>.</summary>
     public const string AlwaysUseHttps = "always_use_https";
 
+    /// <summary>
+    /// Auto-Origin TLS KEX enrolment. Unlike most settings this one is read and written as
+    /// <c>{"enabled":bool}</c> rather than <c>{"value":…}</c>, and <c>ISslService</c> wraps it with a typed
+    /// model - see <c>CFNet.Models.Ssl.AutoOriginTlsKex</c>.
+    /// </summary>
+    public const string AutoOriginTlsKex = "auto_origin_tls_kex";
+
     /// <summary>Rewrite <c>http://</c> links in HTML to <c>https://</c>. Value <c>"on"</c> or <c>"off"</c>.</summary>
     public const string AutomaticHttpsRewrites = "automatic_https_rewrites";
 
@@ -144,6 +151,14 @@ public static class ZoneSettingIds
     /// <c>wordpress</c>, <c>wp_plugin</c>, <c>cache_by_device_type</c> and <c>hostnames</c>.
     /// </summary>
     public const string AutomaticPlatformOptimization = "automatic_platform_optimization";
+
+    /// <summary>
+    /// Automatic SSL/TLS enrolment. Value <c>"auto"</c> (enrolled, Cloudflare manages the encryption mode)
+    /// or <c>"custom"</c> (not enrolled); anything else is refused with error 1008. The result also carries
+    /// <c>next_scheduled_scan</c>, which the generic setting model leaves in <c>AdditionalData</c> -
+    /// <c>ISslService</c> wraps it typed instead.
+    /// </summary>
+    public const string SslAutomaticMode = "ssl_automatic_mode";
 }
 
 /// <summary>

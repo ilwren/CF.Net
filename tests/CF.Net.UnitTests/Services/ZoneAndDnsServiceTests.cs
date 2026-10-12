@@ -1930,3 +1930,199 @@ public class SslVerificationTests
         Assert.Contains("not one of txt, http, email", exception.Message, StringComparison.Ordinal);
     }
 }
+
+public class SslEnrolmentSettingsTests
+{
+    private const string KexPath = "/client/v4/zones/zone-5678/settings/auto_origin_tls_kex";
+    private const string AutomaticModePath = "/client/v4/zones/zone-5678/settings/ssl_automatic_mode";
+
+    [Fact]
+    public async Task GetAutoOriginTlsKexAsync_reads_the_zone_setting()
+    {
+        using var harness = CloudflareHarness.Create();
+        harness.RespondWithResult(
+            "{\"id\":\"auto_origin_tls_kex\",\"enabled\":true,\"modified_on\":\"2026-05-05T13:00:15Z\"}");
+
+        var setting = await harness.Client.Ssl.GetAutoOriginTlsKexAsync();
+
+        Assert.Equal(HttpMethod.Get, harness.LastRequest.Method);
+        Assert.Equal(KexPath, harness.LastRequest.Path);
+        Assert.Equal(string.Empty, harness.LastRequest.Query);
+        Assert.Equal("auto_origin_tls_kex", setting.Id);
+        Assert.True(setting.IsEnabled);
+        Assert.Equal(new DateTimeOffset(2026, 5, 5, 13, 0, 15, TimeSpan.Zero), setting.ModifiedOn);
+        Assert.Equal("enabled", setting.ToString());
+    }
+
+    [Fact]
+    public async Task SetAutoOriginTlsKexAsync_sends_enabled_in_both_directions()
+    {
+        using var harness = CloudflareHarness.Create();
+        harness
+            .RespondWithResult("{\"id\":\"auto_origin_tls_kex\",\"enabled\":false}")
+            .RespondWithResult("{\"id\":\"auto_origin_tls_kex\",\"enabled\":true}");
+
+        var off = await harness.Client.Ssl.SetAutoOriginTlsKexAsync(false);
+        Assert.Equal(HttpMethod.Patch, harness.LastRequest.Method);
+        Assert.Equal(KexPath, harness.LastRequest.Path);
+        // Turning it off has to be said out loud: an empty body would leave the setting alone.
+        Assert.Equal("{\"enabled\":false}", harness.LastRequest.Body);
+        Assert.False(off.IsEnabled);
+        Assert.Equal("disabled", off.ToString());
+
+        var on = await harness.Client.Ssl.SetAutoOriginTlsKexAsync(true);
+        Assert.Equal("{\"enabled\":true}", harness.LastRequest.Body);
+        Assert.True(on.IsEnabled);
+    }
+
+    [Fact]
+    public void Auto_origin_tls_kex_without_an_enabled_flag_is_neither_on_nor_off()
+    {
+        var setting = new AutoOriginTlsKex();
+
+        Assert.Null(setting.Enabled);
+        Assert.False(setting.IsEnabled);
+        Assert.Equal("unknown", setting.ToString());
+
+        // The schema makes "enabled" required, so a body without it is refused here rather than at Cloudflare.
+        Assert.Throws<CloudflareConfigurationException>(() => new UpdateAutoOriginTlsKexRequest().EnsureValid());
+        UpdateAutoOriginTlsKexRequest.With(false).EnsureValid();
+    }
+
+    [Fact]
+    public async Task GetAutomaticSslAsync_reads_the_enrolment_and_the_next_scan()
+    {
+        using var harness = CloudflareHarness.Create();
+        harness.RespondWithResult(
+            """
+            {
+              "id": "ssl_automatic_mode",
+              "editable": true,
+              "modified_on": "2026-01-02T03:04:05Z",
+              "value": "auto",
+              "next_scheduled_scan": "2026-02-01T05:20:00Z"
+            }
+            """);
+
+        var mode = await harness.Client.Ssl.GetAutomaticSslAsync();
+
+        Assert.Equal(AutomaticModePath, harness.LastRequest.Path);
+        Assert.Equal("ssl_automatic_mode", mode.Id);
+        Assert.True(mode.Editable);
+        Assert.Equal(SslAutomaticModes.Auto, mode.Value);
+        Assert.True(mode.IsAutomatic);
+        Assert.Equal(new DateTimeOffset(2026, 2, 1, 5, 20, 0, TimeSpan.Zero), mode.NextScheduledScan);
+        Assert.Equal("auto", mode.ToString());
+    }
+
+    [Fact]
+    public async Task Enable_and_disable_automatic_ssl_send_auto_and_custom()
+    {
+        using var harness = CloudflareHarness.Create();
+        harness
+            .RespondWithResult("{\"value\":\"auto\"}")
+            .RespondWithResult("{\"value\":\"custom\"}");
+
+        var enrolled = await harness.Client.Ssl.EnableAutomaticSslAsync();
+        Assert.Equal(HttpMethod.Patch, harness.LastRequest.Method);
+        Assert.Equal(AutomaticModePath, harness.LastRequest.Path);
+        Assert.Equal("{\"value\":\"auto\"}", harness.LastRequest.Body);
+        Assert.True(enrolled.IsAutomatic);
+
+        var optedOut = await harness.Client.Ssl.DisableAutomaticSslAsync();
+        Assert.Equal("{\"value\":\"custom\"}", harness.LastRequest.Body);
+        Assert.False(optedOut.IsAutomatic);
+        Assert.Equal("custom", optedOut.ToString());
+    }
+
+    [Fact]
+    public async Task SetAutomaticSslAsync_sends_an_explicit_value()
+    {
+        using var harness = CloudflareHarness.Create();
+        harness.RespondWithResult("{\"value\":\"custom\",\"next_scheduled_scan\":null}");
+
+        var mode = await harness.Client.Ssl.SetAutomaticSslAsync(SslAutomaticModes.Custom);
+
+        Assert.Equal("{\"value\":\"custom\"}", harness.LastRequest.Body);
+        Assert.Null(mode.NextScheduledScan);
+    }
+
+    [Fact]
+    public async Task An_unknown_automatic_mode_is_refused_before_any_request()
+    {
+        using var harness = CloudflareHarness.Create();
+
+        // Cloudflare answers this with error 1008, so the library says it first.
+        var exception = await Assert.ThrowsAsync<CloudflareConfigurationException>(
+            () => harness.Client.Ssl.SetAutomaticSslAsync("full"));
+        Assert.Contains("not one of auto, custom", exception.Message, StringComparison.Ordinal);
+
+        var blank = await Assert.ThrowsAsync<CloudflareConfigurationException>(
+            () => harness.Client.Ssl.SetAutomaticSslAsync("  "));
+        Assert.Contains("must not be null or empty", blank.Message, StringComparison.Ordinal);
+
+        Assert.Equal(0, harness.RequestCount);
+    }
+
+    [Fact]
+    public async Task GetRecommendationAsync_uses_the_singular_deprecated_path()
+    {
+        using var harness = CloudflareHarness.Create();
+        harness.RespondWithResult("{\"id\":\"ssl_automatic_mode\",\"value\":\"custom\",\"editable\":false}");
+
+        var recommendation = await harness.Client.Ssl.GetRecommendationAsync();
+
+        Assert.Equal("/client/v4/zones/zone-5678/ssl/recommendation", harness.LastRequest.Path);
+        Assert.DoesNotContain("recommendations", harness.LastRequest.Path, StringComparison.Ordinal);
+        Assert.Equal("custom", recommendation.Value);
+        Assert.False(recommendation.IsAutomatic);
+    }
+
+    [Fact]
+    public async Task Enrolment_settings_keep_fields_this_release_does_not_name()
+    {
+        using var harness = CloudflareHarness.Create();
+        harness
+            .RespondWithResult("{\"enabled\":true,\"scan_interval_days\":7}")
+            .RespondWithResult("{\"value\":\"auto\",\"recommended_mode\":\"full\"}");
+
+        var kex = await harness.Client.Ssl.GetAutoOriginTlsKexAsync();
+        Assert.Equal(7, kex.AdditionalData!["scan_interval_days"].GetInt32());
+
+        var mode = await harness.Client.Ssl.GetAutomaticSslAsync();
+        Assert.Equal("full", mode.AdditionalData!["recommended_mode"].GetString());
+    }
+
+    [Fact]
+    public async Task Enrolment_settings_honour_an_explicit_zone_id()
+    {
+        using var harness = CloudflareHarness.Create();
+        harness.RespondWithResult("{\"enabled\":false}").RespondWithResult("{\"value\":\"auto\"}");
+
+        await harness.Client.Ssl.GetAutoOriginTlsKexAsync("zone-other");
+        Assert.Equal("/client/v4/zones/zone-other/settings/auto_origin_tls_kex", harness.LastRequest.Path);
+
+        await harness.Client.Ssl.GetAutomaticSslAsync("zone-other");
+        Assert.Equal("/client/v4/zones/zone-other/settings/ssl_automatic_mode", harness.LastRequest.Path);
+    }
+
+    [Fact]
+    public async Task An_enrolment_setting_without_a_result_payload_raises()
+    {
+        using var harness = CloudflareHarness.Create();
+        harness.RespondWithResult("null");
+
+        var exception = await Assert.ThrowsAsync<CloudflareApiException>(
+            () => harness.Client.Ssl.GetAutoOriginTlsKexAsync());
+
+        Assert.Contains("without a result payload", exception.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void The_setting_ids_are_spelled_the_way_the_paths_are()
+    {
+        Assert.Equal("auto_origin_tls_kex", ZoneSettingIds.AutoOriginTlsKex);
+        Assert.Equal("ssl_automatic_mode", ZoneSettingIds.SslAutomaticMode);
+        Assert.Equal(new[] { "auto", "custom" }, SslAutomaticModes.All);
+    }
+}

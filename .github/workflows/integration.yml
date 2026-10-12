@@ -19,12 +19,6 @@ name: Integration
 # See docs/integration-testing.md for how to create a correctly scoped token.
 
 on:
-  # TEMPORARY, for one commit only: this sandbox cannot dispatch a workflow (no actions:write), so a
-  # push trigger is how the suite gets run against the real API with the configured secrets. It is
-  # removed again in the next commit - a push trigger would spend quota on every commit, which is
-  # exactly what this workflow is designed not to do. Writes stay off (no inputs on a push event).
-  push:
-    branches: [arena/5d11f1dd-cf-net]
   workflow_dispatch:
     inputs:
       enable_writes:

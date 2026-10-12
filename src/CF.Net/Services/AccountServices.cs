@@ -133,19 +133,39 @@ public sealed class UserService : CloudflareService, IUserService
                     // Worth one more try: a token issued before 2026 has no prefix, so an account-owned
                     // credential can look like a user one. Reporting "invalid token" without asking the
                     // account endpoint sends people off to recreate a secret that was never broken.
-                    var accountCheck = await CheckAccountTokenAsync(start, cancellationToken).ConfigureAwait(false);
-                    if (accountCheck.IsSuccess)
+                    CloudflareConnectionCheck? accountCheck = null;
+                    try
                     {
-                        return new CloudflareConnectionCheck
-                        {
-                            IsSuccess = true,
-                            Method = accountCheck.Method,
-                            Message = accountCheck.Message + " The user-scoped endpoint rejected this token, so it is account-owned.",
-                            Elapsed = accountCheck.Elapsed,
-                        };
+                        accountCheck = await CheckAccountTokenAsync(start, cancellationToken).ConfigureAwait(false);
+                    }
+                    catch (Exceptions.CloudflareApiException)
+                    {
+                        // The account endpoint refused the credential too, so there is nothing more to
+                        // learn from it and the original rejection stands.
                     }
 
-                    throw;
+                    if (accountCheck is not null)
+                    {
+                        return accountCheck.IsSuccess
+                            ? new CloudflareConnectionCheck
+                            {
+                                IsSuccess = true,
+                                Method = accountCheck.Method,
+                                Message = accountCheck.Message + " The user-scoped endpoint rejected this token, so it is account-owned.",
+                                Elapsed = accountCheck.Elapsed,
+                            }
+                            : accountCheck;
+                    }
+
+                    return new CloudflareConnectionCheck
+                    {
+                        IsSuccess = false,
+                        Method = CloudflareAuthenticationMode.ApiToken,
+                        Message = rejection.Message,
+                        StatusCode = rejection.StatusCode,
+                        ErrorCode = rejection.ErrorCode,
+                        Elapsed = DateTimeOffset.UtcNow - start,
+                    };
                 }
             }
 

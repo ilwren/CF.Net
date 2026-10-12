@@ -42,7 +42,10 @@ public interface IDnsRecordsService
     /// <param name="recordId">Record id.</param>
     /// <param name="zoneId">Zone id; falls back to the configured default when null.</param>
     /// <param name="cancellationToken">Cancellation token.</param>
-    /// <returns>The record, or <c>null</c> when it does not exist.</returns>
+    /// <returns>
+    /// The record, or <c>null</c> when it does not exist or the zone cannot be read with these
+    /// credentials - Cloudflare answers 403 for both.
+    /// </returns>
     Task<DnsRecord?> GetAsync(string recordId, string? zoneId = null, CancellationToken cancellationToken = default);
 
     /// <summary>Creates a record.</summary>
@@ -250,8 +253,10 @@ public sealed class DnsRecordsService : CloudflareService, IDnsRecordsService
         var zone = ResolveZoneId(zoneId);
         var id = Require(recordId, nameof(recordId));
 
+        // 403 as well as 404: Cloudflare reports both an unknown record id and a zone the token cannot
+        // read as a 403, and a lookup answers null for either.
         var request = CloudflareRequest.Get($"{ZonePath(zone)}/dns_records/{CloudflareUrl.EncodeSegment(id)}")
-            .Tolerate(System.Net.HttpStatusCode.NotFound);
+            .Tolerate(System.Net.HttpStatusCode.NotFound, System.Net.HttpStatusCode.Forbidden);
         request.OperationName = "Get DNS Record";
 
         var response = await Transport.SendAsync<DnsRecord>(request, cancellationToken).ConfigureAwait(false);

@@ -474,9 +474,16 @@ public sealed class PagesProjectListParameters : CloudflarePagedParameters
     public string? Search { get; set; }
 
     /// <inheritdoc />
+    /// <remarks>
+    /// Pages rejects a page size sent on its own with <c>8000024 Invalid list options provided. Review
+    /// the page or per_page parameter</c>, so the page number is filled in whenever a page size was
+    /// asked for. The published schema for this endpoint lists only <c>page</c> and <c>per_page</c>;
+    /// <see cref="Search"/> is accepted by the service but is not part of it.
+    /// </remarks>
     public override void Apply(QueryStringBuilder query)
     {
-        base.Apply(query);
+        query.Add("page", Page ?? (PerPage.HasValue ? 1 : null));
+        query.Add("per_page", PerPage);
         query.AddIfNotEmpty("search", Search);
     }
 }

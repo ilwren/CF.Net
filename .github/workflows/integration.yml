@@ -367,14 +367,22 @@ jobs:
           if total:
               tally = ', '.join(outcome + '=' + str(counts[outcome]) for outcome in sorted(counts))
               annotation('notice', 'Integration suite: ' + tally + ' (total ' + str(total) + ')')
-          for test, message in failures[:10]:
+          for test, message in failures[:9]:
               annotation('error', str(test) + ': ' + (message or '(no message)')[:400])
-          if len(failures) > 10:
-              annotation('error', 'and ' + str(len(failures) - 10) + ' more failing test(s), listed in the job summary')
-          for test, reason in skipped[:10]:
-              annotation('notice', 'SKIPPED ' + str(test) + ': ' + str(reason)[:300])
-          if len(skipped) > 10:
-              annotation('notice', 'and ' + str(len(skipped) - 10) + ' more skipped test(s), listed in the job summary')
+          if len(failures) > 9:
+              annotation('error', 'and ' + str(len(failures) - 9) + ' more failing test(s), listed in the job summary')
+          for test, reason in skipped[:5]:
+              annotation('notice', 'SKIPPED ' + str(test) + ': ' + str(reason)[:280])
+          if len(skipped) > 5:
+              annotation('notice', 'and ' + str(len(skipped) - 5) + ' more skipped test(s), listed in the job summary')
+
+          # The transcript is the only place that shows which endpoint answered what, so it goes out too -
+          # chunked, because one annotation long enough to hold every call gets truncated anyway. The
+          # caps above and here keep the whole step inside GitHub's 10-notices-per-step limit.
+          for start in range(0, min(len(calls), 64), 16):
+              chunk = calls[start:start + 16]
+              joined = ' | '.join(str(call) + ' -> ' + str(result) for call, result in chunk)
+              annotation('notice', 'Cloudflare calls ' + str(start + 1) + '-' + str(start + len(chunk)) + ': ' + joined[:900])
           text = '\n'.join(lines)
           print(text)
           summary = os.environ.get('GITHUB_STEP_SUMMARY')

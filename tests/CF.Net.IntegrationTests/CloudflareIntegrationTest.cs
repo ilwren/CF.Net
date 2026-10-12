@@ -1,6 +1,7 @@
 using System.Runtime.CompilerServices;
 using System.Text.Json;
 using CFNet.Configuration;
+using CFNet.Exceptions;
 using CFNet.DependencyInjection;
 using CFNet.TestKit;
 using Microsoft.Extensions.DependencyInjection;
@@ -203,6 +204,39 @@ public abstract class CloudflareIntegrationTest : IDisposable
     protected bool IsAccountOwnedToken =>
         ApiToken is not null &&
         ApiToken.StartsWith(CloudflareDefaults.TokenPrefixes.AccountApiToken, StringComparison.Ordinal);
+
+    /// <summary>
+    /// Runs a zone-scoped call, turning a refusal into a skip that says what to change.
+    /// </summary>
+    /// <typeparam name="T">What the call returns.</typeparam>
+    /// <param name="call">The zone-scoped call to make.</param>
+    /// <param name="test">Test name, supplied by the compiler.</param>
+    /// <returns>The result, or <c>null</c> when Cloudflare refused and the test skipped.</returns>
+    /// <remarks>
+    /// A token whose Zone Resources do not include the configured zone is answered with 403, and no
+    /// assertion can turn that into a useful result. Saying what to fix beats failing: the suite runs
+    /// against whatever account it is pointed at, and most refusals are configuration rather than code.
+    /// </remarks>
+    protected async Task<T?> RunZoneScopedAsync<T>(Func<Task<T>> call, [CallerMemberName] string? test = null)
+        where T : class
+    {
+        try
+        {
+            return await call().ConfigureAwait(false);
+        }
+        catch (CloudflareApiException exception) when (exception.IsAuthenticationFailure)
+        {
+            SkipUnless(false, ZoneRefusalReason(exception), test);
+            return null;
+        }
+    }
+
+    /// <summary>Puts a zone-scoped 403 into words a reader can act on.</summary>
+    /// <param name="exception">The refusal Cloudflare returned.</param>
+    /// <returns>A reason for the run report.</returns>
+    protected static string ZoneRefusalReason(CloudflareApiException exception) =>
+        "Cloudflare refused the zone-scoped call: " + exception.Message +
+        " Add the zone to the token's Zone Resources, and check that CLOUDFLARE_ZONE_ID is a zone in the account named by CLOUDFLARE_ACCOUNT_ID.";
 
     /// <summary>Problems already reported, so 25 tests do not print the same warning 25 times.</summary>
     private static readonly HashSet<string> ReportedProblems = new(StringComparer.Ordinal);

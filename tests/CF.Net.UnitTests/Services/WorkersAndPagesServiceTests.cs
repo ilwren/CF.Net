@@ -576,6 +576,41 @@ public class PagesProjectsServiceTests
     }
 
     [Fact]
+    public async Task ListAsync_pairs_a_page_size_with_a_page_number()
+    {
+        using var harness = CloudflareHarness.Create();
+        harness.RespondWithPage("[]", page: 1, totalPages: 1, count: 0, totalCount: 0);
+
+        await harness.Client.Pages.ListAsync(new PagesProjectListParameters { PerPage = 20 });
+
+        // Pages answers a page size sent on its own with 8000024 "Invalid list options provided. Review
+        // the page or per_page parameter", so the two always travel together.
+        Assert.Equal("page=1&per_page=20", harness.LastRequest.Query.TrimStart('?'));
+    }
+
+    [Fact]
+    public async Task ListAsync_keeps_an_explicit_page_number()
+    {
+        using var harness = CloudflareHarness.Create();
+        harness.RespondWithPage("[]", page: 3, totalPages: 5, count: 0, totalCount: 0);
+
+        await harness.Client.Pages.ListAsync(new PagesProjectListParameters { Page = 3, PerPage = 20 });
+
+        Assert.Equal("page=3&per_page=20", harness.LastRequest.Query.TrimStart('?'));
+    }
+
+    [Fact]
+    public async Task ListAsync_sends_no_query_at_all_when_nothing_was_asked_for()
+    {
+        using var harness = CloudflareHarness.Create();
+        harness.RespondWithPage("[]", page: 1, totalPages: 1, count: 0, totalCount: 0);
+
+        await harness.Client.Pages.ListAsync();
+
+        Assert.Equal(string.Empty, harness.LastRequest.Query);
+    }
+
+    [Fact]
     public async Task GetAsync_returns_null_for_an_unknown_project()
     {
         using var harness = CloudflareHarness.Create();

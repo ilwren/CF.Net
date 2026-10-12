@@ -96,6 +96,19 @@ public class ZonesServiceTests
     }
 
     [Fact]
+    public async Task GetAsync_returns_null_when_cloudflare_refuses_to_show_the_zone()
+    {
+        using var harness = CloudflareHarness.Create();
+        // Observed against the live API: an unknown zone id is answered with 403 and 9109 ("Invalid zone
+        // identifier"), not 404, and a zone outside the token's Zone Resources with 403 and 10000.
+        harness.RespondWithError(HttpStatusCode.Forbidden, 9109, "Invalid zone identifier");
+
+        var zone = await harness.Client.Zones.GetAsync();
+
+        Assert.Null(zone);
+    }
+
+    [Fact]
     public async Task GetAsync_prefers_an_explicit_zone_id()
     {
         using var harness = CloudflareHarness.Create();
@@ -417,6 +430,19 @@ public class DnsRecordsServiceTests
 
         Assert.Null(record);
         Assert.Equal($"/client/v4/zones/{CloudflareHarness.TestZoneId}/dns_records/r-missing", harness.LastRequest.Path);
+    }
+
+    [Fact]
+    public async Task GetAsync_returns_null_when_the_zone_cannot_be_read()
+    {
+        using var harness = CloudflareHarness.Create();
+        // A zone-scoped read the token is not allowed is answered with 403 and 10000, which for a lookup
+        // means the same thing as "not there".
+        harness.RespondWithError(HttpStatusCode.Forbidden, 10000, "Authentication error");
+
+        var record = await harness.Client.DnsRecords.GetAsync("r-1");
+
+        Assert.Null(record);
     }
 
     [Fact]

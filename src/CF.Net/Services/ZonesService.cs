@@ -26,7 +26,11 @@ public interface IZonesService
     /// <summary>Fetches one zone by id.</summary>
     /// <param name="zoneId">Zone id; falls back to the configured default when null.</param>
     /// <param name="cancellationToken">Cancellation token.</param>
-    /// <returns>The zone, or <c>null</c> when it does not exist.</returns>
+    /// <returns>
+    /// The zone, or <c>null</c> when it does not exist or the credentials may not see it. Cloudflare
+    /// answers 403 for an unknown zone id (code 9109) as well as for one outside the token's scope, so
+    /// both come back as <c>null</c>.
+    /// </returns>
     Task<Zone?> GetAsync(string? zoneId = null, CancellationToken cancellationToken = default);
 
     /// <summary>Looks a zone up by domain name.</summary>
@@ -134,8 +138,12 @@ public sealed class ZonesService : CloudflareService, IZonesService
     public async Task<Zone?> GetAsync(string? zoneId = null, CancellationToken cancellationToken = default)
     {
         var id = ResolveZoneId(zoneId);
+        // Cloudflare answers an unknown zone id with 403 and code 9109 ("Invalid zone identifier")
+        // rather than 404, and a zone the token may not see with 403 and 10000, so both are tolerated:
+        // a lookup returns null for anything it cannot show you. Callers that need to tell "no such
+        // zone" from "no permission" use ListAsync, which reports the empty result set instead.
         var request = CloudflareRequest.Get($"{ZonePath(id)}")
-            .Tolerate(System.Net.HttpStatusCode.NotFound);
+            .Tolerate(System.Net.HttpStatusCode.NotFound, System.Net.HttpStatusCode.Forbidden);
         request.OperationName = "Get Zone";
 
         var response = await Transport.SendAsync<Zone>(request, cancellationToken).ConfigureAwait(false);

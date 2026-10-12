@@ -407,6 +407,11 @@ public sealed class D1ReadReplication
     public static D1ReadReplication WithMode(string mode) => new() { Mode = mode };
 
     /// <summary>True when the mode is <c>auto</c>.</summary>
+    /// <remarks>
+    /// Ignored when serialising: this object is a request body, and a computed member would otherwise be
+    /// sent to Cloudflare as an <c>is_auto</c> field it has never heard of.
+    /// </remarks>
+    [JsonIgnore]
     public bool IsAuto => string.Equals(Mode, D1ReadReplicationModes.Auto, StringComparison.OrdinalIgnoreCase);
 }
 

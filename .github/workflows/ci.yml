@@ -232,6 +232,16 @@ jobs:
                       f"{message[:900]}\n"
                       f"{stack[:400]}")
 
+          # Annotations are readable through the GitHub API, which the job log and the uploaded artifact
+          # are not from every environment, so the failing tests are published here as well as written to
+          # the file below. Ten is GitHub's per-step cap for a level; the rest stay in the pull-request
+          # comment this job also posts.
+          for block in blocks[:10]:
+              parts = block.split(chr(10))
+              title = parts[0].replace('%', '%25').replace(':', '%3A').replace(',', '%2C')
+              body = chr(10).join(parts[1:]).replace('%', '%25').replace(chr(13), '%0D').replace(chr(10), '%0A')
+              print('::error title=' + title + '::' + body)
+
           out = os.path.join(os.environ['RUNNER_TEMP'], 'failures.txt')
           with open(out, 'w', encoding='utf-8') as handle:
               handle.write('\n\n'.join(blocks))

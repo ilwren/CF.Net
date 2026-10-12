@@ -129,49 +129,107 @@ jobs:
         shell: bash
         run: |
           set -o pipefail
+          PY=$(command -v python3 || command -v python || true)
+          if [ -z "$PY" ]; then echo "no python"; exit 0; fi
+
           base="${CLOUDFLARE_BASE_ADDRESS:-https://api.cloudflare.com/client/v4}"
           base="${base%/}"
 
-          # One call made outside the library on purpose: an expired, revoked or under-scoped token
-          # should fail here with a single clear message instead of turning every test red and making
-          # you read 25 stack traces to find out. It is not recorded into a cassette, which captures
-          # only what the client itself sends.
+          # Describe the shapes first. Cloudflare answers both "this was pasted wrong" and "this token
+          # was revoked" with the same 1000 Invalid API Token, and shape is the half of that question a
+          # log can answer - without printing any part of a secret beyond its length and its kind.
+          "$PY" - <<'PY'
+          import os
+
+          known = (
+              ('cfut_', 'a user API token'),
+              ('cfat_', 'an account-owned API token'),
+              ('cfk_', 'a Global API Key'),
+          )
+
+          def describe(name, value):
+              if not value:
+                  print(f'::notice::{name} is not set.')
+                  return
+              trimmed = value.strip()
+              problems = []
+              if value != trimmed:
+                  problems.append('surrounding whitespace')
+              if len(trimmed) > 1 and trimmed[0] == trimmed[-1] and trimmed[0] in ('"', chr(39)):
+                  problems.append('surrounding quotes')
+              kind = next((label for prefix, label in known if trimmed.startswith(prefix)),
+                          'no recognised cfut_/cfat_/cfk_ prefix (a pre-2026 credential, or the wrong value)')
+              note = ' - PROBLEM: ' + ' and '.join(problems) if problems else ''
+              print(f'::notice::{name}: {len(trimmed)} characters, {kind}{note}.')
+
+          describe('CLOUDFLARE_API_TOKEN', os.environ.get('CLOUDFLARE_API_TOKEN'))
+          describe('CLOUDFLARE_GLOBAL_API_KEY', os.environ.get('CLOUDFLARE_GLOBAL_API_KEY'))
+
+          for name in ('CLOUDFLARE_ACCOUNT_ID', 'CLOUDFLARE_ZONE_ID'):
+              value = (os.environ.get(name) or '').strip()
+              hexish = len(value) == 32 and all(c in '0123456789abcdefABCDEF' for c in value)
+              verdict = 'a 32-character hexadecimal id' if hexish else \
+                  f'{len(value)} characters, which is NOT a 32-character hexadecimal id'
+              print(f'::notice::{name}: {verdict}.')
+          PY
+
+          # Then ask Cloudflare. An account-owned token (cfat_) is verified under the account, so both
+          # endpoints are tried and the answer says which accepted it - which also tells the suite
+          # whether the user-scoped verify endpoint can work with this token at all.
           if [ -n "${CLOUDFLARE_API_TOKEN:-}" ]; then
-            url="$base/user/tokens/verify"
             auth=(-H "Authorization: Bearer ${CLOUDFLARE_API_TOKEN}")
+            user_url="$base/user/tokens/verify"
           else
-            url="$base/user"
             auth=(-H "X-Auth-Key: ${CLOUDFLARE_GLOBAL_API_KEY}" -H "X-Auth-Email: ${CLOUDFLARE_API_EMAIL}")
+            user_url="$base/user"
           fi
 
-          body="$RUNNER_TEMP/credential-check.json"
-          if ! curl --silent --show-error --max-time 30 --output "$body" "$url" "${auth[@]}"; then
-            echo "::warning::Could not reach $url to pre-check the credentials. Continuing anyway; the tests will report what they see."
-            exit 0
+          curl --silent --show-error --max-time 30 --output "$RUNNER_TEMP/verify-user.json" \
+            "$user_url" "${auth[@]}" || true
+          if [ -n "${CLOUDFLARE_ACCOUNT_ID:-}" ]; then
+            curl --silent --show-error --max-time 30 --output "$RUNNER_TEMP/verify-account.json" \
+              "$base/accounts/${CLOUDFLARE_ACCOUNT_ID}/tokens/verify" "${auth[@]}" || true
           fi
 
-          PY=$(command -v python3 || command -v python || true)
-          if [ -z "$PY" ]; then exit 0; fi
-          "$PY" - "$body" "$url" <<'PY'
-          import json, sys
+          "$PY" - "$RUNNER_TEMP/verify-user.json" "$RUNNER_TEMP/verify-account.json" "$user_url" <<'PY'
+          import json, os, sys
 
-          body, url = sys.argv[1], sys.argv[2]
-          try:
-              with open(body, encoding='utf-8') as handle:
-                  payload = json.load(handle)
-          except Exception as error:
-              print(f'::warning::Could not read the response from {url}: {error}')
+          user_body, account_body, user_url = sys.argv[1], sys.argv[2], sys.argv[3]
+
+          def read(path):
+              try:
+                  with open(path, encoding='utf-8') as handle:
+                      return json.load(handle)
+              except Exception:
+                  return None
+
+          def rendered(payload):
+              if payload is None:
+                  return 'no parsable response (was the endpoint reachable?)'
+              errors = payload.get('errors') or []
+              return ', '.join(f"{e.get('code')}: {e.get('message')}" for e in errors) or 'no error detail was returned'
+
+          user_payload = read(user_body)
+          account_payload = read(account_body) if os.path.exists(account_body) else None
+
+          if user_payload and user_payload.get('success'):
+              status = (user_payload.get('result') or {}).get('status')
+              suffix = f' (token status: {status})' if status else ''
+              print(f'::notice::Cloudflare accepted these credentials at {user_url}{suffix}.')
               sys.exit(0)
 
-          if payload.get('success'):
-              status = (payload.get('result') or {}).get('status')
-              print(f"::notice::Cloudflare accepted these credentials{f' (token status: {status})' if status else ''}.")
+          if account_payload and account_payload.get('success'):
+              status = (account_payload.get('result') or {}).get('status')
+              suffix = f' (token status: {status})' if status else ''
+              print(f'::notice::Cloudflare accepted these credentials at the account-scoped verify endpoint{suffix}.')
+              print('::warning::This is an account-owned token, so GET /user/tokens/verify rejects it. The A_token_can_be_verified_directly test uses that endpoint and will fail; every other call in the suite is unaffected.')
               sys.exit(0)
 
-          rendered = ', '.join(
-              f"{error.get('code')}: {error.get('message')}"
-              for error in (payload.get('errors') or [])) or 'no error detail was returned'
-          print(f'::error::Cloudflare rejected these credentials - {rendered}. Fix the repository secrets before reading any test output.')
+          print('::error::Cloudflare rejected these credentials.')
+          print(f'::error::  {user_url} -> {rendered(user_payload)}')
+          if account_payload is not None:
+              print(f'::error::  accounts/{{account_id}}/tokens/verify -> {rendered(account_payload)}')
+          print('::error::Usual causes, most common first: the secret was saved with quotes or a trailing newline; the value is a token id, an account id or a dashboard URL rather than the secret; the token was rolled or revoked after it was saved; or it is account-owned (cfat_) and only the account-scoped endpoint accepts it.')
           sys.exit(1)
           PY
 

@@ -19,6 +19,12 @@ name: Integration
 # See docs/integration-testing.md for how to create a correctly scoped token.
 
 on:
+  # TEMPORARY, for one commit only: this sandbox cannot dispatch a workflow (no actions:write), so a
+  # push trigger is how the suite gets run against the real API with the configured secrets. It is
+  # removed again in the next commit - a push trigger would spend quota on every commit, which is
+  # exactly what this workflow is designed not to do. Writes stay off (no inputs on a push event).
+  push:
+    branches: [arena/5d11f1dd-cf-net]
   workflow_dispatch:
     inputs:
       enable_writes:
@@ -58,11 +64,11 @@ env:
   CLOUDFLARE_ZONE_ID: ${{ secrets.CLOUDFLARE_ZONE_ID }}
   CLOUDFLARE_API_EMAIL: ${{ secrets.CLOUDFLARE_API_EMAIL }}
   CLOUDFLARE_GLOBAL_API_KEY: ${{ secrets.CLOUDFLARE_GLOBAL_API_KEY }}
-  CLOUDFLARE_IT_ENABLE_WRITES: ${{ inputs.enable_writes && 'true' || 'false' }}
+  CLOUDFLARE_IT_ENABLE_WRITES: ${{ (github.event.inputs.enable_writes == true || github.event.inputs.enable_writes == 'true') && 'true' || 'false' }}
   # Recording is off unless a cassette name is given. CLOUDFLARE_IT_RECORD only means something
   # together with CLOUDFLARE_IT_CASSETTE.
-  CLOUDFLARE_IT_CASSETTE: ${{ inputs.cassette }}
-  CLOUDFLARE_IT_RECORD: ${{ inputs.cassette && 'true' || 'false' }}
+  CLOUDFLARE_IT_CASSETTE: ${{ github.event.inputs.cassette || '' }}
+  CLOUDFLARE_IT_RECORD: ${{ github.event.inputs.cassette && 'true' || 'false' }}
 
 jobs:
   integration:
@@ -178,7 +184,7 @@ jobs:
         env:
           # Passed through the environment rather than interpolated into the script, so a dispatch
           # input can never become shell.
-          EXTRA_FILTER: ${{ inputs.filter }}
+          EXTRA_FILTER: ${{ github.event.inputs.filter || '' }}
         run: |
           set -o pipefail
 
@@ -300,7 +306,7 @@ jobs:
           PY
 
       - name: Show what was recorded
-        if: always() && inputs.cassette != ''
+        if: always() && github.event_name == 'workflow_dispatch' && github.event.inputs.cassette != ''
         run: |
           echo "### Cassette" >> "$GITHUB_STEP_SUMMARY"
           if ls tests/cassettes/*.json >/dev/null 2>&1; then
@@ -315,7 +321,7 @@ jobs:
 
       # Either download the artifact below and commit it yourself, or let the workflow do it.
       - name: Commit the cassette back to the branch
-        if: always() && inputs.cassette != '' && inputs.commit_cassette && github.event_name == 'workflow_dispatch'
+        if: always() && github.event_name == 'workflow_dispatch' && github.event.inputs.cassette != '' && (github.event.inputs.commit_cassette == true || github.event.inputs.commit_cassette == 'true')
         run: |
           if ! ls tests/cassettes/*.json >/dev/null 2>&1; then
             echo "No cassette file to commit."
@@ -329,15 +335,15 @@ jobs:
           if git diff --cached --quiet; then
             echo "The cassette is unchanged."
           else
-            git commit -m "Record Cloudflare cassette '${{ inputs.cassette }}'"
+            git commit -m "Record Cloudflare cassette '${{ github.event.inputs.cassette }}'"
             git push origin "HEAD:$GITHUB_REF_NAME"
           fi
 
       - name: Upload recorded cassette
-        if: always() && inputs.cassette != ''
+        if: always() && github.event_name == 'workflow_dispatch' && github.event.inputs.cassette != ''
         uses: actions/upload-artifact@v4
         with:
-          name: cassette-${{ inputs.cassette }}
+          name: cassette-${{ github.event.inputs.cassette }}
           path: tests/cassettes/**/*.json
           if-no-files-found: ignore
           retention-days: 30

@@ -125,7 +125,58 @@ public interface ID1DatabaseService
     /// <param name="accountId">Account id; falls back to the configured default when null.</param>
     /// <param name="cancellationToken">Cancellation token.</param>
     Task RestoreBackupAsync(string databaseId, string backupId, string? accountId = null, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Changes a database's read replication via <c>PATCH /accounts/{account_id}/d1/database/{database_id}</c>.
+    /// </summary>
+    /// <param name="databaseId">Database id (UUID).</param>
+    /// <param name="mode">One of <see cref="D1ReadReplicationModes"/>.</param>
+    /// <param name="accountId">Account id; falls back to the configured default when null.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>The database as Cloudflare reports it after the change.</returns>
+    /// <remarks>
+    /// Needs <c>D1 Write</c>. This is a partial update; the PUT on the same path takes the identical body,
+    /// so the library sends the PATCH and leaves nothing else about the database alone. Turning
+    /// replication off can take a few hours to remove every replica.
+    /// </remarks>
+    Task<D1Database> SetReadReplicationAsync(
+        string databaseId,
+        string mode,
+        string? accountId = null,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Changes a database's configuration via <c>PUT /accounts/{account_id}/d1/database/{database_id}</c>.
+    /// </summary>
+    /// <param name="databaseId">Database id (UUID).</param>
+    /// <param name="request">The configuration to apply.</param>
+    /// <param name="accountId">Account id; falls back to the configured default when null.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>The database as Cloudflare reports it after the change.</returns>
+    /// <remarks>
+    /// The published schema for this endpoint accepts <c>read_replication</c> and nothing else, which is
+    /// why renaming a database is not available here.
+    /// </remarks>
+    Task<D1Database> UpdateAsync(
+        string databaseId,
+        UpdateD1DatabaseRequest request,
+        string? accountId = null,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Restores a deleted database via <c>POST /accounts/{account_id}/d1/database/{database_id}/undelete</c>.
+    /// </summary>
+    /// <param name="databaseId">Database id (UUID).</param>
+    /// <param name="accountId">Account id; falls back to the configured default when null.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>The restored database.</returns>
+    /// <remarks>
+    /// D1 keeps deleted databases for a while, which is what makes this possible; after that window the
+    /// call fails and the data is gone.
+    /// </remarks>
+    Task<D1Database> UndeleteAsync(string databaseId, string? accountId = null, CancellationToken cancellationToken = default);
 }
+
 
 /// <inheritdoc />
 public sealed class D1DatabaseService : CloudflareService, ID1DatabaseService
@@ -366,4 +417,67 @@ public sealed class D1DatabaseService : CloudflareService, ID1DatabaseService
 
     private static string DatabasePath(string accountId, string databaseId) =>
         $"{AccountPath(accountId)}/d1/database/{CloudflareUrl.EncodeSegment(Require(databaseId, nameof(databaseId)))}";
+
+    /// <inheritdoc />
+    public Task<D1Database> SetReadReplicationAsync(
+        string databaseId,
+        string mode,
+        string? accountId = null,
+        CancellationToken cancellationToken = default) =>
+        EditAsync(databaseId, UpdateD1DatabaseRequest.ForReadReplication(mode), accountId, cancellationToken);
+
+    /// <inheritdoc />
+    public async Task<D1Database> UpdateAsync(
+        string databaseId,
+        UpdateD1DatabaseRequest request,
+        string? accountId = null,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        request.EnsureValid();
+
+        var account = ResolveAccountId(accountId);
+        var httpRequest = CloudflareRequest.Put(DatabasePath(account, databaseId), request);
+        httpRequest.OperationName = "Update D1 Database";
+
+        var response = await Transport.SendAsync<D1Database>(httpRequest, cancellationToken).ConfigureAwait(false);
+        return response.EnsureResult();
+    }
+
+    /// <summary>
+    /// Sends the partial update, which is what <see cref="SetReadReplicationAsync"/> uses so that nothing
+    /// else about the database is touched.
+    /// </summary>
+    /// <param name="databaseId">Database id (UUID).</param>
+    /// <param name="request">The configuration to apply.</param>
+    /// <param name="accountId">Account id; falls back to the configured default when null.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>The database as Cloudflare reports it after the change.</returns>
+    private async Task<D1Database> EditAsync(
+        string databaseId,
+        UpdateD1DatabaseRequest request,
+        string? accountId,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        request.EnsureValid();
+
+        var account = ResolveAccountId(accountId);
+        var httpRequest = CloudflareRequest.Patch(DatabasePath(account, databaseId), request);
+        httpRequest.OperationName = "Update D1 Database Partially";
+
+        var response = await Transport.SendAsync<D1Database>(httpRequest, cancellationToken).ConfigureAwait(false);
+        return response.EnsureResult();
+    }
+
+    /// <inheritdoc />
+    public async Task<D1Database> UndeleteAsync(string databaseId, string? accountId = null, CancellationToken cancellationToken = default)
+    {
+        var account = ResolveAccountId(accountId);
+        var request = CloudflareRequest.Post($"{DatabasePath(account, databaseId)}/undelete");
+        request.OperationName = "Undelete D1 Database";
+
+        var response = await Transport.SendAsync<D1Database>(request, cancellationToken).ConfigureAwait(false);
+        return response.EnsureResult();
+    }
 }

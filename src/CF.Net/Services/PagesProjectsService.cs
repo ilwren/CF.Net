@@ -137,7 +137,27 @@ public interface IPagesProjectsService
     /// <param name="accountId">Account id; falls back to the configured default when null.</param>
     /// <param name="cancellationToken">Cancellation token.</param>
     Task DeleteDomainAsync(string projectName, string domainName, string? accountId = null, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Rolls production back to an earlier deployment via
+    /// <c>POST /accounts/{account_id}/pages/projects/{project_name}/deployments/{deployment_id}/rollback</c>.
+    /// </summary>
+    /// <param name="projectName">Project name.</param>
+    /// <param name="deploymentId">Id of the deployment to roll production back to.</param>
+    /// <param name="accountId">Account id; falls back to the configured default when null.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>The deployment that is now serving production.</returns>
+    /// <remarks>
+    /// Needs <c>Pages Write</c>. Only a deployment that previously succeeded can be rolled back to, and
+    /// the call takes no body - the deployment in the path is the target, not the one being undone.
+    /// </remarks>
+    Task<PagesDeployment> RollbackDeploymentAsync(
+        string projectName,
+        string deploymentId,
+        string? accountId = null,
+        CancellationToken cancellationToken = default);
 }
+
 
 /// <inheritdoc />
 public sealed class PagesProjectsService : CloudflareService, IPagesProjectsService
@@ -407,4 +427,22 @@ public sealed class PagesProjectsService : CloudflareService, IPagesProjectsServ
     /// </summary>
     private static string ProjectPath(string accountId, string projectName) =>
         $"{AccountPath(accountId)}/pages/projects/{CloudflareUrl.EncodeSegment(Require(projectName, nameof(projectName)))}";
+
+    /// <inheritdoc />
+    public async Task<PagesDeployment> RollbackDeploymentAsync(
+        string projectName,
+        string deploymentId,
+        string? accountId = null,
+        CancellationToken cancellationToken = default)
+    {
+        var account = ResolveAccountId(accountId);
+        var deployment = Require(deploymentId, nameof(deploymentId));
+
+        var request = CloudflareRequest.Post(
+            $"{ProjectPath(account, projectName)}/deployments/{CloudflareUrl.EncodeSegment(deployment)}/rollback");
+        request.OperationName = "Roll Back Pages Deployment";
+
+        var response = await Transport.SendAsync<PagesDeployment>(request, cancellationToken).ConfigureAwait(false);
+        return response.EnsureResult();
+    }
 }

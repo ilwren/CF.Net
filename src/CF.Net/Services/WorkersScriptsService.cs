@@ -144,7 +144,58 @@ public interface IWorkersScriptsService
         UpdateWorkerScriptSubdomainRequest request,
         string? accountId = null,
         CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Lists the account's Worker custom domains via <c>GET /accounts/{account_id}/workers/domains</c>.
+    /// </summary>
+    /// <param name="accountId">Account id; falls back to the configured default when null.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>Every hostname attached to a Worker in the account.</returns>
+    /// <remarks>
+    /// No query parameters are sent: the published schema for this endpoint documents none, and
+    /// Cloudflare rejects parameters it does not recognise rather than ignoring them. Filter the result
+    /// client-side - <see cref="WorkerDomain.Service"/> names the Worker, <see cref="WorkerDomain.Hostname"/>
+    /// the hostname.
+    /// </remarks>
+    Task<IReadOnlyList<WorkerDomain>> ListDomainsAsync(string? accountId = null, CancellationToken cancellationToken = default);
+
+    /// <summary>Fetches one custom domain via <c>GET /accounts/{account_id}/workers/domains/{domain_id}</c>.</summary>
+    /// <param name="domainId">The attachment id, as listed by <see cref="ListDomainsAsync"/>.</param>
+    /// <param name="accountId">Account id; falls back to the configured default when null.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>The domain, or <c>null</c> when there is no such attachment.</returns>
+    Task<WorkerDomain?> GetDomainAsync(string domainId, string? accountId = null, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Attaches a hostname to a Worker via <c>PUT /accounts/{account_id}/workers/domains</c>.
+    /// </summary>
+    /// <param name="request">Hostname, Worker name and routing flags.</param>
+    /// <param name="accountId">Account id; falls back to the configured default when null.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>The domain as Cloudflare created it, including the certificate id.</returns>
+    /// <remarks>
+    /// Needs <c>Workers Scripts Write</c>. Cloudflare issues a certificate for the hostname, which can
+    /// take a moment to become active.
+    /// </remarks>
+    Task<WorkerDomain> AttachDomainAsync(AttachWorkerDomainRequest request, string? accountId = null, CancellationToken cancellationToken = default);
+
+    /// <summary>Attaches a hostname to a Worker, the common case of <see cref="AttachDomainAsync(AttachWorkerDomainRequest, string?, CancellationToken)"/>.</summary>
+    /// <param name="hostname">Hostname to attach, e.g. <c>app.example.com</c>.</param>
+    /// <param name="workerName">Name of the Worker to route it to.</param>
+    /// <param name="zoneId">Zone the hostname lives in; falls back to the configured default when null.</param>
+    /// <param name="accountId">Account id; falls back to the configured default when null.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>The domain as Cloudflare created it.</returns>
+    Task<WorkerDomain> AttachDomainAsync(string hostname, string workerName, string? zoneId = null, string? accountId = null, CancellationToken cancellationToken = default);
+
+    /// <summary>Detaches a custom domain via <c>DELETE /accounts/{account_id}/workers/domains/{domain_id}</c>.</summary>
+    /// <param name="domainId">The attachment id.</param>
+    /// <param name="accountId">Account id; falls back to the configured default when null.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>A task that completes when Cloudflare has removed the attachment.</returns>
+    Task DeleteDomainAsync(string domainId, string? accountId = null, CancellationToken cancellationToken = default);
 }
+
 
 /// <inheritdoc />
 public sealed class WorkersScriptsService : CloudflareService, IWorkersScriptsService
@@ -482,5 +533,71 @@ public sealed class WorkersScriptsService : CloudflareService, IWorkersScriptsSe
             throw new Exceptions.CloudflareConfigurationException(
                 $"Module '{module.Name}' has a ContentBase64 value that is not valid base64.", exception);
         }
+    }
+
+    /// <inheritdoc />
+    public async Task<IReadOnlyList<WorkerDomain>> ListDomainsAsync(string? accountId = null, CancellationToken cancellationToken = default)
+    {
+        var account = ResolveAccountId(accountId);
+        var request = CloudflareRequest.Get($"{AccountPath(account)}/workers/domains");
+        request.OperationName = "List Worker Domains";
+
+        var response = await Transport.SendAsync<List<WorkerDomain>>(request, cancellationToken).ConfigureAwait(false);
+        return response.Result ?? new List<WorkerDomain>();
+    }
+
+    /// <inheritdoc />
+    public async Task<WorkerDomain?> GetDomainAsync(string domainId, string? accountId = null, CancellationToken cancellationToken = default)
+    {
+        var account = ResolveAccountId(accountId);
+        var id = Require(domainId, nameof(domainId));
+
+        var request = CloudflareRequest.Get($"{AccountPath(account)}/workers/domains/{CloudflareUrl.EncodeSegment(id)}")
+            .Tolerate(System.Net.HttpStatusCode.NotFound);
+        request.OperationName = "Get Worker Domain";
+
+        var response = await Transport.SendAsync<WorkerDomain>(request, cancellationToken).ConfigureAwait(false);
+        return response.Result;
+    }
+
+    /// <inheritdoc />
+    public Task<WorkerDomain> AttachDomainAsync(
+        string hostname,
+        string workerName,
+        string? zoneId = null,
+        string? accountId = null,
+        CancellationToken cancellationToken = default) =>
+        AttachDomainAsync(
+            AttachWorkerDomainRequest.For(hostname, workerName, zoneId ?? Options.ZoneId),
+            accountId,
+            cancellationToken);
+
+    /// <inheritdoc />
+    public async Task<WorkerDomain> AttachDomainAsync(
+        AttachWorkerDomainRequest request,
+        string? accountId = null,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        request.EnsureValid();
+
+        var account = ResolveAccountId(accountId);
+        var httpRequest = CloudflareRequest.Put($"{AccountPath(account)}/workers/domains", request);
+        httpRequest.OperationName = "Attach Worker Domain";
+
+        var response = await Transport.SendAsync<WorkerDomain>(httpRequest, cancellationToken).ConfigureAwait(false);
+        return response.EnsureResult();
+    }
+
+    /// <inheritdoc />
+    public async Task DeleteDomainAsync(string domainId, string? accountId = null, CancellationToken cancellationToken = default)
+    {
+        var account = ResolveAccountId(accountId);
+        var id = Require(domainId, nameof(domainId));
+
+        var request = CloudflareRequest.Delete($"{AccountPath(account)}/workers/domains/{CloudflareUrl.EncodeSegment(id)}");
+        request.OperationName = "Detach Worker Domain";
+
+        await SendVoidAsync(request, cancellationToken).ConfigureAwait(false);
     }
 }

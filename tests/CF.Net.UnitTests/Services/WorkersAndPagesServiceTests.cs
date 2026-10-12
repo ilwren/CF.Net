@@ -956,3 +956,182 @@ public class PagesProjectsServiceTests
         Assert.Equal("unknown", PagesDeploymentStatusValues.Unknown);
     }
 }
+
+
+public class WorkerDomainsTests
+{
+    [Fact]
+    public async Task ListDomainsAsync_reads_the_account_level_collection()
+    {
+        using var harness = CloudflareHarness.Create();
+        harness.RespondWithResult("""
+        [
+          {
+            "id": "d-1",
+            "cert_id": "c-1",
+            "enabled": true,
+            "previews_enabled": false,
+            "hostname": "app.example.com",
+            "service": "my-worker",
+            "zone_id": "zone-1",
+            "zone_name": "example.com",
+            "environment": "production"
+          }
+        ]
+        """);
+
+        var domains = await harness.Client.Workers.ListDomainsAsync();
+
+        Assert.Equal($"/client/v4/accounts/{CloudflareHarness.TestAccountId}/workers/domains", harness.LastRequest.Path);
+        // The published schema documents no query parameters for this endpoint, so none are sent.
+        Assert.Equal(string.Empty, harness.LastRequest.Query);
+
+        var domain = Assert.Single(domains);
+        Assert.Equal("d-1", domain.Id);
+        Assert.Equal("app.example.com", domain.Hostname);
+        Assert.Equal("my-worker", domain.Service);
+        Assert.Equal("zone-1", domain.ZoneId);
+        Assert.Equal("example.com", domain.ZoneName);
+        Assert.Equal("c-1", domain.CertId);
+        Assert.True(domain.Enabled);
+        Assert.False(domain.PreviewsEnabled);
+        Assert.Equal("production", domain.Environment);
+    }
+
+    [Fact]
+    public async Task GetDomainAsync_scopes_the_call_to_one_domain_and_tolerates_404()
+    {
+        using var harness = CloudflareHarness.Create();
+        harness.RespondWithResult("""{"id":"d-1","hostname":"app.example.com","service":"my-worker"}""");
+
+        var domain = await harness.Client.Workers.GetDomainAsync("d-1");
+
+        Assert.Equal($"/client/v4/accounts/{CloudflareHarness.TestAccountId}/workers/domains/d-1", harness.LastRequest.Path);
+        Assert.Equal("app.example.com", domain!.Hostname);
+
+        harness.RespondWithError(HttpStatusCode.NotFound, 10007, "Domain not found");
+        Assert.Null(await harness.Client.Workers.GetDomainAsync("d-missing"));
+    }
+
+    [Fact]
+    public async Task AttachDomainAsync_puts_the_hostname_service_and_zone_to_the_collection()
+    {
+        using var harness = CloudflareHarness.Create();
+        harness.RespondWithResult("""{"id":"d-2","hostname":"app.example.com","service":"my-worker","enabled":true}""");
+
+        var domain = await harness.Client.Workers.AttachDomainAsync(
+            AttachWorkerDomainRequest.For("app.example.com", "my-worker", "zone-1"));
+
+        Assert.Equal(HttpMethod.Put, harness.LastRequest.Method);
+        Assert.Equal($"/client/v4/accounts/{CloudflareHarness.TestAccountId}/workers/domains", harness.LastRequest.Path);
+        Assert.Equal("{\"hostname\":\"app.example.com\",\"service\":\"my-worker\",\"zone_id\":\"zone-1\"}", harness.LastRequest.Body);
+        Assert.Equal("d-2", domain.Id);
+    }
+
+    [Fact]
+    public async Task AttachDomainAsync_falls_back_to_the_configured_zone_id()
+    {
+        using var harness = CloudflareHarness.Create();
+        harness.RespondWithResult("""{"id":"d-3","hostname":"app.example.com"}""");
+
+        await harness.Client.Workers.AttachDomainAsync("app.example.com", "my-worker");
+
+        Assert.Contains($"\"zone_id\":\"{CloudflareHarness.TestZoneId}\"", harness.LastRequest.Body, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task AttachDomainAsync_can_send_the_preview_routing_flags()
+    {
+        using var harness = CloudflareHarness.Create();
+        harness.RespondWithResult("""{"id":"d-4","hostname":"app.example.com"}""");
+
+        await harness.Client.Workers.AttachDomainAsync(new AttachWorkerDomainRequest
+        {
+            Hostname = "app.example.com",
+            Service = "my-worker",
+            Enabled = false,
+            PreviewsEnabled = true,
+        });
+
+        Assert.Equal(
+            "{\"hostname\":\"app.example.com\",\"service\":\"my-worker\",\"enabled\":false,\"previews_enabled\":true}",
+            harness.LastRequest.Body);
+    }
+
+    [Theory]
+    [InlineData(null, "my-worker", null, null, "Hostname")]
+    [InlineData("app.example.com", null, null, null, "Service")]
+    [InlineData("app.example.com", "my-worker", false, null, "preview routing")]
+    [InlineData("app.example.com", "my-worker", null, false, "hostname routing")]
+    public void AttachWorkerDomainRequest_rejects_what_cloudflare_would_refuse(
+        string? hostname,
+        string? service,
+        bool? enabled,
+        bool? previewsEnabled,
+        string expectedInMessage)
+    {
+        var request = new AttachWorkerDomainRequest
+        {
+            Hostname = hostname,
+            Service = service,
+            Enabled = enabled,
+            PreviewsEnabled = previewsEnabled,
+        };
+
+        var exception = Assert.Throws<CloudflareConfigurationException>(request.EnsureValid);
+
+        Assert.Contains(expectedInMessage, exception.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task DeleteDomainAsync_detaches_by_id()
+    {
+        using var harness = CloudflareHarness.Create();
+        harness.RespondWithResult("null");
+
+        await harness.Client.Workers.DeleteDomainAsync("d-1");
+
+        Assert.Equal(HttpMethod.Delete, harness.LastRequest.Method);
+        Assert.Equal($"/client/v4/accounts/{CloudflareHarness.TestAccountId}/workers/domains/d-1", harness.LastRequest.Path);
+    }
+
+    [Fact]
+    public async Task Domain_calls_accept_an_explicit_account()
+    {
+        using var harness = CloudflareHarness.Create();
+        harness.RespondWithResult("[]");
+
+        await harness.Client.Workers.ListDomainsAsync("acct-other");
+
+        Assert.Equal("/client/v4/accounts/acct-other/workers/domains", harness.LastRequest.Path);
+    }
+}
+
+public class PagesDeploymentRollbackTests
+{
+    [Fact]
+    public async Task RollbackDeploymentAsync_posts_to_the_deployments_rollback_path()
+    {
+        using var harness = CloudflareHarness.Create();
+        harness.RespondWithResult("""{"id":"d-1","latest_stage":{"status":"success"},"environment":"production"}""");
+
+        var deployment = await harness.Client.Pages.RollbackDeploymentAsync("site", "d-1");
+
+        Assert.Equal(HttpMethod.Post, harness.LastRequest.Method);
+        Assert.Equal(
+            $"/client/v4/accounts/{CloudflareHarness.TestAccountId}/pages/projects/site/deployments/d-1/rollback",
+            harness.LastRequest.Path);
+        Assert.Equal("d-1", deployment.Id);
+    }
+
+    [Fact]
+    public async Task RollbackDeploymentAsync_escapes_both_path_segments()
+    {
+        using var harness = CloudflareHarness.Create();
+        harness.RespondWithResult("""{"id":"d/2"}""");
+
+        await harness.Client.Pages.RollbackDeploymentAsync("a/b", "d/2");
+
+        Assert.Contains("/pages/projects/a%2Fb/deployments/d%2F2/rollback", harness.LastRequest.Uri!.OriginalString, StringComparison.Ordinal);
+    }
+}

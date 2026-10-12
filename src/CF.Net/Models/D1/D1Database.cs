@@ -60,6 +60,10 @@ public sealed class D1Database
     [JsonPropertyName("storage_version")]
     public string? StorageVersion { get; set; }
 
+    /// <summary>Read replication configuration, when the database reports one.</summary>
+    [JsonPropertyName("read_replication")]
+    public D1ReadReplication? ReadReplication { get; set; }
+
     /// <summary>Captures any field Cloudflare adds in the future.</summary>
     [JsonExtensionData]
     public IDictionary<string, JsonElement>? AdditionalData { get; set; }
@@ -385,4 +389,76 @@ public sealed class D1Backup
 /// <summary>Query filters for the D1 backups list endpoint.</summary>
 public sealed class D1BackupListParameters : CloudflarePagedParameters
 {
+}
+
+
+/// <summary>
+/// Read replication for a D1 database: <c>auto</c> lets Cloudflare place replicas around the world,
+/// <c>disabled</c> removes them, which can take a few hours.
+/// </summary>
+public sealed class D1ReadReplication
+{
+    /// <summary>The replication mode. See <see cref="D1ReadReplicationModes"/>.</summary>
+    [JsonPropertyName("mode")]
+    public string? Mode { get; set; }
+
+    /// <summary>Builds a replication configuration.</summary>
+    /// <param name="mode">One of <see cref="D1ReadReplicationModes"/>.</param>
+    public static D1ReadReplication WithMode(string mode) => new() { Mode = mode };
+
+    /// <summary>True when the mode is <c>auto</c>.</summary>
+    public bool IsAuto => string.Equals(Mode, D1ReadReplicationModes.Auto, StringComparison.OrdinalIgnoreCase);
+}
+
+/// <summary>The modes <see cref="D1ReadReplication.Mode"/> accepts.</summary>
+public static class D1ReadReplicationModes
+{
+    /// <summary>Create replicas and let D1 place them around the world.</summary>
+    public const string Auto = "auto";
+
+    /// <summary>Use no replicas. Removing existing ones can take a few hours.</summary>
+    public const string Disabled = "disabled";
+}
+
+/// <summary>
+/// Body of both <c>PUT</c> and <c>PATCH /accounts/{account_id}/d1/database/{database_id}</c>, which is
+/// the only thing either of them accepts.
+/// </summary>
+/// <remarks>
+/// Renaming a database is not part of this endpoint: the published schema for the PUT and the PATCH both
+/// take <c>read_replication</c> and nothing else, so <see cref="D1Database.Name"/> cannot be changed
+/// through them.
+/// </remarks>
+public sealed class UpdateD1DatabaseRequest
+{
+    /// <summary>The read replication configuration to apply.</summary>
+    [JsonPropertyName("read_replication")]
+    public D1ReadReplication? ReadReplication { get; set; }
+
+    /// <summary>Builds the body that sets a replication mode.</summary>
+    /// <param name="mode">One of <see cref="D1ReadReplicationModes"/>.</param>
+    public static UpdateD1DatabaseRequest ForReadReplication(string mode) =>
+        new() { ReadReplication = D1ReadReplication.WithMode(mode) };
+
+    /// <summary>
+    /// Rejects a body Cloudflare would refuse: the PUT requires a replication configuration, and the mode
+    /// has to be one it recognises.
+    /// </summary>
+    /// <exception cref="Exceptions.CloudflareConfigurationException">The request cannot be sent as it is.</exception>
+    public void EnsureValid()
+    {
+        var mode = ReadReplication?.Mode;
+        if (string.IsNullOrWhiteSpace(mode))
+        {
+            throw new Exceptions.CloudflareConfigurationException(
+                $"'{nameof(ReadReplication)}.{nameof(D1ReadReplication.Mode)}' is required: it is the only thing this endpoint accepts.");
+        }
+
+        if (!string.Equals(mode, D1ReadReplicationModes.Auto, StringComparison.Ordinal) &&
+            !string.Equals(mode, D1ReadReplicationModes.Disabled, StringComparison.Ordinal))
+        {
+            throw new Exceptions.CloudflareConfigurationException(
+                $"'{nameof(D1ReadReplication.Mode)}' must be '{D1ReadReplicationModes.Auto}' or '{D1ReadReplicationModes.Disabled}', not '{mode}'.");
+        }
+    }
 }

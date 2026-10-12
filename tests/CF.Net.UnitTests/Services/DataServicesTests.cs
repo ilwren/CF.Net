@@ -904,3 +904,78 @@ public class R2ServiceTests
         Assert.False(exception.IsTransient);
     }
 }
+
+
+public class D1DatabaseConfigurationTests
+{
+    [Fact]
+    public async Task SetReadReplicationAsync_patches_the_database_with_the_mode()
+    {
+        using var harness = CloudflareHarness.Create();
+        harness.RespondWithResult("""{"uuid":"db-1","name":"store","read_replication":{"mode":"auto"}}""");
+
+        var database = await harness.Client.D1.SetReadReplicationAsync("db-1", D1ReadReplicationModes.Auto);
+
+        Assert.Equal(HttpMethod.Patch, harness.LastRequest.Method);
+        Assert.Equal($"/client/v4/accounts/{CloudflareHarness.TestAccountId}/d1/database/db-1", harness.LastRequest.Path);
+        Assert.Equal("{\"read_replication\":{\"mode\":\"auto\"}}", harness.LastRequest.Body);
+        Assert.Equal("auto", database.ReadReplication?.Mode);
+        Assert.True(database.ReadReplication!.IsAuto);
+    }
+
+    [Fact]
+    public async Task UpdateAsync_puts_the_same_body_the_patch_would()
+    {
+        using var harness = CloudflareHarness.Create();
+        harness.RespondWithResult("""{"uuid":"db-1","name":"store"}""");
+
+        await harness.Client.D1.UpdateAsync("db-1", UpdateD1DatabaseRequest.ForReadReplication(D1ReadReplicationModes.Disabled));
+
+        Assert.Equal(HttpMethod.Put, harness.LastRequest.Method);
+        Assert.Equal("{\"read_replication\":{\"mode\":\"disabled\"}}", harness.LastRequest.Body);
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData("automatic")]
+    public async Task UpdateAsync_rejects_a_mode_cloudflare_does_not_accept(string? mode)
+    {
+        using var harness = CloudflareHarness.Create();
+
+        var request = new UpdateD1DatabaseRequest { ReadReplication = new D1ReadReplication { Mode = mode } };
+
+        await Assert.ThrowsAsync<CloudflareConfigurationException>(
+            () => harness.Client.D1.UpdateAsync("db-1", request));
+
+        Assert.Equal(0, harness.RequestCount);
+    }
+
+    [Fact]
+    public async Task UndeleteAsync_posts_to_the_undelete_path()
+    {
+        using var harness = CloudflareHarness.Create();
+        harness.RespondWithResult("""{"uuid":"db-1","name":"store"}""");
+
+        var database = await harness.Client.D1.UndeleteAsync("db-1");
+
+        Assert.Equal(HttpMethod.Post, harness.LastRequest.Method);
+        Assert.Equal($"/client/v4/accounts/{CloudflareHarness.TestAccountId}/d1/database/db-1/undelete", harness.LastRequest.Path);
+        Assert.Equal("store", database.Name);
+    }
+
+    [Fact]
+    public async Task A_listed_database_carries_its_read_replication()
+    {
+        using var harness = CloudflareHarness.Create();
+        harness.RespondWithPage(
+            """[{"uuid":"db-1","name":"store","read_replication":{"mode":"disabled"}}]""",
+            page: 1, totalPages: 1, count: 1, totalCount: 1);
+
+        var page = await harness.Client.D1.ListAsync();
+
+        var database = Assert.Single(page.Items);
+        Assert.Equal("disabled", database.ReadReplication?.Mode);
+        Assert.False(database.ReadReplication!.IsAuto);
+    }
+}

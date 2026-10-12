@@ -443,6 +443,29 @@ public class ReadOnlyIntegrationTests : CloudflareIntegrationTest
     }
 
     [Fact]
+    public async Task Worker_custom_domains_can_be_listed()
+    {
+        if (!SkipWithoutAccount())
+        {
+            return;
+        }
+
+        var domains = await Client.Workers.ListDomainsAsync();
+
+        Log($"worker custom domains: {domains.Count}");
+        foreach (var domain in domains)
+        {
+            Log($"  {domain.Hostname} -> {domain.Service} zone={domain.ZoneName} enabled={domain.Enabled} previews={domain.PreviewsEnabled} cert={domain.CertId}");
+        }
+
+        Assert.All(domains, domain =>
+        {
+            Assert.False(string.IsNullOrWhiteSpace(domain.Id));
+            Assert.False(string.IsNullOrWhiteSpace(domain.Hostname));
+        });
+    }
+
+    [Fact]
     public async Task Zone_settings_can_be_listed_and_read_back_one_at_a_time()
     {
         if (!SkipWithoutZone())

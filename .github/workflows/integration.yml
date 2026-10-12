@@ -382,7 +382,7 @@ jobs:
           for start in range(0, min(len(calls), 64), 16):
               chunk = calls[start:start + 16]
               joined = ' | '.join(str(call) + ' -> ' + str(result) for call, result in chunk)
-              annotation('notice', 'Cloudflare calls ' + str(start + 1) + '-' + str(start + len(chunk)) + ': ' + joined[:900])
+              annotation('notice', 'Cloudflare calls ' + str(start + 1) + '-' + str(start + len(chunk)) + ': ' + joined[:1600])
           text = '\n'.join(lines)
           print(text)
           summary = os.environ.get('GITHUB_STEP_SUMMARY')

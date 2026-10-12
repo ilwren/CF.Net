@@ -42,7 +42,7 @@ public interface ISslService
     IAsyncEnumerable<SslCertificatePack> ListAllAsync(
         SslCertificatePackListParameters? parameters = null,
         string? zoneId = null,
-        [EnumeratorCancellation] CancellationToken cancellationToken = default);
+        CancellationToken cancellationToken = default);
 
     /// <summary>Fetches one certificate pack via <c>GET /zones/{zone_id}/ssl/certificate_packs/{certificate_pack_id}</c>.</summary>
     /// <param name="certificatePackId">The pack id, as listed by <see cref="ListAsync"/>.</param>

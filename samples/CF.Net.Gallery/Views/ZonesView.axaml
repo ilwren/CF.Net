@@ -275,7 +275,7 @@
                   <TextBlock Classes="hint" Text='Or write the body yourself: {"value": ...} or {"enabled": ...}' />
                   <TextBox Text="{Binding SettingBodyJson, Mode=TwoWay}" MinWidth="520" HorizontalAlignment="Left"
                            FontFamily="Cascadia Mono,Consolas,Menlo,DejaVu Sans Mono,monospace" FontSize="12"
-                           PlaceholderText='{"value":"under_attack"}' />
+                           PlaceholderText='e.g. {"value":"under_attack"} or {"enabled":true}' />
                 </StackPanel>
                 <Button Content="Patch with this body" Command="{Binding UpdateSettingCommand}" />
                 <TextBlock Classes="hint" Text="Values are not all the same shape: some settings take a string such as on, some a number, some an object, and the switch sends the strings on and off rather than a boolean. Each entry reports editable, so read before writing. A hand-written body must carry either a value or an enabled flag - sending neither, or both, is refused here rather than by Cloudflare." TextWrapping="Wrap" />

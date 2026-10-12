@@ -100,7 +100,7 @@
             <TextBlock Classes="hint" Text="Request body, sent verbatim by the two buttons below" />
             <TextBox Text="{Binding RawJson, Mode=TwoWay}" AcceptsReturn="True" Height="90"
                      FontFamily="Cascadia Mono,Consolas,Menlo,DejaVu Sans Mono,monospace" FontSize="12"
-                     PlaceholderText='{"sql":"SELECT 1 AS answer"}' />
+                     PlaceholderText='e.g. {"sql":"SELECT 1 AS answer"}' />
             <WrapPanel Orientation="Horizontal">
               <Button Content="Execute on /query" Command="{Binding ExecuteCommand}" Margin="0,0,8,0" />
               <Button Content="Execute on /raw" Command="{Binding ExecuteRawCommand}" />

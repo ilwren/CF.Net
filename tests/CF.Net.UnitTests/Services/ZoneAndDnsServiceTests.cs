@@ -2278,9 +2278,9 @@ public class SslCertificateAnalysisTests
 /// </summary>
 public class CustomHostnamesServiceTests
 {
-    private const string ListPath = "/zones/zone-5678/custom_hostnames";
+    private const string ListPath = "/client/v4/zones/zone-5678/custom_hostnames";
 
-    private const string OnePath = "/zones/zone-5678/custom_hostnames/host-1";
+    private const string OnePath = "/client/v4/zones/zone-5678/custom_hostnames/host-1";
 
     private const string HostnameJson = """
         {
@@ -2358,7 +2358,7 @@ public class CustomHostnamesServiceTests
         Assert.Equal(HttpMethod.Get, harness.LastRequest.Method);
         Assert.Equal(ListPath, harness.LastRequest.Path);
         Assert.Equal(
-            "per_page=50&direction=desc&hostname.contain=shop&order=ssl_status&ssl_status=pending_validation&wildcard=false&ssl=1",
+            "?per_page=50&direction=desc&hostname.contain=shop&order=ssl_status&ssl_status=pending_validation&wildcard=false&ssl=1",
             harness.LastRequest.Query);
 
         Assert.Single(page.Items);
@@ -2374,10 +2374,10 @@ public class CustomHostnamesServiceTests
         harness.RespondWithPage("[]", page: 1, totalPages: 1, count: 0, totalCount: 0);
 
         await harness.Client.CustomHostnames.ListAsync(new CustomHostnameListParameters { Ssl = true });
-        Assert.Equal("ssl=1", harness.LastRequest.Query);
+        Assert.Equal("?ssl=1", harness.LastRequest.Query);
 
         await harness.Client.CustomHostnames.ListAsync(new CustomHostnameListParameters { Ssl = false });
-        Assert.Equal("ssl=0", harness.LastRequest.Query);
+        Assert.Equal("?ssl=0", harness.LastRequest.Query);
 
         // Unset means the filter is not sent at all, rather than being sent as a default.
         await harness.Client.CustomHostnames.ListAsync(new CustomHostnameListParameters());
@@ -2403,10 +2403,10 @@ public class CustomHostnamesServiceTests
         Assert.Equal(2, hostnames.Count);
         Assert.Equal(2, harness.RequestCount);
         Assert.Equal(
-            "per_page=1&certificate_authority=lets_encrypt&hostname_status=pending&page=1",
+            "?page=1&per_page=1&certificate_authority=lets_encrypt&hostname_status=pending",
             harness.Requests[0].Query);
         Assert.Equal(
-            "per_page=1&certificate_authority=lets_encrypt&hostname_status=pending&page=2",
+            "?page=2&per_page=1&certificate_authority=lets_encrypt&hostname_status=pending",
             harness.Requests[1].Query);
     }
 
@@ -2648,7 +2648,7 @@ public class CustomHostnamesServiceTests
 
         await harness.Client.CustomHostnames.GetAsync("host-1", zoneId: "zone-other");
 
-        Assert.Equal("/zones/zone-other/custom_hostnames/host-1", harness.LastRequest.Path);
+        Assert.Equal("/client/v4/zones/zone-other/custom_hostnames/host-1", harness.LastRequest.Path);
     }
 
     [Fact]

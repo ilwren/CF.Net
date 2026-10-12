@@ -10,9 +10,9 @@ namespace CFNet.Services;
 /// </summary>
 /// <remarks>
 /// Listing and reading need the <c>SSL and Certificates Read</c> permission (or <c>Write</c>); ordering,
-/// changing and deleting packs need <c>SSL and Certificates Write</c>. Not wrapped by this release: DCV
-/// delegation and validation method (<c>/zones/{zone_id}/ssl/verification</c>), auto-origin TLS KEX,
-/// automatic SSL/TLS enrolment and the SSL/TLS recommendation.
+/// changing and deleting packs need <c>SSL and Certificates Write</c>. The verification endpoints accept
+/// either the SSL and Certificates or the Mutual TLS Certificates permission, read or write. Not wrapped by
+/// this release: auto-origin TLS KEX, automatic SSL/TLS enrolment and the SSL/TLS recommendation.
 /// </remarks>
 public interface ISslService
 {
@@ -118,6 +118,49 @@ public interface ISslService
     /// afterwards - restarting only starts the clock again.
     /// </remarks>
     Task<SslCertificatePack> RestartValidationAsync(
+        string certificatePackId,
+        string? zoneId = null,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>Reads SSL verification details via <c>GET /zones/{zone_id}/ssl/verification</c>.</summary>
+    /// <param name="retry">When true, sends <c>retry=true</c> so Cloudflare re-runs the check immediately.</param>
+    /// <param name="zoneId">Zone id; falls back to the configured default when null.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>One entry per certificate being validated; empty when the zone has none.</returns>
+    /// <remarks>
+    /// This is the endpoint that explains why a certificate has not been issued yet: each entry carries the
+    /// record or URL the authority is waiting for and whether Cloudflare has found it.
+    /// </remarks>
+    Task<IReadOnlyList<SslVerificationDetails>> GetVerificationAsync(
+        bool retry = false,
+        string? zoneId = null,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Changes a pack's validation method and validates with it immediately, via
+    /// <c>PATCH /zones/{zone_id}/ssl/verification/{certificate_pack_id}</c>.
+    /// </summary>
+    /// <param name="certificatePackId">Certificate pack UUID.</param>
+    /// <param name="validationMethod">Desired method; see <see cref="SslValidationMethods"/>.</param>
+    /// <param name="zoneId">Zone id; falls back to the configured default when null.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>The pack's status and validation method after the attempt.</returns>
+    Task<SslValidationMethodUpdate> UpdateValidationMethodAsync(
+        string certificatePackId,
+        string validationMethod,
+        string? zoneId = null,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>Asks Cloudflare to re-check validation now, without changing the method.</summary>
+    /// <param name="certificatePackId">Certificate pack UUID.</param>
+    /// <param name="zoneId">Zone id; falls back to the configured default when null.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>The pack's status after the re-check.</returns>
+    /// <remarks>
+    /// Sends an empty body, which the schema treats as "request an immediate validation check". Distinct from
+    /// <see cref="RestartValidationAsync"/>, which restarts a pack stuck in <c>validation_timed_out</c>.
+    /// </remarks>
+    Task<SslValidationMethodUpdate> RevalidateAsync(
         string certificatePackId,
         string? zoneId = null,
         CancellationToken cancellationToken = default);
@@ -302,6 +345,70 @@ public sealed class SslService : CloudflareService, ISslService
         string? zoneId = null,
         CancellationToken cancellationToken = default) =>
         UpdateAsync(certificatePackId, UpdateSslCertificatePackRequest.ToRestartValidation(), zoneId, cancellationToken);
+
+    /// <inheritdoc />
+    public async Task<IReadOnlyList<SslVerificationDetails>> GetVerificationAsync(
+        bool retry = false,
+        string? zoneId = null,
+        CancellationToken cancellationToken = default)
+    {
+        var zone = ResolveZoneId(zoneId);
+        var request = CloudflareRequest.Get($"{ZonePath(zone)}/ssl/verification");
+        request.OperationName = retry ? "Retry SSL Verification" : "Get SSL Verification Details";
+
+        // The schema's only parameter: omitted entirely rather than sent as retry=false when not retrying.
+        if (retry)
+        {
+            request.Query.Add("retry", true);
+        }
+
+        var response = await Transport.SendAsync<List<SslVerificationDetails>>(request, cancellationToken).ConfigureAwait(false);
+        return response.Result ?? new List<SslVerificationDetails>();
+    }
+
+    /// <inheritdoc />
+    public async Task<SslValidationMethodUpdate> UpdateValidationMethodAsync(
+        string certificatePackId,
+        string validationMethod,
+        string? zoneId = null,
+        CancellationToken cancellationToken = default)
+    {
+        Require(validationMethod, nameof(validationMethod));
+        return await SendValidationMethodAsync(
+            certificatePackId,
+            UpdateSslValidationMethodRequest.WithMethod(validationMethod),
+            zoneId,
+            cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <inheritdoc />
+    public Task<SslValidationMethodUpdate> RevalidateAsync(
+        string certificatePackId,
+        string? zoneId = null,
+        CancellationToken cancellationToken = default) =>
+        SendValidationMethodAsync(
+            certificatePackId,
+            UpdateSslValidationMethodRequest.RevalidateNow(),
+            zoneId,
+            cancellationToken);
+
+    private async Task<SslValidationMethodUpdate> SendValidationMethodAsync(
+        string certificatePackId,
+        UpdateSslValidationMethodRequest body,
+        string? zoneId,
+        CancellationToken cancellationToken)
+    {
+        var zone = ResolveZoneId(zoneId);
+        var id = Require(certificatePackId, nameof(certificatePackId));
+
+        var request = CloudflareRequest.Patch(
+            $"{ZonePath(zone)}/ssl/verification/{CloudflareUrl.EncodeSegment(id)}",
+            body);
+        request.OperationName = body.IsEmpty ? "Revalidate SSL Certificate" : "Update SSL Validation Method";
+
+        var response = await Transport.SendAsync<SslValidationMethodUpdate>(request, cancellationToken).ConfigureAwait(false);
+        return response.EnsureResult();
+    }
 
     /// <inheritdoc />
     public async Task<SslCertificatePackQuota> GetQuotaAsync(

@@ -1744,3 +1744,189 @@ public class SslCertificateValidationTests
         Assert.Null(pack.ValidityDays);
     }
 }
+
+public class SslVerificationTests
+{
+    private const string VerificationPath = "/client/v4/zones/zone-5678/ssl/verification";
+
+    private const string VerificationJson =
+        """
+        [
+          {
+            "cert_pack_uuid": "pack-1",
+            "certificate_status": "authorizing",
+            "validation_method": "txt",
+            "verification_status": false,
+            "verification_type": "cname",
+            "brand_check": false,
+            "signature": "SHA256WithRSA",
+            "verification_info": {
+              "record_name": "_acme-challenge.example.com",
+              "record_target": "ca3-abcdef",
+              "some_new_field": 7
+            }
+          },
+          {
+            "cert_pack_uuid": "pack-1",
+            "certificate_status": "active",
+            "verification_status": true,
+            "verification_info": { "policy_email": "admin@example.com" }
+          }
+        ]
+        """;
+
+    [Fact]
+    public async Task GetVerificationAsync_reads_the_zone_scoped_array()
+    {
+        using var harness = CloudflareHarness.Create();
+        harness.RespondWithResult(VerificationJson);
+
+        var entries = await harness.Client.Ssl.GetVerificationAsync();
+
+        Assert.Equal(HttpMethod.Get, harness.LastRequest.Method);
+        Assert.Equal(VerificationPath, harness.LastRequest.Path);
+        Assert.Equal(string.Empty, harness.LastRequest.Query);
+
+        Assert.Equal(2, entries.Count);
+        var pending = entries[0];
+        Assert.Equal("pack-1", pending.CertificatePackId);
+        Assert.Equal(SslVerificationCertificateStatuses.Authorizing, pending.CertificateStatus);
+        Assert.Equal(SslValidationMethods.Txt, pending.ValidationMethod);
+        Assert.Equal(SslVerificationTypes.Cname, pending.VerificationType);
+        Assert.False(pending.BrandCheck);
+        Assert.Equal("SHA256WithRSA", pending.Signature);
+        Assert.False(pending.VerificationStatus);
+        Assert.False(pending.IsVerified);
+        Assert.Equal("pack-1: authorizing", pending.ToString());
+
+        var active = entries[1];
+        Assert.Equal(SslVerificationCertificateStatuses.Active, active.CertificateStatus);
+        Assert.True(active.IsVerified);
+    }
+
+    [Fact]
+    public async Task Verification_info_names_the_record_the_authority_is_waiting_for()
+    {
+        using var harness = CloudflareHarness.Create();
+        harness.RespondWithResult(VerificationJson);
+
+        var entries = await harness.Client.Ssl.GetVerificationAsync();
+
+        var info = entries[0].VerificationInfo!;
+        Assert.Equal("_acme-challenge.example.com", info.RecordName);
+        Assert.Equal("ca3-abcdef", info.RecordTarget);
+        Assert.Null(info.PolicyEmail);
+        Assert.Equal("_acme-challenge.example.com -> ca3-abcdef", info.ToString());
+        // An unknown field inside verification_info survives rather than being dropped.
+        Assert.Equal(7, info.AdditionalData!["some_new_field"].GetInt32());
+
+        Assert.Equal("admin@example.com", entries[1].VerificationInfo!.PolicyEmail);
+        Assert.Equal("(no record)", entries[1].VerificationInfo.ToString());
+    }
+
+    [Fact]
+    public async Task GetVerificationAsync_sends_retry_only_when_asked()
+    {
+        using var harness = CloudflareHarness.Create();
+        harness.RespondWithResult("[]").RespondWithResult("[]");
+
+        await harness.Client.Ssl.GetVerificationAsync();
+        Assert.Equal(string.Empty, harness.LastRequest.Query);
+
+        await harness.Client.Ssl.GetVerificationAsync(retry: true);
+        Assert.Equal("retry=true", harness.LastRequest.Query.TrimStart('?'));
+    }
+
+    [Fact]
+    public async Task GetVerificationAsync_reads_an_empty_zone_as_an_empty_list()
+    {
+        using var harness = CloudflareHarness.Create();
+        harness.RespondWithResult("[]");
+
+        Assert.Empty(await harness.Client.Ssl.GetVerificationAsync());
+    }
+
+    [Fact]
+    public async Task GetVerificationAsync_honours_an_explicit_zone_id()
+    {
+        using var harness = CloudflareHarness.Create();
+        harness.RespondWithResult("[]");
+
+        await harness.Client.Ssl.GetVerificationAsync(zoneId: "zone-other");
+
+        Assert.Equal("/client/v4/zones/zone-other/ssl/verification", harness.LastRequest.Path);
+    }
+
+    [Fact]
+    public async Task UpdateValidationMethodAsync_switches_the_method_and_validates_immediately()
+    {
+        using var harness = CloudflareHarness.Create();
+        harness.RespondWithResult("{\"status\":\"pending_validation\",\"validation_method\":\"cname\"}");
+
+        var update = await harness.Client.Ssl.UpdateValidationMethodAsync("pack-1", SslValidationMethods.Cname);
+
+        Assert.Equal(HttpMethod.Patch, harness.LastRequest.Method);
+        Assert.Equal($"{VerificationPath}/pack-1", harness.LastRequest.Path);
+        Assert.Contains("\"validation_method\":\"cname\"", harness.LastRequest.Body, StringComparison.Ordinal);
+        Assert.Equal("pending_validation", update.Status);
+        Assert.Equal(SslValidationMethods.Cname, update.ValidationMethod);
+        Assert.Equal("pending_validation via cname", update.ToString());
+    }
+
+    [Fact]
+    public async Task RevalidateAsync_sends_an_empty_body_to_ask_for_a_recheck()
+    {
+        using var harness = CloudflareHarness.Create();
+        harness.RespondWithResult("{\"status\":\"pending_validation\"}");
+
+        var update = await harness.Client.Ssl.RevalidateAsync("pack-1");
+
+        Assert.Equal(HttpMethod.Patch, harness.LastRequest.Method);
+        Assert.Equal($"{VerificationPath}/pack-1", harness.LastRequest.Path);
+        Assert.Equal("{}", harness.LastRequest.Body);
+        Assert.Equal("pending_validation via the pack's current method", update.ToString());
+        Assert.True(UpdateSslValidationMethodRequest.RevalidateNow().IsEmpty);
+        Assert.False(UpdateSslValidationMethodRequest.WithMethod("txt").IsEmpty);
+        Assert.Equal("revalidate now", UpdateSslValidationMethodRequest.RevalidateNow().ToString());
+    }
+
+    [Fact]
+    public async Task A_blank_validation_method_is_rejected_before_any_request()
+    {
+        using var harness = CloudflareHarness.Create();
+
+        await Assert.ThrowsAsync<CloudflareConfigurationException>(
+            () => harness.Client.Ssl.UpdateValidationMethodAsync("pack-1", "  "));
+
+        Assert.Equal(0, harness.RequestCount);
+    }
+
+    [Fact]
+    public async Task A_validation_method_update_without_a_result_payload_raises()
+    {
+        using var harness = CloudflareHarness.Create();
+        harness.RespondWithResult("null");
+
+        var exception = await Assert.ThrowsAsync<CloudflareApiException>(
+            () => harness.Client.Ssl.RevalidateAsync("pack-1"));
+
+        Assert.Contains("without a result payload", exception.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Dcv_delegation_is_available_for_validation_but_not_for_ordering()
+    {
+        // cname is a fourth value on the validation-method PATCH only; an order still rejects it.
+        Assert.Equal(new[] { "txt", "http", "email" }, SslValidationMethods.All);
+        Assert.DoesNotContain(SslValidationMethods.Cname, SslValidationMethods.All);
+
+        var order = new OrderSslCertificatePackRequest(
+            new[] { "example.com" },
+            SslValidationMethods.Cname,
+            365,
+            SslCertificateAuthorities.LetsEncrypt);
+
+        var exception = Assert.Throws<CloudflareConfigurationException>(() => order.EnsureValid());
+        Assert.Contains("not one of txt, http, email", exception.Message, StringComparison.Ordinal);
+    }
+}

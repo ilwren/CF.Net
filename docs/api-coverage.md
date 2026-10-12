@@ -93,11 +93,16 @@ through `DnsRecord.Data` and `DnsRecord.GetData<T>()`.
 | `SetCloudflareBrandingAsync(certificatePackId, enabled, zoneId)` | `PATCH …/certificate_packs/{certificate_pack_id}` | sends `{"cloudflare_branding":true|false}` - `false` is sent explicitly, because omitting the field would leave the setting alone |
 | `RestartValidationAsync(certificatePackId, zoneId)` | `PATCH …/certificate_packs/{certificate_pack_id}` | sends `{}`; only a validation operation for a pack in `validation_timed_out`, and the challenge still has to be answered afterwards |
 | `DeleteAsync(certificatePackId, zoneId)` | `DELETE …/ssl/certificate_packs/{certificate_pack_id}` | Advanced Certificate Manager packs only; returns the `id` Cloudflare echoes back |
+| `GetVerificationAsync(retry, zoneId)` | `GET …/ssl/verification` | an **array**, one entry per certificate being validated: `cert_pack_uuid`, `certificate_status`, `validation_method`, `verification_status`, `verification_type`, `brand_check`, `signature`, and `verification_info` (`record_name`, `record_target`, `policy_email`) - i.e. precisely which record the authority is still waiting for. `retry: true` adds `retry=true`, making Cloudflare re-run the check now instead of at its next scheduled attempt |
+| `UpdateValidationMethodAsync(certificatePackId, validationMethod, zoneId)` | `PATCH …/ssl/verification/{certificate_pack_id}` | body `{"validation_method":…}` - switches the method and validates with it immediately; returns `{status, validation_method}` |
+| `RevalidateAsync(certificatePackId, zoneId)` | `PATCH …/ssl/verification/{certificate_pack_id}` | **empty body `{}`** = "request an immediate validation check" using the method already in use |
 | `GetQuotaAsync(zoneId)` | `GET …/ssl/certificate_packs/quota` | `{"advanced":{"allocated":…,"used":…}}`, plus `Remaining`; worth calling before ordering, since ordering past the quota fails |
 | `GetUniversalSettingsAsync(zoneId)` | `GET /zones/{zone_id}/ssl/universal/settings` | one boolean, `enabled` |
 | `SetUniversalSslAsync(enabled, zoneId)` | `PATCH …/ssl/universal/settings` | body `{"enabled":true|false}` - `false` is sent explicitly, because an empty PATCH would leave the setting alone |
 
-Permissions are `SSL and Certificates Read` to list and read, `SSL and Certificates Write` to delete.
+Permissions are `SSL and Certificates Read` to list and read, `SSL and Certificates Write` to delete. The
+verification endpoints accept any one of four: `SSL and Certificates` or `Access: Mutual TLS Certificates`,
+read or write.
 
 `SslCertificatePack` maps `id`, `zone_id`, `hosts`, `status`, `type`, `certificate_authority`, `priority`,
 `signature`, `uploaded_on` and the `certificates` array (each with `id`, `hosts`, `status`, `bundle_method`
@@ -106,9 +111,10 @@ string — `SslCertificatePackStatuses` holds the seven the documentation names 
 `pending_validation`, `validation_timed_out`, `inactive`, `backup_issued`, `holding_deployment`, `deleted`)
 and an unlisted one is never a deserialisation failure. `SslCertificatePackTypes` is the complete set of
 eight (`universal`, `advanced`, `managed_hostname`, `mh_custom`, `sni_custom`, `total_tls`, `keyless`,
-`legacy_custom`), `SslCertificateAuthorities` the three (`google`, `lets_encrypt`, `ssl_com`). Issuance
-fields the model does not name (`validation_method`, `validity_days`, the primary certificate, …) arrive in
-`AdditionalData` rather than being dropped.
+`legacy_custom`), `SslCertificateAuthorities` the three (`google`, `lets_encrypt`, `ssl_com`). The issuance
+fields are modelled too (`validation_method`, `validity_days`, `primary_certificate`, `validation_records`,
+`validation_errors`, `created_on`); what is not - a restriction label on an individual certificate, anything
+Cloudflare adds later - arrives in `AdditionalData` rather than being dropped.
 
 Ordering is a paid Advanced Certificate Manager feature, and it is not finished when the call returns: the
 hosts must contain the zone apex, at most 50 of them, and validation still has to be answered - a TXT record
@@ -134,8 +140,17 @@ for an e-mail challenge, plus that record's `status`) and `validation_errors`, a
 `validity_days` and `primary_certificate`. The TXT pair is exactly what `client.DnsRecords.CreateTxtRecordAsync`
 takes, so answering a challenge is two calls in this library and no copy-pasting from the dashboard.
 
-⛔ DCV delegation and validation method (`/zones/{zone_id}/ssl/verification`), auto-origin TLS KEX, automatic
-SSL/TLS enrolment and the SSL/TLS recommendation.
+**There are two different "try again" calls, and they are not interchangeable.** `RestartValidationAsync`
+PATCHes the *certificate pack* with an empty body and restarts a pack that reached `validation_timed_out`;
+`RevalidateAsync` PATCHes `ssl/verification/{certificate_pack_id}` with an empty body and asks Cloudflare to
+re-run the DCV check now, while `GetVerificationAsync(retry: true)` does the same for every certificate in the
+zone in one call. `UpdateValidationMethodAsync` is the fourth: it changes the method (`txt`, `http`, `email`
+or `cname` - `cname`, meaning DCV delegation, is accepted here but *not* when ordering a pack, so
+`SslValidationMethods.Cname` is deliberately absent from `SslValidationMethods.All`) and validates with it
+straight away.
+
+⛔ Auto-origin TLS KEX (`ssl/auto_origin_tls_kex`), automatic SSL/TLS enrolment, the SSL/TLS recommendation
+(`ssl/recommendations`) and SSL for SaaS custom hostnames.
 
 ## Users and accounts
 

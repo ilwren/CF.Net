@@ -8,10 +8,10 @@ namespace CFNet.Models.Ssl;
 /// A certificate pack, from <c>GET /zones/{zone_id}/ssl/certificate_packs</c>.
 /// </summary>
 /// <remarks>
-/// Cloudflare's schema for a pack carries more than the fields modelled here - issuance details, the
-/// validation state of each host, the primary certificate. Anything unmapped is captured in
-/// <see cref="AdditionalData"/> instead of being dropped, so reading one of those fields out of the raw
-/// JSON is always possible without waiting for the model to grow.
+/// Most of Cloudflare's schema for a pack is modelled here, including the validation records and errors
+/// that say what is still needed to finish issuing it. Anything not modelled - a restriction label on an
+/// individual certificate, a field Cloudflare adds later - is captured in <see cref="AdditionalData"/>
+/// instead of being dropped, so reading it out of the raw JSON is always possible.
 /// </remarks>
 public sealed class SslCertificatePack
 {
@@ -371,6 +371,12 @@ public static class SslValidationMethods
 
     /// <summary>E-mail to an administrative address at the domain.</summary>
     public const string Email = "email";
+
+    /// <summary>
+    /// DCV delegation: prove control with a CNAME record. Accepted by the validation-method PATCH under
+    /// <c>ssl/verification</c>, but not when ordering a pack, which is why it is absent from <see cref="All"/>.
+    /// </summary>
+    public const string Cname = "cname";
 
     /// <summary>Every value Cloudflare accepts, in the order the schema lists them.</summary>
     public static readonly IReadOnlyList<string> All = new[] { Txt, Http, Email };

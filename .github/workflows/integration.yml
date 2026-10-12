@@ -106,10 +106,15 @@ jobs:
           fi
 
           if [ -z "${CLOUDFLARE_ACCOUNT_ID:-}" ]; then
-            echo "::warning::CLOUDFLARE_ACCOUNT_ID is not set; Workers, Pages, D1, KV and R2 tests will skip."
+            echo "::warning::CLOUDFLARE_ACCOUNT_ID is not set; Workers, Pages, D1, KV and R2 tests will skip. It is 32 hexadecimal characters - any domain's Overview page in the API section, or Ctrl/Cmd+K then 'Copy account ID'. Not the account name, not a dashboard URL."
           fi
           if [ -z "${CLOUDFLARE_ZONE_ID:-}" ]; then
-            echo "::warning::CLOUDFLARE_ZONE_ID is not set; DNS and cache purge tests will skip."
+            echo "::warning::CLOUDFLARE_ZONE_ID is not set; DNS and cache purge tests will skip. It is 32 hexadecimal characters - that domain's Overview page, in the API section next to Zone ID. The token also needs the zone in its Zone Resources."
+          fi
+          if [ "${CLOUDFLARE_ACCOUNT_ID:-}" != "" ] || [ "${CLOUDFLARE_ZONE_ID:-}" != "" ]; then
+            # Shape checking lives in the fixture (CFNet.TestKit.CredentialFormat), which reports a
+            # malformed value by name to the test output and to the run report this job summarises.
+            echo "Credential shapes are checked by the tests themselves; a wrong one is named in the summary."
           fi
 
           echo "Write operations: ${CLOUDFLARE_IT_ENABLE_WRITES}"

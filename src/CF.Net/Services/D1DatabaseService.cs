@@ -221,6 +221,118 @@ public interface ID1DatabaseService
     /// call fails and the data is gone.
     /// </remarks>
     Task<D1Database> UndeleteAsync(string databaseId, string? accountId = null, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Starts or continues an export via <c>POST /accounts/{account_id}/d1/database/{database_id}/export</c>.
+    /// </summary>
+    /// <param name="databaseId">Database id (UUID).</param>
+    /// <param name="request">
+    /// The export to run; <see cref="D1ExportRequest.Start"/> for the first call and
+    /// <see cref="D1ExportRequest.Continue"/> with the previous <c>at_bookmark</c> afterwards. Defaults to
+    /// starting a full export.
+    /// </param>
+    /// <param name="accountId">Account id; falls back to the configured default when null.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>Progress, and the signed download URL once the status is <c>complete</c>.</returns>
+    /// <remarks>
+    /// The database cannot serve queries while a large export runs, and Cloudflare cancels an export that
+    /// stops being polled - use <see cref="ExportAndWaitAsync"/> unless you want to drive the polling
+    /// yourself. Downloading the dump from <see cref="D1ExportResult.SignedUrl"/> is an ordinary HTTP GET
+    /// that needs no Cloudflare authentication.
+    /// </remarks>
+    Task<D1ExportResult> ExportAsync(
+        string databaseId,
+        D1ExportRequest? request = null,
+        string? accountId = null,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>Exports the database and polls until Cloudflare reports <c>complete</c> or <c>error</c>.</summary>
+    /// <param name="databaseId">Database id (UUID).</param>
+    /// <param name="dumpOptions">Optional restrictions on what the dump contains.</param>
+    /// <param name="pollInterval">Delay between polls; two seconds by default, and never negative.</param>
+    /// <param name="accountId">Account id; falls back to the configured default when null.</param>
+    /// <param name="cancellationToken">Cancellation token; cancelling stops the polling, not the export.</param>
+    /// <returns>The final response. Check <see cref="D1ExportResult.IsFailed"/> - a failed export arrives as a
+    /// 200 with <c>status: "error"</c>, not as an exception.</returns>
+    Task<D1ExportResult> ExportAndWaitAsync(
+        string databaseId,
+        D1DumpOptions? dumpOptions = null,
+        TimeSpan? pollInterval = null,
+        string? accountId = null,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Sends one import action via <c>POST /accounts/{account_id}/d1/database/{database_id}/import</c>.
+    /// </summary>
+    /// <param name="databaseId">Database id (UUID).</param>
+    /// <param name="request">The action to send; validated locally first.</param>
+    /// <param name="accountId">Account id; falls back to the configured default when null.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <remarks>
+    /// The three actions are <see cref="D1ImportRequest.Init"/>, <see cref="D1ImportRequest.Ingest"/> and
+    /// <see cref="D1ImportRequest.Poll"/>. Between init and ingest you PUT the SQL file to the presigned
+    /// <see cref="D1ImportResult.UploadUrl"/> with an ordinary HTTP client: that upload is not a Cloudflare
+    /// API call, needs no token, and this library's transport would attach one.
+    /// </remarks>
+    Task<D1ImportResult> ImportAsync(
+        string databaseId,
+        D1ImportRequest request,
+        string? accountId = null,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>Asks D1 for an upload URL, the <c>init</c> action of <see cref="ImportAsync"/>.</summary>
+    /// <param name="databaseId">Database id (UUID).</param>
+    /// <param name="etag">
+    /// MD5 hash of the SQL file - <see cref="D1ImportRequest.ComputeEtag(byte[])"/> produces it. Cloudflare
+    /// uses it to recognise a file that is already there.
+    /// </param>
+    /// <param name="accountId">Account id; falls back to the configured default when null.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>The response carrying <see cref="D1ImportResult.UploadUrl"/> and <see cref="D1ImportResult.Filename"/>.</returns>
+    Task<D1ImportResult> InitialiseImportAsync(
+        string databaseId,
+        string etag,
+        string? accountId = null,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>Starts importing an uploaded file, the <c>ingest</c> action of <see cref="ImportAsync"/>.</summary>
+    /// <param name="databaseId">Database id (UUID).</param>
+    /// <param name="etag">The same MD5 hash that was sent to <see cref="InitialiseImportAsync"/>.</param>
+    /// <param name="filename">The filename the init response returned.</param>
+    /// <param name="accountId">Account id; falls back to the configured default when null.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <remarks>Imports block the database for their duration.</remarks>
+    Task<D1ImportResult> IngestImportAsync(
+        string databaseId,
+        string etag,
+        string filename,
+        string? accountId = null,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>Polls a running import once, the <c>poll</c> action of <see cref="ImportAsync"/>.</summary>
+    /// <param name="databaseId">Database id (UUID).</param>
+    /// <param name="currentBookmark">The <c>at_bookmark</c> of the previous response.</param>
+    /// <param name="accountId">Account id; falls back to the configured default when null.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    Task<D1ImportResult> PollImportAsync(
+        string databaseId,
+        string currentBookmark,
+        string? accountId = null,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>Polls a running import until Cloudflare reports <c>complete</c> or <c>error</c>.</summary>
+    /// <param name="databaseId">Database id (UUID).</param>
+    /// <param name="currentBookmark">The <c>at_bookmark</c> to start from.</param>
+    /// <param name="pollInterval">Delay between polls; two seconds by default, and never negative.</param>
+    /// <param name="accountId">Account id; falls back to the configured default when null.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>The final response. Check <see cref="D1ImportResult.IsFailed"/> before trusting it.</returns>
+    Task<D1ImportResult> WaitForImportAsync(
+        string databaseId,
+        string currentBookmark,
+        TimeSpan? pollInterval = null,
+        string? accountId = null,
+        CancellationToken cancellationToken = default);
 }
 
 
@@ -510,6 +622,143 @@ public sealed class D1DatabaseService : CloudflareService, ID1DatabaseService
 
     private static string DatabasePath(string accountId, string databaseId) =>
         $"{AccountPath(accountId)}/d1/database/{CloudflareUrl.EncodeSegment(Require(databaseId, nameof(databaseId)))}";
+
+    /// <inheritdoc />
+    public async Task<D1ExportResult> ExportAsync(
+        string databaseId,
+        D1ExportRequest? request = null,
+        string? accountId = null,
+        CancellationToken cancellationToken = default)
+    {
+        var body = request ?? D1ExportRequest.Start();
+        body.EnsureValid();
+
+        var path = DatabasePath(ResolveAccountId(accountId), databaseId);
+        var httpRequest = CloudflareRequest.Post($"{path}/export", body);
+        httpRequest.OperationName = "Export D1 Database";
+
+        var response = await Transport.SendAsync<D1ExportResult>(httpRequest, cancellationToken).ConfigureAwait(false);
+        return response.EnsureResult();
+    }
+
+    /// <inheritdoc />
+    public async Task<D1ExportResult> ExportAndWaitAsync(
+        string databaseId,
+        D1DumpOptions? dumpOptions = null,
+        TimeSpan? pollInterval = null,
+        string? accountId = null,
+        CancellationToken cancellationToken = default)
+    {
+        var interval = ResolvePollInterval(pollInterval);
+        var result = await ExportAsync(databaseId, D1ExportRequest.Start(dumpOptions), accountId, cancellationToken)
+            .ConfigureAwait(false);
+
+        while (result.IsRunning)
+        {
+            if (string.IsNullOrWhiteSpace(result.AtBookmark))
+            {
+                // Without a bookmark the next call would start a second export instead of following this
+                // one, so hand the caller what Cloudflare said and let them decide.
+                return result;
+            }
+
+            await Task.Delay(interval, cancellationToken).ConfigureAwait(false);
+            result = await ExportAsync(
+                databaseId,
+                D1ExportRequest.Continue(result.AtBookmark, dumpOptions),
+                accountId,
+                cancellationToken).ConfigureAwait(false);
+        }
+
+        return result;
+    }
+
+    /// <inheritdoc />
+    public async Task<D1ImportResult> ImportAsync(
+        string databaseId,
+        D1ImportRequest request,
+        string? accountId = null,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        request.EnsureValid();
+
+        var path = DatabasePath(ResolveAccountId(accountId), databaseId);
+        var httpRequest = CloudflareRequest.Post($"{path}/import", request);
+        httpRequest.OperationName = "Import SQL into D1 Database";
+
+        var response = await Transport.SendAsync<D1ImportResult>(httpRequest, cancellationToken).ConfigureAwait(false);
+        return response.EnsureResult();
+    }
+
+    /// <inheritdoc />
+    public Task<D1ImportResult> InitialiseImportAsync(
+        string databaseId,
+        string etag,
+        string? accountId = null,
+        CancellationToken cancellationToken = default) =>
+        ImportAsync(databaseId, D1ImportRequest.Init(Require(etag, nameof(etag))), accountId, cancellationToken);
+
+    /// <inheritdoc />
+    public Task<D1ImportResult> IngestImportAsync(
+        string databaseId,
+        string etag,
+        string filename,
+        string? accountId = null,
+        CancellationToken cancellationToken = default) =>
+        ImportAsync(
+            databaseId,
+            D1ImportRequest.Ingest(Require(etag, nameof(etag)), Require(filename, nameof(filename))),
+            accountId,
+            cancellationToken);
+
+    /// <inheritdoc />
+    public Task<D1ImportResult> PollImportAsync(
+        string databaseId,
+        string currentBookmark,
+        string? accountId = null,
+        CancellationToken cancellationToken = default) =>
+        ImportAsync(
+            databaseId,
+            D1ImportRequest.Poll(Require(currentBookmark, nameof(currentBookmark))),
+            accountId,
+            cancellationToken);
+
+    /// <inheritdoc />
+    public async Task<D1ImportResult> WaitForImportAsync(
+        string databaseId,
+        string currentBookmark,
+        TimeSpan? pollInterval = null,
+        string? accountId = null,
+        CancellationToken cancellationToken = default)
+    {
+        var interval = ResolvePollInterval(pollInterval);
+        var result = await PollImportAsync(databaseId, currentBookmark, accountId, cancellationToken).ConfigureAwait(false);
+
+        while (result.IsRunning)
+        {
+            if (string.IsNullOrWhiteSpace(result.AtBookmark))
+            {
+                return result;
+            }
+
+            await Task.Delay(interval, cancellationToken).ConfigureAwait(false);
+            result = await PollImportAsync(databaseId, result.AtBookmark!, accountId, cancellationToken).ConfigureAwait(false);
+        }
+
+        return result;
+    }
+
+    private static TimeSpan ResolvePollInterval(TimeSpan? pollInterval)
+    {
+        var interval = pollInterval ?? TimeSpan.FromSeconds(2);
+        if (interval < TimeSpan.Zero)
+        {
+            throw new Exceptions.CloudflareConfigurationException("A D1 poll interval cannot be negative.");
+        }
+
+        return interval;
+    }
 
     /// <inheritdoc />
     public Task<D1Database> SetReadReplicationAsync(

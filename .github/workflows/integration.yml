@@ -6,6 +6,10 @@ name: Integration
 # schedule/dispatch-only workflow keeps untrusted forks from being able to spend your API quota or
 # touch your account.
 #
+# The cadence that follows from it: new endpoints are proven by the offline unit tests on every push
+# (ci.yml), and the live suite is run once per phase - dispatch it by hand when a batch of endpoints is
+# finished, or let the Monday schedule do it.
+#
 # To make it do anything, add these repository secrets
 # (Settings -> Secrets and variables -> Actions -> New repository secret):
 #
@@ -19,11 +23,6 @@ name: Integration
 # See docs/integration-testing.md for how to create a correctly scoped token.
 
 on:
-  # TEMPORARY: while the API surface is still being filled in, every push also runs the live suite so
-  # each new endpoint is verified against the real account. Take this back off before merging.
-  push:
-    branches:
-      - arena/5d11f1dd-cf-net
   workflow_dispatch:
     inputs:
       enable_writes:

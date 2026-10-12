@@ -1,4 +1,5 @@
 using System.Net;
+using System.Text;
 using System.Text.Json;
 using CFNet.Exceptions;
 using CFNet.Models.Common;
@@ -1171,5 +1172,272 @@ public class R2S3EndpointTests
     public void A_missing_account_id_is_rejected(string? accountId)
     {
         Assert.Throws<ArgumentException>(() => CloudflareDefaults.R2.S3Endpoint(accountId!));
+    }
+}
+
+public class D1TransferTests
+{
+    private const string ExportPath = "/client/v4/accounts/acct-1234/d1/database/db-1/export";
+    private const string ImportPath = "/client/v4/accounts/acct-1234/d1/database/db-1/import";
+
+    [Fact]
+    public async Task ExportAsync_starts_a_polled_export()
+    {
+        using var harness = CloudflareHarness.Create();
+        harness.RespondWithResult(
+            """{"status":"active","at_bookmark":"bm-1","type":"export","success":true,"messages":["preparing dump"]}""");
+
+        var result = await harness.Client.D1.ExportAsync("db-1");
+
+        Assert.Equal(HttpMethod.Post, harness.LastRequest.Method);
+        Assert.Equal(ExportPath, harness.LastRequest.Path);
+        Assert.Equal("{\"output_format\":\"polling\"}", harness.LastRequest.Body);
+
+        Assert.Equal("export", result.Type);
+        Assert.Equal("bm-1", result.AtBookmark);
+        Assert.Equal(new[] { "preparing dump" }, result.Messages);
+        Assert.True(result.IsRunning);
+        Assert.False(result.IsComplete);
+        Assert.False(result.IsFailed);
+        Assert.Null(result.SignedUrl);
+    }
+
+    [Fact]
+    public async Task ExportAsync_sends_the_bookmark_and_the_dump_options_when_continuing()
+    {
+        using var harness = CloudflareHarness.Create();
+        harness.RespondWithResult("""{"status":"active","at_bookmark":"bm-1"}""");
+
+        await harness.Client.D1.ExportAsync("db-1", D1ExportRequest.Continue(
+            "bm-1",
+            new D1DumpOptions { NoData = true, Tables = new List<string> { "items" } }));
+
+        Assert.Equal(
+            "{\"output_format\":\"polling\",\"current_bookmark\":\"bm-1\",\"dump_options\":{\"no_data\":true,\"tables\":[\"items\"]}}",
+            harness.LastRequest.Body);
+    }
+
+    [Fact]
+    public async Task ExportAsync_rejects_an_output_format_cloudflare_does_not_define()
+    {
+        using var harness = CloudflareHarness.Create();
+
+        await Assert.ThrowsAsync<CloudflareConfigurationException>(
+            () => harness.Client.D1.ExportAsync("db-1", new D1ExportRequest { OutputFormat = "streaming" }));
+
+        Assert.Equal(0, harness.RequestCount);
+    }
+
+    [Fact]
+    public async Task ExportAndWaitAsync_polls_until_the_dump_is_ready()
+    {
+        using var harness = CloudflareHarness.Create();
+        harness
+            .RespondWithResult("""{"status":"active","at_bookmark":"bm-1"}""")
+            .RespondWithResult("""{"status":"active","at_bookmark":"bm-1","messages":["still working"]}""")
+            .RespondWithResult(
+                """{"status":"complete","at_bookmark":"bm-1","success":true,"result":{"filename":"db-1.sql","signed_url":"https://r2.example/db-1.sql?sig=1"}}""");
+
+        var result = await harness.Client.D1.ExportAndWaitAsync("db-1", pollInterval: TimeSpan.Zero);
+
+        Assert.Equal(3, harness.RequestCount);
+        Assert.Equal("{\"output_format\":\"polling\"}", harness.Requests[0].Body);
+        Assert.Equal("{\"output_format\":\"polling\",\"current_bookmark\":\"bm-1\"}", harness.Requests[1].Body);
+        Assert.Equal("{\"output_format\":\"polling\",\"current_bookmark\":\"bm-1\"}", harness.Requests[2].Body);
+
+        Assert.True(result.IsComplete);
+        Assert.Equal("db-1.sql", result.Result?.Filename);
+        Assert.Equal("https://r2.example/db-1.sql?sig=1", result.SignedUrl);
+        Assert.Equal("complete db-1.sql", result.ToString());
+    }
+
+    [Fact]
+    public async Task ExportAndWaitAsync_stops_when_there_is_no_bookmark_to_continue_with()
+    {
+        using var harness = CloudflareHarness.Create();
+        harness.RespondWithResult("""{"status":"active"}""");
+
+        var result = await harness.Client.D1.ExportAndWaitAsync("db-1", pollInterval: TimeSpan.Zero);
+
+        // Polling again without a bookmark would start a second export, so the caller gets this back.
+        Assert.Equal(1, harness.RequestCount);
+        Assert.True(result.IsRunning);
+        Assert.Null(result.AtBookmark);
+    }
+
+    [Fact]
+    public async Task ExportAndWaitAsync_returns_a_failed_export_rather_than_throwing()
+    {
+        using var harness = CloudflareHarness.Create();
+        harness
+            .RespondWithResult("""{"status":"active","at_bookmark":"bm-1"}""")
+            .RespondWithResult("""{"status":"error","at_bookmark":"bm-1","error":"the dump was cancelled"}""");
+
+        var result = await harness.Client.D1.ExportAndWaitAsync("db-1", pollInterval: TimeSpan.Zero);
+
+        Assert.Equal(2, harness.RequestCount);
+        Assert.True(result.IsFailed);
+        Assert.False(result.IsComplete);
+        Assert.Equal("the dump was cancelled", result.Error);
+    }
+
+    [Fact]
+    public async Task A_negative_poll_interval_is_rejected_before_anything_is_sent()
+    {
+        using var harness = CloudflareHarness.Create();
+
+        await Assert.ThrowsAsync<CloudflareConfigurationException>(
+            () => harness.Client.D1.ExportAndWaitAsync("db-1", pollInterval: TimeSpan.FromSeconds(-1)));
+        await Assert.ThrowsAsync<CloudflareConfigurationException>(
+            () => harness.Client.D1.WaitForImportAsync("db-1", "bm-1", TimeSpan.FromMilliseconds(-1)));
+
+        Assert.Equal(0, harness.RequestCount);
+    }
+
+    [Fact]
+    public async Task ExportAndWaitAsync_honours_a_cancelled_token()
+    {
+        using var harness = CloudflareHarness.Create();
+        harness.RespondWithResult("""{"status":"active","at_bookmark":"bm-1"}""");
+
+        using var cancelled = new CancellationTokenSource();
+        await cancelled.CancelAsync();
+
+        // Whether HttpClient throws before or after the handler sees the request is its own business;
+        // what matters is that the cancellation surfaces instead of the poll loop swallowing it.
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(
+            () => harness.Client.D1.ExportAndWaitAsync("db-1", pollInterval: TimeSpan.FromSeconds(30), cancellationToken: cancelled.Token));
+    }
+
+    [Fact]
+    public async Task InitialiseImportAsync_asks_for_an_upload_url()
+    {
+        using var harness = CloudflareHarness.Create();
+        harness.RespondWithResult(
+            """{"filename":"db-1-77f6f7b5.sql","upload_url":"https://r2.example/upload?sig=1","type":"import","success":true}""");
+
+        var result = await harness.Client.D1.InitialiseImportAsync("db-1", "77f6f7b5c64abe86b98e35c2014a170a");
+
+        Assert.Equal(ImportPath, harness.LastRequest.Path);
+        Assert.Equal(
+            "{\"action\":\"init\",\"etag\":\"77f6f7b5c64abe86b98e35c2014a170a\"}",
+            harness.LastRequest.Body);
+        Assert.Equal("db-1-77f6f7b5.sql", result.Filename);
+        Assert.Equal("https://r2.example/upload?sig=1", result.UploadUrl);
+        Assert.Equal("import", result.Type);
+    }
+
+    [Fact]
+    public async Task IngestImportAsync_names_the_file_that_was_uploaded()
+    {
+        using var harness = CloudflareHarness.Create();
+        harness.RespondWithResult("""{"status":"active","at_bookmark":"bm-9"}""");
+
+        var result = await harness.Client.D1.IngestImportAsync("db-1", "etag-1", "db-1-77f6f7b5.sql");
+
+        Assert.Equal(
+            "{\"action\":\"ingest\",\"etag\":\"etag-1\",\"filename\":\"db-1-77f6f7b5.sql\"}",
+            harness.LastRequest.Body);
+        Assert.Equal("bm-9", result.AtBookmark);
+    }
+
+    [Fact]
+    public async Task PollImportAsync_sends_the_bookmark()
+    {
+        using var harness = CloudflareHarness.Create();
+        harness.RespondWithResult("""{"status":"active","at_bookmark":"bm-9"}""");
+
+        await harness.Client.D1.PollImportAsync("db-1", "bm-9");
+
+        Assert.Equal("{\"action\":\"poll\",\"current_bookmark\":\"bm-9\"}", harness.LastRequest.Body);
+    }
+
+    [Fact]
+    public async Task WaitForImportAsync_polls_until_the_import_finishes()
+    {
+        using var harness = CloudflareHarness.Create();
+        harness
+            .RespondWithResult("""{"status":"active","at_bookmark":"bm-9","messages":["ingesting"]}""")
+            .RespondWithResult(
+                """{"status":"complete","success":true,"at_bookmark":"bm-9","result":{"final_bookmark":"bm-10","num_queries":42,"meta":{"served_by":"ENAM","duration":1234.5,"size_after":20480}}}""");
+
+        var result = await harness.Client.D1.WaitForImportAsync("db-1", "bm-9", TimeSpan.Zero);
+
+        Assert.Equal(2, harness.RequestCount);
+        Assert.Equal("{\"action\":\"poll\",\"current_bookmark\":\"bm-9\"}", harness.Requests[0].Body);
+        Assert.Equal("{\"action\":\"poll\",\"current_bookmark\":\"bm-9\"}", harness.Requests[1].Body);
+
+        Assert.True(result.IsComplete);
+        Assert.Equal("bm-10", result.Result?.FinalBookmark);
+        Assert.Equal(42, result.Result!.NumQueries!.Value);
+        Assert.Equal("ENAM", result.Result.Meta?.ServedBy);
+        Assert.Equal(1234.5, result.Result.Meta!.Duration!.Value);
+        // Fields this library does not model are kept rather than dropped.
+        Assert.Equal(20480, result.Result.Meta.AdditionalData!["size_after"].GetInt32());
+    }
+
+    [Fact]
+    public async Task Each_import_action_is_validated_locally()
+    {
+        using var harness = CloudflareHarness.Create();
+
+        await Assert.ThrowsAsync<CloudflareConfigurationException>(
+            () => harness.Client.D1.ImportAsync("db-1", D1ImportRequest.Init("  ")));
+        await Assert.ThrowsAsync<CloudflareConfigurationException>(
+            () => harness.Client.D1.ImportAsync("db-1", D1ImportRequest.Ingest("etag-1", "")));
+        await Assert.ThrowsAsync<CloudflareConfigurationException>(
+            () => harness.Client.D1.ImportAsync("db-1", D1ImportRequest.Poll("")));
+        await Assert.ThrowsAsync<CloudflareConfigurationException>(
+            () => harness.Client.D1.ImportAsync("db-1", new D1ImportRequest { Action = "upload" }));
+        await Assert.ThrowsAsync<ArgumentNullException>(
+            () => harness.Client.D1.ImportAsync("db-1", null!));
+
+        Assert.Equal(0, harness.RequestCount);
+    }
+
+    [Fact]
+    public async Task An_import_call_without_a_result_payload_raises()
+    {
+        using var harness = CloudflareHarness.Create();
+        harness.RespondWithResult("null");
+
+        var exception = await Assert.ThrowsAsync<CloudflareApiException>(
+            () => harness.Client.D1.PollImportAsync("db-1", "bm-9"));
+
+        Assert.Contains("without a result payload", exception.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void ComputeEtag_hashes_the_dump_the_way_cloudflare_checks_it()
+    {
+        const string sql = "CREATE TABLE items (id INTEGER PRIMARY KEY, label TEXT);";
+
+        var etag = D1ImportRequest.ComputeEtag(sql);
+
+        Assert.Equal("77f6f7b5c64abe86b98e35c2014a170a", etag);
+        Assert.Equal(32, etag.Length);
+        Assert.Equal(etag, etag.ToLowerInvariant());
+        Assert.Equal(etag, D1ImportRequest.ComputeEtag(Encoding.UTF8.GetBytes(sql)));
+        Assert.Equal("d41d8cd98f00b204e9800998ecf8427e", D1ImportRequest.ComputeEtag(string.Empty));
+    }
+
+    [Fact]
+    public void ComputeEtag_needs_something_to_hash()
+    {
+        Assert.Throws<ArgumentNullException>(() => D1ImportRequest.ComputeEtag((byte[])null!));
+        Assert.Throws<ArgumentNullException>(() => D1ImportRequest.ComputeEtag((string)null!));
+    }
+
+    [Fact]
+    public void The_transfer_constants_spell_what_cloudflare_expects()
+    {
+        Assert.Equal("polling", D1TransferOutputFormats.Polling);
+        Assert.Equal(new[] { "init", "ingest", "poll" }, new[]
+        {
+            D1ImportActions.Init, D1ImportActions.Ingest, D1ImportActions.Poll,
+        });
+        Assert.Equal("active", D1TransferStatuses.Active);
+        Assert.Equal("complete", D1TransferStatuses.Complete);
+        Assert.Equal("error", D1TransferStatuses.Error);
     }
 }

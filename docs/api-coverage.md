@@ -224,6 +224,13 @@ Functions routes, and the `pages/projects/{name}/bookmarks` family.
 | `SetReadReplicationAsync(databaseId, mode, accountId)` | `PATCH …/d1/database/{database_id}` | `mode` ∈ `auto`, `disabled`; turning it off can take hours to remove every replica |
 | `UpdateAsync(databaseId, UpdateD1DatabaseRequest, accountId)` | `PUT …/d1/database/{database_id}` | the PUT takes the same body as the PATCH — `read_replication` and nothing else, so **renaming a database is not available** |
 | `UndeleteAsync(databaseId, accountId)` | `POST …/d1/database/{database_id}/undelete` | works only while D1 still holds the deleted database |
+| `ExportAsync(databaseId, D1ExportRequest?, accountId)` | `POST …/d1/database/{database_id}/export` | body `{output_format:"polling", current_bookmark?, dump_options?{no_data?, no_schema?, tables?[]}}`; `output_format` is required and `polling` is the only value defined |
+| `ExportAndWaitAsync(databaseId, D1DumpOptions?, pollInterval, accountId)` | `POST …/export` | starts the export and keeps polling with the returned `at_bookmark` until the status is `complete` or `error` |
+| `ImportAsync(databaseId, D1ImportRequest, accountId)` | `POST …/d1/database/{database_id}/import` | one endpoint, three actions: `init`, `ingest`, `poll` |
+| `InitialiseImportAsync(databaseId, etag, accountId)` | `POST …/import` | `{"action":"init","etag":…}` → `filename` + the presigned `upload_url` |
+| `IngestImportAsync(databaseId, etag, filename, accountId)` | `POST …/import` | `{"action":"ingest","etag":…,"filename":…}`; imports block the database while they run |
+| `PollImportAsync(databaseId, currentBookmark, accountId)` | `POST …/import` | `{"action":"poll","current_bookmark":…}`, one poll |
+| `WaitForImportAsync(databaseId, currentBookmark, pollInterval, accountId)` | `POST …/import` | polls until `complete` or `error` |
 
 `D1QueryResult` exposes `Results` (raw `JsonElement` rows), `Success`, `Meta` and the ergonomics
 `Rows<T>()`, `FirstColumn<T>(name)` and `RowCount`. `D1QueryMeta` carries `changes`, `duration`,
@@ -236,12 +243,39 @@ object, so `Rows<T>()` and `FirstColumn<T>(name)` work and `RowArrays()` is empt
 as a JSON array in the column order of the statement you sent, so `RowArrays()` works and the named helpers
 find nothing.
 
-Still unwrapped, deliberately: `POST …/d1/database/{database_id}/export` — body
-`{output_format:"polling", current_bookmark?, dump_options?{no_data?, no_schema?, tables?[]}}`, result
-`{at_bookmark, error, messages, …}` — and its `…/import` counterpart. An export has to be polled until it
-finishes (and keeps being polled, or Cloudflare cancels it) and the dump is then downloaded from the URL it
-returns, so they need a polling helper rather than a one-shot method; the shapes above are what the published
-schema documents today.
+**Export and import are polled operations, and the polling is part of the contract.** Cloudflare cancels an
+export that stops being polled, and the database cannot serve queries while a large one runs, so
+`ExportAndWaitAsync` and `WaitForImportAsync` do the waiting (two seconds between polls by default, never
+negative, cancellable) while `ExportAsync` / `ImportAsync` leave each step in your hands. Both stop early and
+hand back what Cloudflare said if a response carries no `at_bookmark` to continue with, since polling again
+without one would start a second operation instead of following the first.
+
+A finished export reports `status: "complete"` with `result: { filename, signed_url }`; a failed one reports
+`status: "error"` with an `error` message. Both arrive as HTTP 200, so neither throws - check
+`IsComplete` / `IsFailed` on `D1ExportResult` and `D1ImportResult`. Downloading the dump from `signed_url`
+is an ordinary HTTP GET that needs no Cloudflare authentication.
+
+An import is three calls around one upload: `init` (with the MD5 etag of the file, which
+`D1ImportRequest.ComputeEtag` produces) returns a presigned R2 `upload_url` and a `filename`; you PUT the SQL
+to that URL yourself; `ingest` starts the import; `poll` follows it to `result: { final_bookmark, num_queries,
+meta }`. The upload is deliberately **not** in this library - it is not a Cloudflare API call, it needs no
+token, and sending one alongside a presigned signature risks the request being rejected:
+
+```csharp
+var sql = await File.ReadAllTextAsync("dump.sql");
+var etag = D1ImportRequest.ComputeEtag(sql);          // MD5, which is what Cloudflare asks for
+
+var init = await client.D1.InitialiseImportAsync(databaseId, etag);
+await using var uploader = new HttpClient();           // no Cloudflare token on this one
+await uploader.PutAsync(init.UploadUrl!, new StringContent(sql));
+
+var ingest = await client.D1.IngestImportAsync(databaseId, etag, init.Filename!);
+var done = await client.D1.WaitForImportAsync(databaseId, ingest.AtBookmark!);
+if (done.IsFailed) throw new InvalidOperationException(done.Error);
+```
+
+Still unwrapped: D1 time travel as a query option, and the `meta` fields of an import beyond `served_by` and
+`duration` are kept in `AdditionalData` rather than guessed at.
 
 ## KV
 

@@ -201,9 +201,8 @@ has not heard of, in either direction. (Cloudflare's own description of the resp
 identifier of the caching setting", which is a copy-paste mistake in the published schema: nothing here
 caches.)
 
-⛔ `origin_tls_client_auth` - mutual TLS towards the origin, across its `hostnames`, `hostname_certificates`
-and `settings` subresources - is still unwrapped. SSL for SaaS custom hostnames are a separate resource too,
-and have their own section below.
+The origin-side mutual TLS resource, `origin_tls_client_auth`, is a sibling of `ssl` rather than part of it
+and has its own section below, as do the SSL for SaaS custom hostnames.
 
 ## SSL for SaaS (custom hostnames)
 
@@ -265,9 +264,65 @@ its way to `active` and broken at the same time. `HasErrors` says which, and `st
 `deletion_timed_out`). Permissions are the same `SSL and Certificates Read`/`Write` as the hostnames
 themselves.
 
-Every endpoint in this resource family is wrapped now. The one origin-side TLS resource still outstanding,
-`origin_tls_client_auth`, is noted with the SSL settings above rather than here: it is mutual TLS towards the
-origin, not part of SSL for SaaS.
+Every endpoint in this resource family is wrapped now. The origin-side TLS resource
+`origin_tls_client_auth` has its own section below: it is mutual TLS towards the origin, not part of SSL for
+SaaS.
+
+## Origin TLS client auth (mutual TLS to the origin)
+
+`IOriginTlsClientAuthService` — `client.OriginTlsClientAuth`. The client certificate Cloudflare presents when
+it connects to a zone's origin: `/zones/{zone_id}/origin_tls_client_auth`. A sibling of `ssl`, not part of it.
+
+| Method | Endpoint | Notes |
+| --- | --- | --- |
+| `GetSettingsAsync(zoneId)` | `GET …/origin_tls_client_auth/settings` | one boolean, `{enabled}` - no `id`, no `editable`, no `modified_on`, unlike the zone settings under `/zones/{zone_id}/settings` |
+| `SetSettingsAsync(enabled, zoneId)` | `PUT …/origin_tls_client_auth/settings` | body `{"enabled":true\|false}`; the schema marks the flag required, so `false` is always sent explicitly |
+| `GetHostnameAsync(hostname, zoneId)` | `GET …/origin_tls_client_auth/hostnames/{hostname}` | the association with **two** statuses: `status` for the association, `cert_status` for the certificate. `null` on 404 |
+| `SetHostnamesAsync(UpdateOriginTlsHostnameAssociationsRequest, zoneId)` | `PUT …/origin_tls_client_auth/hostnames` | body `{"config":[{cert_id, enabled, hostname}, …]}` - the hostname travels in the **body**, and the response is a plain **array**, not a page |
+| `EnableHostnameAsync` / `DisableHostnameAsync` / `VoidHostnameAsync(hostname, certificateId, zoneId)` | `PUT …/origin_tls_client_auth/hostnames` | the same call with one entry already built, one per state of `enabled` |
+| `ListCertificatesAsync(zoneId)` | `GET …/origin_tls_client_auth/hostnames/certificates` | no filters and no paging: the whole collection. Ten per zone |
+| `GetCertificateAsync(certificateId, zoneId)` | `GET …/hostnames/certificates/{certificate_id}` | `null` on 404 |
+| `UploadCertificateAsync(UploadOriginTlsCertificateRequest, zoneId)` | `POST …/hostnames/certificates` | body `{certificate, private_key}`, both required |
+| `UploadCertificateAsync(certificate, privateKey, zoneId)` | `POST …/hostnames/certificates` | the same call for the common case |
+| `DeleteCertificateAsync(certificateId, zoneId)` | `DELETE …/hostnames/certificates/{certificate_id}` | **needs every association voided first** |
+| `ListZoneCertificatesAsync(zoneId)` | `GET …/origin_tls_client_auth` | **deprecated**; returns the private key |
+| `GetZoneCertificateAsync(certificateId, zoneId)` | `GET …/origin_tls_client_auth/{certificate_id}` | **deprecated**; `null` on 404 |
+| `UploadZoneCertificateAsync(UploadOriginTlsCertificateRequest, zoneId)` | `POST …/origin_tls_client_auth` | **deprecated**; the same two-field body |
+| `DeleteZoneCertificateAsync(certificateId, zoneId)` | `DELETE …/origin_tls_client_auth/{certificate_id}` | **deprecated** |
+
+Permissions are `SSL and Certificates Read` to read and `SSL and Certificates Write` for everything else; the
+certificate list accepts either.
+
+**`enabled` has three states, and the third one is `null`.** `true` associates a hostname with a certificate
+and turns it on. `false` keeps the association but stops the certificate being sent for that hostname - even
+with the zone-level switch on - and it still counts towards the 100 hostnames one certificate may carry.
+`null` **voids** the association, and Cloudflare requires exactly that before a certificate can be deleted, so
+removing one is two calls: `VoidHostnameAsync`, then `DeleteCertificateAsync`. Because the shared JSON options
+drop nulls, `OriginTlsHostnameAssociationChange.Enabled` is written out explicitly - otherwise the state that
+matters most would be impossible to send.
+
+**Three switches have to agree.** The zone-level setting, an enabled hostname association, and a certificate
+that reached `active`. The zone switch on its own does nothing, and Cloudflare notes it may be set before or
+after the upload, so the order of those two calls does not matter - but both are needed.
+
+**The deprecated endpoints hand back the private key.** All four top-level methods - list, get, upload and
+delete - return `private_key` in plaintext in the response body. `ZoneAuthenticatedOriginPull` models it
+because it arrives, and its `ToString()` reports the key's length and never the key, following
+`PagesUploadToken`; anything logging a response from these endpoints should be treated as holding a secret.
+They are wrapped so an existing zone-level deployment can still be read and dismantled. Cloudflare superseded
+them with the per-hostname resources, and a zone-level certificate overrides the shared one Cloudflare would
+otherwise present, so an origin that does not trust it stops accepting connections from the edge - which is
+why Cloudflare warns to keep exactly one active.
+
+**Two neighbouring resources, two different status enums.** This one has seven values and includes `deleted`;
+the custom hostname fallback origin's has six and does not. They are modelled separately
+(`OriginTlsClientAuthStatuses`, `CustomHostnameFallbackOriginStatuses`) rather than sharing one list that
+would be wrong for one of them.
+
+**A path collision worth knowing.** `…/hostnames/{hostname}` and `…/hostnames/certificates` are siblings, so a
+hostname literally called `certificates` would be indistinguishable from the certificate collection.
+
+
 
 ## Users and accounts
 

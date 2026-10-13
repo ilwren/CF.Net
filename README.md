@@ -85,7 +85,7 @@ Console.WriteLine($"{zones.Count} of {zones.TotalCount} zones");
 
 `CloudflareClient.CreateFromEnvironment()` does the same thing from environment variables, and `CloudflareClientFactory` is available when you need several clients over one set of defaults.
 
-### The eleven services
+### The twelve services
 
 | Property | Interface | Covers |
 | --- | --- | --- |
@@ -95,6 +95,7 @@ Console.WriteLine($"{zones.Count} of {zones.TotalCount} zones");
 | `client.DnsRecords` | `IDnsRecordsService` | DNS records, including typed SRV/LOC/MX data, zone file export and import |
 | `client.Ssl` | `ISslService` | certificate packs, Universal SSL, validation details, the enrolment settings Cloudflare files under SSL, the origin TLS compliance modes that bound them, certificate analysis |
 | `client.CustomHostnames` | `ICustomHostnamesService` | SSL for SaaS: custom hostnames, their certificates, the challenges that validate them and the zone-wide fallback origin |
+| `client.OriginTlsClientAuth` | `IOriginTlsClientAuthService` | mutual TLS towards the origin: the zone switch, per-hostname certificate associations, uploaded client certificates, and the deprecated zone-level ones |
 | `client.Workers` | `IWorkersScriptsService` | scripts, module content, script settings, deployments, `workers.dev` subdomain |
 | `client.Pages` | `IPagesProjectsService` | projects, deployments, custom domains |
 | `client.D1` | `ID1DatabaseService` | databases, SQL queries, batches, backups |
@@ -148,7 +149,7 @@ builder.Services.AddCloudflare(options =>
 | `AddCloudflareHttpClient(configure?, httpClientName?, configureClient?)` | route through `IHttpClientFactory` |
 | `AddCloudflareClientFactory(configure?)` | several clients over shared defaults |
 
-Any of these registers `ICloudflareClient`, `CloudflareClient`, `ICloudflareTransport`, `ICloudflareClientFactory` and all eleven service interfaces, so you can inject exactly the surface you need:
+Any of these registers `ICloudflareClient`, `CloudflareClient`, `ICloudflareTransport`, `ICloudflareClientFactory` and all twelve service interfaces, so you can inject exactly the surface you need:
 
 ```csharp
 public sealed class DnsProvisioner(IDnsRecordsService dns, IZonesService zones)
@@ -305,13 +306,14 @@ so a missing recording fails loudly with `CassetteMissException` instead of quie
 dotnet run --project samples/CF.Net.Gallery
 ```
 
-- **Left-hand navigation**, one page per module: Domains, Workers, Pages, D1, KV, R2, SSL — plus a Credentials page. The Domains page is tabbed, because zones, DNS records and zone settings are three different conversations.
+- **Left-hand navigation**, one page per module: Domains, Workers, Pages, D1, KV, R2, SSL, Origin TLS — plus a Credentials page. The Domains page is tabbed, because zones, DNS records and zone settings are three different conversations.
 - **Every public service method is reachable from a button**, with two deliberate exceptions: `IUserService.VerifyTokenAsync` and `VerifyAccountTokenAsync`, which the Credentials page's connection check already drives — it tries the user-owned endpoint, then the account-owned one, and reports which answered.
 - **Credentials page** takes an API token or the legacy global key + email, the default account and zone ids, base address, timeout, retries and `ThrowOnApiError`. Values are pre-filled from the `CLOUDFLARE_*` environment variables and can optionally be saved to `%APPDATA%/CF.Net.Gallery/credentials.json` (plain text — opt-in, and off by default).
 - **Every page** lists the real operations with the real endpoint in its heading, and each button runs the corresponding library call.
 - **The inspector at the bottom** shows, live: the outgoing request (method, path, query, per-request headers, JSON or multipart body), the response (status, timing, `CF-RAY`, headers, pretty-printed body, `errors`, `messages`), the **typed result** re-serialized so you can see what the models captured, and a session history.
 - The gallery never renders `Authorization`, `X-Auth-Key` or `X-Auth-Email`, so a screenshot or a screen share cannot leak a credential. One credential does travel in a response *body* — the Pages Direct Upload JWT — so that page says as much next to the button, and the model's `ToString()` reports the token's length rather than the token.
 - The SSL page keeps the four different "try again" calls visible side by side, because guessing which one you need means waiting on a certificate for no reason, and labels the Universal SSL switch with what turning it off actually breaks.
+- The Origin TLS page separates the three switches that have to agree before an origin sees a client certificate — the zone setting, the hostname association, the certificate's own status — gives `enable`, `disable` and `void` their own buttons because `void` sends `enabled: null` and is not the same as `disable`, and says out loud that the deprecated zone-level endpoints return the private key in the response body.
 
 It works by decorating the transport — `RecordingTransport : ICloudflareTransport` — which is also the clearest demonstration of the extension point the library is built around.
 

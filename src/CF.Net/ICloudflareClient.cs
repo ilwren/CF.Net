@@ -54,6 +54,9 @@ public interface ICloudflareClient : IDisposable
     /// <summary>SSL for SaaS: custom hostnames that CNAME into a zone.</summary>
     ICustomHostnamesService CustomHostnames { get; }
 
+    /// <summary>Mutual TLS towards the origin: client certificates and the hostnames that present them.</summary>
+    IOriginTlsClientAuthService OriginTlsClientAuth { get; }
+
     /// <summary>Workers scripts, deployments and the <c>workers.dev</c> subdomain.</summary>
     IWorkersScriptsService Workers { get; }
 

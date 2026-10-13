@@ -53,6 +53,7 @@ public sealed class CloudflareClient : ICloudflareClient, IDisposable
         DnsRecords = new DnsRecordsService(transport);
         Ssl = new SslService(transport);
         CustomHostnames = new CustomHostnamesService(transport);
+        OriginTlsClientAuth = new OriginTlsClientAuthService(transport);
         Workers = new WorkersScriptsService(transport);
         Pages = new PagesProjectsService(transport);
         D1 = new D1DatabaseService(transport);
@@ -83,6 +84,9 @@ public sealed class CloudflareClient : ICloudflareClient, IDisposable
 
     /// <inheritdoc />
     public ICustomHostnamesService CustomHostnames { get; }
+
+    /// <inheritdoc />
+    public IOriginTlsClientAuthService OriginTlsClientAuth { get; }
 
     /// <inheritdoc />
     public IWorkersScriptsService Workers { get; }

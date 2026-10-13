@@ -43,6 +43,7 @@ public sealed class GalleryViewModel : ObservableObject, IDisposable
             new KvViewModel(this),
             new R2ViewModel(this),
             new SslViewModel(this),
+            new OriginTlsViewModel(this),
             Settings,
         };
 

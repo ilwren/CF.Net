@@ -35,6 +35,9 @@
     <DataTemplate DataType="vm:SslViewModel">
       <views:SslView />
     </DataTemplate>
+    <DataTemplate DataType="vm:OriginTlsViewModel">
+      <views:OriginTlsView />
+    </DataTemplate>
     <DataTemplate DataType="vm:SettingsViewModel">
       <views:SettingsView />
     </DataTemplate>
@@ -48,7 +51,7 @@
 
         <StackPanel Grid.Column="0" Orientation="Vertical" Spacing="2">
           <TextBlock Classes="h1" Text="CF.Net Gallery" />
-          <TextBlock Classes="hint" Text="Cloudflare API v4 - Domains, Workers, Pages, D1, KV, R2" />
+          <TextBlock Classes="hint" Text="Cloudflare API v4 - zones, workers, pages, data, SSL, origin TLS and storage" />
         </StackPanel>
 
         <StackPanel Grid.Column="1" Orientation="Vertical" Spacing="2" Margin="24,0" VerticalAlignment="Center">

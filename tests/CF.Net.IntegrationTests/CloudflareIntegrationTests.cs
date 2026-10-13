@@ -7,6 +7,7 @@ using CFNet.Models.Dns;
 using CFNet.Models.Kv;
 using CFNet.Models.Pages;
 using CFNet.Models.R2;
+using CFNet.Models.Ssl;
 using CFNet.Models.Workers;
 using CFNet.Models.Zones;
 using CFNet.Services;
@@ -411,12 +412,15 @@ public class ReadOnlyIntegrationTests : CloudflareIntegrationTest
             return;
         }
 
-        // This is the smoke test for the facade: a single client, eleven services, all wired to the
+        // This is the smoke test for the facade: a single client, twelve services, all wired to the
         // same transport and options instance.
         Assert.NotNull(Client.User);
         Assert.NotNull(Client.Accounts);
         Assert.NotNull(Client.Zones);
         Assert.NotNull(Client.DnsRecords);
+        Assert.NotNull(Client.Ssl);
+        Assert.NotNull(Client.CustomHostnames);
+        Assert.NotNull(Client.OriginTlsClientAuth);
         Assert.NotNull(Client.Workers);
         Assert.NotNull(Client.Pages);
         Assert.NotNull(Client.D1);
@@ -965,6 +969,132 @@ public class WriteIntegrationTests : CloudflareIntegrationTest
             // Put the zone back the way it was, whether or not the assertions above held.
             var restored = await Client.Zones.SetSettingOnOffAsync(ZoneSettingIds.AlwaysOnline, before.IsOn);
             Log($"{ZoneSettingIds.AlwaysOnline} restored={restored?.Value?.GetRawText()}");
+        }
+    }
+
+    [Fact]
+    public async Task Ssl_certificate_packs_and_the_enrolment_settings_can_be_read()
+    {
+        if (!SkipWithoutZone())
+        {
+            return;
+        }
+
+        try
+        {
+            var packs = await RunZoneScopedAsync(
+                () => Client.Ssl.ListAsync(new SslCertificatePackListParameters { PerPage = 20 }));
+            if (packs is null)
+            {
+                return;
+            }
+
+            Log($"certificate packs: {packs.Count} of {packs.TotalCount}");
+            foreach (var pack in packs.Items)
+            {
+                Log($"  {pack.Id} type={pack.Type} status={pack.Status} authority={pack.CertificateAuthority} hosts={pack.Hosts?.Count ?? 0}");
+                Assert.False(string.IsNullOrWhiteSpace(pack.Id));
+            }
+
+            // The settings Cloudflare files under SSL but serves from the zone settings path, plus the
+            // compliance modes that bound what Auto-Origin TLS KEX may choose. Every one of these is a read.
+            var universal = await Client.Ssl.GetUniversalSettingsAsync();
+            Log($"universal ssl enabled={universal.Enabled?.ToString() ?? "unknown"}");
+
+            var kex = await Client.Ssl.GetAutoOriginTlsKexAsync();
+            Log($"auto_origin_tls_kex enabled={kex.Enabled?.ToString() ?? "unknown"}");
+
+            var automatic = await Client.Ssl.GetAutomaticSslAsync();
+            Log($"ssl_automatic_mode value={automatic.Value} next_scan={automatic.NextScheduledScan?.ToString("O") ?? "(none)"}");
+
+            var modes = await Client.Ssl.GetOriginTlsComplianceModesAsync();
+            Log($"origin_tls_compliance_modes={modes?.ToString() ?? "(no result)"}");
+            if (modes is not null)
+            {
+                Assert.Equal("origin_tls_compliance_modes", modes.Id);
+            }
+        }
+        catch (CloudflareApiException exception) when (exception.StatusCode == System.Net.HttpStatusCode.Forbidden)
+        {
+            // A token without the permission is account state, not a defect: say what is missing and skip.
+            SkipUnless(false, $"The token cannot read SSL for this zone (HTTP 403, Cloudflare error {exception.ErrorCode}). It needs 'SSL and Certificates Read'.");
+        }
+    }
+
+    [Fact]
+    public async Task Custom_hostnames_can_be_listed_and_the_fallback_origin_read()
+    {
+        if (!SkipWithoutZone())
+        {
+            return;
+        }
+
+        try
+        {
+            var hostnames = await RunZoneScopedAsync(
+                () => Client.CustomHostnames.ListAsync(new CustomHostnameListParameters { PerPage = 20 }));
+            if (hostnames is null)
+            {
+                return;
+            }
+
+            Log($"custom hostnames: {hostnames.Count} of {hostnames.TotalCount}");
+            foreach (var hostname in hostnames.Items)
+            {
+                Log($"  {hostname.Hostname} status={hostname.Status} ssl={hostname.Ssl?.Status ?? "(none)"}");
+                Assert.False(string.IsNullOrWhiteSpace(hostname.Id));
+            }
+
+            // A zone with no fallback origin answers 404, which the library turns into null. That is a
+            // legitimate answer rather than a refusal, so it is read directly instead of zone-scoped.
+            var fallback = await Client.CustomHostnames.GetFallbackOriginAsync();
+            Log($"fallback origin: {fallback?.ToString() ?? "(none set)"}");
+        }
+        catch (CloudflareApiException exception) when (exception.StatusCode == System.Net.HttpStatusCode.Forbidden)
+        {
+            SkipUnless(false, $"The token cannot read SSL for SaaS on this zone (HTTP 403, Cloudflare error {exception.ErrorCode}). It needs 'SSL and Certificates Read'.");
+        }
+    }
+
+    [Fact]
+    public async Task Origin_tls_client_auth_settings_and_certificates_can_be_read()
+    {
+        if (!SkipWithoutZone())
+        {
+            return;
+        }
+
+        try
+        {
+            var setting = await RunZoneScopedAsync(() => Client.OriginTlsClientAuth.GetSettingsAsync());
+            if (setting is null)
+            {
+                return;
+            }
+
+            Log($"zone-level authenticated origin pulls enabled={setting.Enabled?.ToString() ?? "unknown"}");
+
+            var certificates = await Client.OriginTlsClientAuth.ListCertificatesAsync();
+            Log($"hostname client certificates: {certificates.Count}");
+            foreach (var certificate in certificates)
+            {
+                Log($"  {certificate} issuer={certificate.Issuer}");
+                Assert.False(string.IsNullOrWhiteSpace(certificate.Id));
+            }
+
+            // Deprecated, and the one read here that returns private key material. Only the summary is
+            // logged - it reports the key's length and never the key - and that is asserted.
+            var zoneCertificates = await Client.OriginTlsClientAuth.ListZoneCertificatesAsync();
+            Log($"zone-level certificates (deprecated): {zoneCertificates.Count}");
+            foreach (var zoneCertificate in zoneCertificates)
+            {
+                Log($"  {zoneCertificate}");
+                Assert.DoesNotContain("BEGIN", zoneCertificate.ToString());
+            }
+        }
+        catch (CloudflareApiException exception) when (exception.StatusCode == System.Net.HttpStatusCode.Forbidden)
+        {
+            SkipUnless(false, $"The token cannot read origin TLS client auth on this zone (HTTP 403, Cloudflare error {exception.ErrorCode}). It needs 'SSL and Certificates Read'.");
         }
     }
 }

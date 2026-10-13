@@ -1,0 +1,117 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:vm="using:CFNet.Gallery.ViewModels"
+             x:Class="CFNet.Gallery.Views.OriginTlsView"
+             x:DataType="vm:OriginTlsViewModel">
+
+  <DockPanel>
+
+    <StackPanel DockPanel.Dock="Top" Orientation="Vertical" Margin="16,14,16,6">
+      <TextBlock Classes="h1" Text="{Binding Title}" />
+      <TextBlock Classes="hint" Text="{Binding Description}" Margin="0,4,0,2" TextWrapping="Wrap" />
+      <TextBlock Text="{Binding Status}" FontSize="12" Opacity="0.8" Margin="0,4,0,0" TextWrapping="Wrap" />
+    </StackPanel>
+
+    <ScrollViewer VerticalScrollBarVisibility="Auto" Padding="16,4,16,16">
+      <StackPanel Orientation="Vertical" MaxWidth="900" HorizontalAlignment="Left">
+
+        <Border Classes="card">
+          <StackPanel Orientation="Vertical" Spacing="10">
+            <TextBlock Classes="h2" Text="Zone used by every call below" />
+            <TextBox Text="{Binding ZoneOverride, Mode=TwoWay}" MinWidth="380" HorizontalAlignment="Left"
+                     PlaceholderText="zone id - blank uses the one from the Credentials page" />
+          </StackPanel>
+        </Border>
+
+        <Border Classes="card">
+          <StackPanel Orientation="Vertical" Spacing="10">
+            <TextBlock Classes="h2" Text="Zone-level switch  -  /zones/{zone_id}/origin_tls_client_auth/settings" />
+            <WrapPanel Orientation="Horizontal">
+              <Button Classes="run" Content="Get" Command="{Binding GetSettingsCommand}" Margin="0,0,8,0" />
+              <Button Content="Enable" Command="{Binding EnableZoneCommand}" Margin="0,0,8,0" />
+              <Button Content="Disable" Command="{Binding DisableZoneCommand}" />
+            </WrapPanel>
+            <TextBlock Classes="hint" Text="One boolean and nothing else - no id, no editable, no modified_on, because this is its own resource rather than one of the settings under /zones/{zone_id}/settings. The verb is PUT and the flag is required, so turning it off is said out loud in the body rather than implied by an absent field. Cloudflare notes the switch may be set before or after a certificate is uploaded, so the order of those two calls does not matter, but neither one on its own does anything." TextWrapping="Wrap" />
+          </StackPanel>
+        </Border>
+
+        <Border Classes="card">
+          <StackPanel Orientation="Vertical" Spacing="10">
+            <TextBlock Classes="h2" Text="Hostname associations  -  /zones/{zone_id}/origin_tls_client_auth/hostnames" />
+            <WrapPanel Orientation="Horizontal">
+              <StackPanel Orientation="Vertical" Spacing="3" Margin="0,0,16,8">
+                <TextBlock Classes="hint" Text="Hostname on the origin" />
+                <TextBox Text="{Binding Hostname, Mode=TwoWay}" Width="260" PlaceholderText="app.example.com" />
+              </StackPanel>
+              <StackPanel Orientation="Vertical" Spacing="3" Margin="0,0,16,8">
+                <TextBlock Classes="hint" Text="Certificate id" />
+                <TextBox Text="{Binding CertificateId, Mode=TwoWay}" Width="300" PlaceholderText="copy it from a list result" />
+              </StackPanel>
+            </WrapPanel>
+            <WrapPanel Orientation="Horizontal">
+              <Button Classes="run" Content="Get association" Command="{Binding GetHostnameCommand}" Margin="0,0,8,0" />
+              <Button Content="Enable" Command="{Binding EnableHostnameCommand}" Margin="0,0,8,0" />
+              <Button Content="Disable" Command="{Binding DisableHostnameCommand}" Margin="0,0,8,0" />
+              <Button Content="Void (enabled: null)" Command="{Binding VoidHostnameCommand}" />
+            </WrapPanel>
+            <StackPanel Orientation="Vertical" Spacing="3">
+              <TextBlock Classes="hint" Text="Batch: one hostname per line, all sent as one config array" />
+              <TextBox Text="{Binding Hostnames, Mode=TwoWay}" AcceptsReturn="True" TextWrapping="Wrap"
+                       Height="86" PlaceholderText="app.example.com&#x0a;api.example.com" />
+            </StackPanel>
+            <WrapPanel Orientation="Horizontal">
+              <StackPanel Orientation="Vertical" Spacing="3" Margin="0,0,16,8">
+                <TextBlock Classes="hint" Text="State to apply" />
+                <ComboBox ItemsSource="{Binding AssociationStates}" SelectedItem="{Binding AssociationState, Mode=TwoWay}" Width="140" />
+              </StackPanel>
+              <Button Classes="run" Content="Apply to every hostname listed" Command="{Binding SetHostnamesCommand}" VerticalAlignment="Center" Margin="0,0,0,8" />
+            </WrapPanel>
+            <TextBlock Classes="hint" Text="enabled has three states and all three mean something. true associates the hostname with the certificate and turns it on. false keeps the association but stops the certificate being sent, even with the zone-level switch on, and it still counts towards the 100 hostnames a single certificate may carry. null voids the association - it disappears - and that is what Cloudflare requires before the certificate can be deleted. Because a null would otherwise be dropped from the JSON, the library writes it out explicitly." TextWrapping="Wrap" />
+            <TextBlock Classes="hint" Text="The hostname travels in the body, not the path: PUT goes to hostnames with a config array, so one call can change several. Only GET puts the hostname in the path, which means a hostname literally called certificates would be indistinguishable from the certificate collection beside it. The response carries two statuses that move independently - status for the association and cert_status for the certificate - plus the certificate itself in PEM, which the library never prints in a summary." TextWrapping="Wrap" />
+          </StackPanel>
+        </Border>
+
+        <Border Classes="card">
+          <StackPanel Orientation="Vertical" Spacing="10">
+            <TextBlock Classes="h2" Text="Hostname client certificates  -  /zones/{zone_id}/origin_tls_client_auth/hostnames/certificates" />
+            <StackPanel Orientation="Vertical" Spacing="3">
+              <TextBlock Classes="hint" Text="Certificate (PEM)" />
+              <TextBox Text="{Binding CertificatePem, Mode=TwoWay}" AcceptsReturn="True" TextWrapping="Wrap" Height="86"
+                       PlaceholderText="-----BEGIN CERTIFICATE-----" />
+            </StackPanel>
+            <StackPanel Orientation="Vertical" Spacing="3">
+              <TextBlock Classes="hint" Text="Private key (PEM)" />
+              <TextBox Text="{Binding PrivateKeyPem, Mode=TwoWay}" AcceptsReturn="True" TextWrapping="Wrap" Height="86"
+                       PlaceholderText="-----BEGIN RSA PRIVATE KEY-----" />
+            </StackPanel>
+            <WrapPanel Orientation="Horizontal">
+              <Button Classes="run" Content="List" Command="{Binding ListCertificatesCommand}" Margin="0,0,8,0" />
+              <Button Content="Get by id" Command="{Binding GetCertificateCommand}" Margin="0,0,8,0" />
+              <Button Content="Upload" Command="{Binding UploadCertificateCommand}" Margin="0,0,8,0" />
+              <Button Content="Delete" Command="{Binding DeleteCertificateCommand}" />
+            </WrapPanel>
+            <TextBlock Classes="hint" Text="Ten of these per zone, and the list endpoint takes no filters and does not page - it returns the whole collection. Both halves of the pair are required, and the library refuses to send one without the other; whether the key actually matches the certificate can only be checked by parsing both, so that is left to Cloudflare. Uploading does not put the certificate to use: a hostname still has to be associated with it and enabled, and the zone switch still has to be on." TextWrapping="Wrap" />
+            <TextBlock Classes="hint" Text="Deleting is the second half of a two-step operation. Void every hostname associated with the certificate first - the button above, which sends enabled as null - and only then will the delete go through. The private key is only ever sent, never returned, for these per-hostname certificates." TextWrapping="Wrap" />
+          </StackPanel>
+        </Border>
+
+        <Border Classes="card">
+          <StackPanel Orientation="Vertical" Spacing="10">
+            <TextBlock Classes="h2" Text="Deprecated zone-level certificates  -  /zones/{zone_id}/origin_tls_client_auth" />
+            <WrapPanel Orientation="Horizontal">
+              <Button Classes="run" Content="List" Command="{Binding ListZoneCertificatesCommand}" Margin="0,0,8,0" />
+              <Button Content="Get by id" Command="{Binding GetZoneCertificateCommand}" Margin="0,0,8,0" />
+              <Button Content="Upload (same PEM as above)" Command="{Binding UploadZoneCertificateCommand}" Margin="0,0,8,0" />
+              <Button Content="Delete" Command="{Binding DeleteZoneCertificateCommand}" />
+            </WrapPanel>
+            <TextBlock Classes="hint" Text="Cloudflare deprecates all four of these in favour of the per-hostname resources above. They are here so an existing zone-level deployment can still be inspected and taken apart. They take the same two-field body as a hostname certificate upload, and they keep one certificate for the whole zone, overriding the shared certificate Cloudflare would otherwise present - so an origin that does not trust it stops accepting connections from the edge, and Cloudflare warns to keep only one active." TextWrapping="Wrap" />
+            <TextBlock Classes="hint" Text="These endpoints give the private key back, in plaintext, in every response - list, get, upload and delete alike. The library models it because it arrives, reports only its length in any summary it prints, and the response pane below will show it in full, so treat whatever lands there as a secret and do not paste it into an issue." TextWrapping="Wrap" />
+          </StackPanel>
+        </Border>
+
+      </StackPanel>
+    </ScrollViewer>
+
+  </DockPanel>
+
+</UserControl>

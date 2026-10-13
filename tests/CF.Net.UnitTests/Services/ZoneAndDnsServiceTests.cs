@@ -3031,3 +3031,452 @@ public class CustomHostnameFallbackOriginTests
             new CustomHostnameFallbackOrigin { Status = "pending_deletion" }.ToString());
     }
 }
+
+public class OriginTlsClientAuthServiceTests
+{
+    private const string RootPath = "/client/v4/zones/zone-5678/origin_tls_client_auth";
+
+    private const string SettingsPath = RootPath + "/settings";
+
+    private const string HostnamesPath = RootPath + "/hostnames";
+
+    private const string CertificatesPath = RootPath + "/hostnames/certificates";
+
+    private const string Pem = "-----BEGIN CERTIFICATE----- MIID -----END CERTIFICATE-----";
+
+    private const string KeyPem = "-----BEGIN RSA PRIVATE KEY----- MIIE -----END RSA PRIVATE KEY-----";
+
+    private const string AssociationJson = """
+        {
+          "cert_id": "cert-1",
+          "cert_status": "active",
+          "cert_updated_at": "2026-10-01T09:00:00Z",
+          "cert_uploaded_on": "2026-09-01T09:00:00Z",
+          "certificate": "-----BEGIN CERTIFICATE----- MIID -----END CERTIFICATE-----",
+          "created_at": "2026-09-02T09:00:00Z",
+          "enabled": true,
+          "expires_on": "2027-09-01T09:00:00Z",
+          "hostname": "app.example.com",
+          "issuer": "GlobalSign",
+          "serial_number": "6743787633689793699141714808227354901",
+          "signature": "SHA256WithRSA",
+          "status": "active",
+          "updated_at": "2026-10-01T09:00:00Z",
+          "some_new_field": true
+        }
+        """;
+
+    private const string CertificateJson = """
+        {
+          "id": "cert-1",
+          "certificate": "-----BEGIN CERTIFICATE----- MIID -----END CERTIFICATE-----",
+          "expires_on": "2027-09-01T09:00:00Z",
+          "issuer": "GlobalSign",
+          "serial_number": "6743787633689793699141714808227354901",
+          "signature": "SHA256WithRSA",
+          "status": "active",
+          "uploaded_on": "2026-09-01T09:00:00Z",
+          "some_new_certificate_field": 4
+        }
+        """;
+
+    private const string ZoneCertificateJson = """
+        {
+          "id": "zone-cert-1",
+          "certificate": "-----BEGIN CERTIFICATE----- MIID -----END CERTIFICATE-----",
+          "enabled": true,
+          "expires_on": "2027-09-01T09:00:00Z",
+          "issuer": "GlobalSign",
+          "private_key": "-----BEGIN RSA PRIVATE KEY----- MIIE -----END RSA PRIVATE KEY-----",
+          "signature": "SHA256WithRSA",
+          "status": "active",
+          "uploaded_on": "2026-09-01T09:00:00Z",
+          "some_new_zone_field": "kept"
+        }
+        """;
+
+    [Fact]
+    public async Task GetSettingsAsync_reads_the_one_boolean_this_resource_has()
+    {
+        using var harness = CloudflareHarness.Create();
+        harness.RespondWithResult("""{ "enabled": true }""");
+
+        var setting = await harness.Client.OriginTlsClientAuth.GetSettingsAsync();
+
+        Assert.Equal(HttpMethod.Get, harness.LastRequest.Method);
+        Assert.Equal(SettingsPath, harness.LastRequest.Path);
+        Assert.Equal(string.Empty, harness.LastRequest.Query);
+
+        Assert.True(setting.Enabled);
+        Assert.Equal("zone-level authenticated origin pulls enabled", setting.ToString());
+    }
+
+    [Fact]
+    public async Task SetSettingsAsync_sends_the_flag_explicitly_in_both_directions()
+    {
+        using var harness = CloudflareHarness.Create();
+        harness.RespondWithResult("""{ "enabled": true }""");
+        harness.RespondWithResult("""{ "enabled": false }""");
+
+        await harness.Client.OriginTlsClientAuth.SetSettingsAsync(true);
+        Assert.Equal(HttpMethod.Put, harness.LastRequest.Method);
+        Assert.Equal(SettingsPath, harness.LastRequest.Path);
+        Assert.Equal("""{"enabled":true}""", harness.LastRequest.Body);
+
+        // Off has to be said, not implied: the schema marks the flag required.
+        var disabled = await harness.Client.OriginTlsClientAuth.SetSettingsAsync(false);
+        Assert.Equal("""{"enabled":false}""", harness.LastRequest.Body);
+        Assert.False(disabled.Enabled);
+        Assert.Equal("zone-level authenticated origin pulls disabled", disabled.ToString());
+    }
+
+    [Fact]
+    public async Task GetHostnameAsync_reads_the_association_and_both_of_its_statuses()
+    {
+        using var harness = CloudflareHarness.Create();
+        harness.RespondWithResult(AssociationJson);
+
+        var association = await harness.Client.OriginTlsClientAuth.GetHostnameAsync("app.example.com");
+
+        Assert.Equal(HttpMethod.Get, harness.LastRequest.Method);
+        Assert.Equal(HostnamesPath + "/app.example.com", harness.LastRequest.Path);
+
+        Assert.Equal("app.example.com", association!.Hostname);
+        Assert.Equal("cert-1", association.CertId);
+        Assert.True(association.IsEnabled);
+        Assert.Equal(OriginTlsClientAuthStatuses.Active, association.Status);
+        Assert.Equal(OriginTlsClientAuthStatuses.Active, association.CertStatus);
+        Assert.Equal("GlobalSign", association.Issuer);
+        Assert.Equal("SHA256WithRSA", association.Signature);
+        Assert.Equal(2027, association.ExpiresOn?.Year);
+        Assert.Equal(2026, association.CertUploadedOn?.Year);
+        Assert.True(association.AdditionalData!.ContainsKey("some_new_field"));
+
+        // The PEM comes back in the response but must not leak into a status line.
+        Assert.DoesNotContain("MIID", association.ToString());
+        Assert.Contains("app.example.com", association.ToString());
+        Assert.Contains("enabled", association.ToString());
+    }
+
+    [Fact]
+    public async Task GetHostnameAsync_returns_null_when_the_hostname_has_no_association()
+    {
+        using var harness = CloudflareHarness.Create();
+        harness.RespondWithError(HttpStatusCode.NotFound, 10007, "Hostname not found");
+
+        Assert.Null(await harness.Client.OriginTlsClientAuth.GetHostnameAsync("missing.example.com"));
+    }
+
+    [Fact]
+    public async Task SetHostnamesAsync_puts_a_config_array_and_reads_back_an_array()
+    {
+        using var harness = CloudflareHarness.Create();
+        harness.RespondWithResult($"[{AssociationJson}]");
+
+        var associations = await harness.Client.OriginTlsClientAuth.SetHostnamesAsync(
+            UpdateOriginTlsHostnameAssociationsRequest.For(
+                OriginTlsHostnameAssociationChange.Enable("app.example.com", "cert-1")));
+
+        Assert.Equal(HttpMethod.Put, harness.LastRequest.Method);
+
+        // The hostname travels in the body: this path has no hostname segment in it.
+        Assert.Equal(HostnamesPath, harness.LastRequest.Path);
+        Assert.Equal(
+            """{"config":[{"cert_id":"cert-1","enabled":true,"hostname":"app.example.com"}]}""",
+            harness.LastRequest.Body);
+
+        Assert.Single(associations);
+        Assert.Equal("app.example.com", associations[0].Hostname);
+    }
+
+    [Fact]
+    public async Task Voiding_an_association_sends_enabled_as_null_because_null_is_the_third_state()
+    {
+        using var harness = CloudflareHarness.Create();
+        harness.RespondWithResult("[]");
+        harness.RespondWithResult("[]");
+
+        await harness.Client.OriginTlsClientAuth.VoidHostnameAsync("app.example.com", "cert-1");
+        Assert.Equal(
+            """{"config":[{"cert_id":"cert-1","enabled":null,"hostname":"app.example.com"}]}""",
+            harness.LastRequest.Body);
+
+        // Disable is not the same call: the association survives it, and still counts towards the 100.
+        await harness.Client.OriginTlsClientAuth.DisableHostnameAsync("app.example.com", "cert-1");
+        Assert.Equal(
+            """{"config":[{"cert_id":"cert-1","enabled":false,"hostname":"app.example.com"}]}""",
+            harness.LastRequest.Body);
+    }
+
+    [Fact]
+    public async Task Several_hostnames_can_be_changed_in_one_call()
+    {
+        using var harness = CloudflareHarness.Create();
+        harness.RespondWithResult($"[{AssociationJson}]");
+
+        await harness.Client.OriginTlsClientAuth.SetHostnamesAsync(
+            UpdateOriginTlsHostnameAssociationsRequest.For(
+                OriginTlsHostnameAssociationChange.Enable("app.example.com", "cert-1"),
+                OriginTlsHostnameAssociationChange.Disable("api.example.com", "cert-1"),
+                OriginTlsHostnameAssociationChange.Void("old.example.com", "cert-2")));
+
+        var body = JsonDocument.Parse(harness.LastRequest.Body!).RootElement.GetProperty("config");
+        Assert.Equal(3, body.GetArrayLength());
+        Assert.True(body[0].GetProperty("enabled").GetBoolean());
+        Assert.False(body[1].GetProperty("enabled").GetBoolean());
+        Assert.Equal(JsonValueKind.Null, body[2].GetProperty("enabled").ValueKind);
+        Assert.Equal("old.example.com", body[2].GetProperty("hostname").GetString());
+    }
+
+    [Fact]
+    public async Task An_empty_or_hostnameless_batch_never_reaches_the_transport()
+    {
+        using var harness = CloudflareHarness.Create();
+
+        var empty = new UpdateOriginTlsHostnameAssociationsRequest();
+        var noHostname = UpdateOriginTlsHostnameAssociationsRequest.For(
+            new OriginTlsHostnameAssociationChange { CertId = "cert-1", Enabled = true });
+
+        Assert.Throws<CloudflareConfigurationException>(() => empty.EnsureValid());
+        Assert.Throws<CloudflareConfigurationException>(() => noHostname.EnsureValid());
+
+        await Assert.ThrowsAsync<CloudflareConfigurationException>(
+            () => harness.Client.OriginTlsClientAuth.SetHostnamesAsync(empty));
+        await Assert.ThrowsAsync<ArgumentNullException>(
+            () => harness.Client.OriginTlsClientAuth.SetHostnamesAsync(null!));
+
+        Assert.Equal(0, harness.RequestCount);
+    }
+
+    [Fact]
+    public async Task ListCertificatesAsync_reads_the_whole_collection_and_the_endpoint_does_not_page()
+    {
+        using var harness = CloudflareHarness.Create();
+        harness.RespondWithResult($"[{CertificateJson}]");
+
+        var certificates = await harness.Client.OriginTlsClientAuth.ListCertificatesAsync();
+
+        Assert.Equal(HttpMethod.Get, harness.LastRequest.Method);
+        Assert.Equal(CertificatesPath, harness.LastRequest.Path);
+        Assert.Equal(string.Empty, harness.LastRequest.Query);
+
+        Assert.Single(certificates);
+        Assert.Equal("cert-1", certificates[0].Id);
+    }
+
+    [Fact]
+    public async Task GetCertificateAsync_reads_one_certificate_without_echoing_the_pem()
+    {
+        using var harness = CloudflareHarness.Create();
+        harness.RespondWithResult(CertificateJson);
+
+        var certificate = await harness.Client.OriginTlsClientAuth.GetCertificateAsync("cert-1");
+
+        Assert.Equal(CertificatesPath + "/cert-1", harness.LastRequest.Path);
+        Assert.Equal(Pem, certificate!.Certificate);
+        Assert.Equal(OriginTlsClientAuthStatuses.Active, certificate.Status);
+        Assert.True(certificate.AdditionalData!.ContainsKey("some_new_certificate_field"));
+
+        Assert.DoesNotContain("MIID", certificate.ToString());
+        Assert.Contains("cert-1", certificate.ToString());
+        Assert.Contains("expires", certificate.ToString());
+    }
+
+    [Fact]
+    public async Task GetCertificateAsync_returns_null_when_the_zone_has_no_such_certificate()
+    {
+        using var harness = CloudflareHarness.Create();
+        harness.RespondWithError(HttpStatusCode.NotFound, 10007, "Certificate not found");
+
+        Assert.Null(await harness.Client.OriginTlsClientAuth.GetCertificateAsync("cert-missing"));
+    }
+
+    [Fact]
+    public async Task UploadCertificateAsync_posts_both_halves_of_the_pair()
+    {
+        using var harness = CloudflareHarness.Create();
+        harness.RespondWithResult(CertificateJson);
+
+        var uploaded = await harness.Client.OriginTlsClientAuth.UploadCertificateAsync(
+            UploadOriginTlsCertificateRequest.Of(Pem, KeyPem));
+
+        Assert.Equal(HttpMethod.Post, harness.LastRequest.Method);
+        Assert.Equal(CertificatesPath, harness.LastRequest.Path);
+        Assert.Equal(
+            """{"certificate":"-----BEGIN CERTIFICATE----- MIID -----END CERTIFICATE-----","private_key":"-----BEGIN RSA PRIVATE KEY----- MIIE -----END RSA PRIVATE KEY-----"}""",
+            harness.LastRequest.Body);
+        Assert.Equal("cert-1", uploaded.Id);
+    }
+
+    [Fact]
+    public async Task The_string_overload_uploads_the_same_body()
+    {
+        using var harness = CloudflareHarness.Create();
+        harness.RespondWithResult(CertificateJson);
+
+        await harness.Client.OriginTlsClientAuth.UploadCertificateAsync(Pem, KeyPem);
+
+        Assert.Equal(HttpMethod.Post, harness.LastRequest.Method);
+        Assert.Equal(CertificatesPath, harness.LastRequest.Path);
+
+        var body = JsonDocument.Parse(harness.LastRequest.Body!).RootElement;
+        Assert.Equal(Pem, body.GetProperty("certificate").GetString());
+        Assert.Equal(KeyPem, body.GetProperty("private_key").GetString());
+    }
+
+    [Fact]
+    public async Task Half_a_pair_never_reaches_the_transport()
+    {
+        using var harness = CloudflareHarness.Create();
+
+        Assert.Throws<CloudflareConfigurationException>(
+            () => new UploadOriginTlsCertificateRequest { Certificate = Pem }.EnsureValid());
+        Assert.Throws<CloudflareConfigurationException>(
+            () => new UploadOriginTlsCertificateRequest { PrivateKey = KeyPem }.EnsureValid());
+
+        await Assert.ThrowsAsync<CloudflareConfigurationException>(
+            () => harness.Client.OriginTlsClientAuth.UploadCertificateAsync(new UploadOriginTlsCertificateRequest()));
+        await Assert.ThrowsAsync<CloudflareConfigurationException>(
+            () => harness.Client.OriginTlsClientAuth.UploadCertificateAsync("  ", KeyPem));
+
+        Assert.Equal(0, harness.RequestCount);
+    }
+
+    [Fact]
+    public void An_upload_request_reports_lengths_and_never_key_material()
+    {
+        var request = UploadOriginTlsCertificateRequest.Of(Pem, KeyPem);
+
+        Assert.Equal(
+            $"certificate ({Pem.Length} characters) and private key ({KeyPem.Length} characters)",
+            request.ToString());
+        Assert.DoesNotContain("MIID", request.ToString());
+        Assert.DoesNotContain("MIIE", request.ToString());
+        Assert.Equal("(no changes)", new UpdateOriginTlsHostnameAssociationsRequest().ToString());
+    }
+
+    [Fact]
+    public async Task DeleteCertificateAsync_sends_a_delete_and_returns_what_was_removed()
+    {
+        using var harness = CloudflareHarness.Create();
+        harness.RespondWithResult(CertificateJson);
+
+        var removed = await harness.Client.OriginTlsClientAuth.DeleteCertificateAsync("cert-1");
+
+        Assert.Equal(HttpMethod.Delete, harness.LastRequest.Method);
+        Assert.Equal(CertificatesPath + "/cert-1", harness.LastRequest.Path);
+        Assert.True(string.IsNullOrEmpty(harness.LastRequest.Body));
+        Assert.Equal("cert-1", removed!.Id);
+    }
+
+    [Fact]
+    public async Task The_deprecated_zone_endpoints_still_answer_and_hand_back_the_private_key()
+    {
+        using var harness = CloudflareHarness.Create();
+        harness.RespondWithResult($"[{ZoneCertificateJson}]");
+        harness.RespondWithResult(ZoneCertificateJson);
+
+        var certificates = await harness.Client.OriginTlsClientAuth.ListZoneCertificatesAsync();
+        Assert.Equal(HttpMethod.Get, harness.LastRequest.Method);
+        Assert.Equal(RootPath, harness.LastRequest.Path);
+        Assert.Single(certificates);
+
+        var one = await harness.Client.OriginTlsClientAuth.GetZoneCertificateAsync("zone-cert-1");
+        Assert.Equal(RootPath + "/zone-cert-1", harness.LastRequest.Path);
+        Assert.True(one!.HasPrivateKey);
+        Assert.Equal(KeyPem, one.PrivateKey);
+        Assert.True(one.AdditionalData!.ContainsKey("some_new_zone_field"));
+
+        // The key is in the model because Cloudflare returns it, and out of every summary we print.
+        Assert.DoesNotContain("MIIE", one.ToString());
+        Assert.Contains("private key", one.ToString());
+        Assert.Contains(KeyPem.Length.ToString(), one.ToString());
+    }
+
+    [Fact]
+    public async Task Uploading_a_zone_certificate_uses_the_same_body_as_a_hostname_one()
+    {
+        using var harness = CloudflareHarness.Create();
+        harness.RespondWithResult(ZoneCertificateJson);
+        harness.RespondWithResult(ZoneCertificateJson);
+
+        var uploaded = await harness.Client.OriginTlsClientAuth.UploadZoneCertificateAsync(
+            UploadOriginTlsCertificateRequest.Of(Pem, KeyPem));
+
+        Assert.Equal(HttpMethod.Post, harness.LastRequest.Method);
+        Assert.Equal(RootPath, harness.LastRequest.Path);
+        Assert.Equal("zone-cert-1", uploaded.Id);
+
+        var removed = await harness.Client.OriginTlsClientAuth.DeleteZoneCertificateAsync("zone-cert-1");
+        Assert.Equal(HttpMethod.Delete, harness.LastRequest.Method);
+        Assert.Equal(RootPath + "/zone-cert-1", harness.LastRequest.Path);
+        Assert.Equal("zone-cert-1", removed!.Id);
+    }
+
+    [Fact]
+    public async Task The_zone_can_be_overridden_per_call()
+    {
+        using var harness = CloudflareHarness.Create();
+        harness.RespondWithResult("""{ "enabled": false }""");
+        harness.RespondWithResult("[]");
+
+        await harness.Client.OriginTlsClientAuth.GetSettingsAsync(zoneId: "zone-other");
+        Assert.Equal("/client/v4/zones/zone-other/origin_tls_client_auth/settings", harness.LastRequest.Path);
+
+        await harness.Client.OriginTlsClientAuth.ListCertificatesAsync(zoneId: "zone-other");
+        Assert.Equal(
+            "/client/v4/zones/zone-other/origin_tls_client_auth/hostnames/certificates",
+            harness.LastRequest.Path);
+    }
+
+    [Fact]
+    public void The_status_set_has_deleted_in_it_which_the_fallback_origin_one_does_not()
+    {
+        Assert.Equal(
+            new[]
+            {
+                "initializing",
+                "pending_deployment",
+                "pending_deletion",
+                "active",
+                "deleted",
+                "deployment_timed_out",
+                "deletion_timed_out",
+            },
+            OriginTlsClientAuthStatuses.All);
+
+        // Two neighbouring resources, two different enums: sharing one list would be wrong for one of them.
+        Assert.Contains("deleted", OriginTlsClientAuthStatuses.All);
+        Assert.DoesNotContain("deleted", CustomHostnameFallbackOriginStatuses.All);
+        Assert.Equal(
+            CustomHostnameFallbackOriginStatuses.All.Count + 1,
+            OriginTlsClientAuthStatuses.All.Count);
+    }
+
+    [Fact]
+    public void The_three_states_and_the_requests_describe_themselves()
+    {
+        Assert.Equal(
+            "enable app.example.com",
+            OriginTlsHostnameAssociationChange.Enable("app.example.com", "cert-1").ToString());
+        Assert.Equal(
+            "disable app.example.com",
+            OriginTlsHostnameAssociationChange.Disable("app.example.com", "cert-1").ToString());
+        Assert.Equal(
+            "void app.example.com",
+            OriginTlsHostnameAssociationChange.Void("app.example.com", "cert-1").ToString());
+        Assert.Equal(
+            "2 change(s): enable app.example.com, void old.example.com",
+            UpdateOriginTlsHostnameAssociationsRequest.For(
+                OriginTlsHostnameAssociationChange.Enable("app.example.com", "cert-1"),
+                OriginTlsHostnameAssociationChange.Void("old.example.com", "cert-1")).ToString());
+        Assert.Equal("enable", UpdateOriginTlsClientAuthSettingRequest.Enable().ToString());
+        Assert.Equal("disable", UpdateOriginTlsClientAuthSettingRequest.Disable().ToString());
+        Assert.Equal("(no certificate)", new OriginTlsClientCertificate().ToString());
+        Assert.Equal("(no certificate)", new ZoneAuthenticatedOriginPull().ToString());
+        Assert.Equal(
+            "zone-level authenticated origin pulls not reported",
+            new OriginTlsClientAuthSetting().ToString());
+        Assert.Equal("void", new OriginTlsHostnameAssociation { Hostname = null }.ToString());
+    }
+}

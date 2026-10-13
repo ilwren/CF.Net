@@ -599,9 +599,11 @@ public class WriteIntegrationTests : CloudflareIntegrationTest
                 }));
 
             // Cloudflare publishes the batch request body but not what a successful answer's result looks
-            // like, so the service returns it raw and this logs it: the output of this run is the evidence
-            // that turns it into a typed model, rather than a shape somebody guessed at.
-            Log($"batch result: {result?.GetRawText() ?? "(no result)"}");
+            // like, so the service returns it raw and this reports it. Warn rather than Log on purpose: the
+            // job log is not readable once the run is over, and the run report is, so this is the only
+            // channel the shape can travel back through. It is what turns the raw result into a typed model.
+            Warn($"POST /zones/{{zone_id}}/dns_records/batch answered 200 with result: " +
+                 $"{result?.GetRawText() ?? "(no result)"}");
 
             foreach (var name in new[] { firstName, secondName })
             {
@@ -622,7 +624,8 @@ public class WriteIntegrationTests : CloudflareIntegrationTest
                 // The same endpoint removes them, which exercises the deletes group as well as posts.
                 var removed = await Client.DnsRecords.BatchAsync(
                     new DnsRecordBatch().WithDeletes(createdIds.ToArray()));
-                Log($"batch delete result: {removed?.GetRawText() ?? "(no result)"}");
+                Warn($"the same endpoint deleting {createdIds.Count} record(s) answered with result: " +
+                     $"{removed?.GetRawText() ?? "(no result)"}");
             }
         }
     }

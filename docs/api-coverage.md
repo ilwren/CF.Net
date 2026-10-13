@@ -85,6 +85,8 @@ the validation restart, the quota and universal SSL settings.
 | `DeleteAsync(recordId, zoneId)` | `DELETE /zones/{zone_id}/dns_records/{record_id}` | |
 | `ExportAsync(zoneId)` | `GET /zones/{zone_id}/dns_records/export` | returns the BIND zone file as text, not an envelope |
 | `ImportAsync(bindContents, proxied, zoneId)` | `POST /zones/{zone_id}/dns_records/import` | `multipart/form-data`: a `file` part plus an optional plain `proxied` field; returns `DnsRecordsImportResult` |
+| `BatchAsync(DnsRecordBatch, includeShadowMetadata, zoneId)` | `POST /zones/{zone_id}/dns_records/batch` | deletes, patches, puts and posts in one call, executed in that order in a single transaction; propagation is not atomic. `EnsureValid()` rejects an empty batch (Cloudflare answers it with `9207`) and any delete or patch with no id. The successful result is returned as raw `JsonElement?` because Cloudflare does not publish its shape - the integration test logs what actually comes back |
+| `ListScannedRecordsAsync(perPage, zoneId)` | `GET /zones/{zone_id}/dns_records/scan/review` | a zone that has never been scanned answers 200 with an empty list, verified live |
 
 Record types modelled with constants and typed data: `A`, `AAAA`, `CAA`, `CERT`, `CNAME`, `DNSKEY`,
 `DS`, `HTTPS`, `LOC`, `MX`, `NAPTR`, `NS`, `PTR`, `SMIMEA`, `SRV`, `SSHFP`, `SVCB`, `TLSA`, `TXT`,
@@ -92,15 +94,15 @@ Record types modelled with constants and typed data: `A`, `AAAA`, `CAA`, `CERT`,
 `DnsRecordSshfpData`, `DnsRecordDnskeyData`, `DnsRecordTlsaData`, `DnsRecordUriData`, … reachable
 through `DnsRecord.Data` and `DnsRecord.GetData<T>()`.
 
-Still unwrapped here, all four of them under **DNS Read / DNS Write** — the same permissions the methods
-above already use, so nothing new is needed in the token:
+`BatchAsync` and `ListScannedRecordsAsync` above were verified against the live API before being modelled:
+the reach matrix probes `POST …/dns_records/batch` with an empty body, which Cloudflare refuses with `9207`
+without touching a record, and `GET …/dns_records/scan/review`, which answers 200 with an empty list for a
+zone that has never been scanned. Still unwrapped, both under the same **DNS Read / DNS Write** permissions:
 
-| Endpoint | What it does |
-| --- | --- |
-| `POST /zones/{zone_id}/dns_records/batch` | sends deletes, patches, puts and posts in one call, always executed in that order, in a single database transaction — though propagation is not atomic, because Cloudflare's KV store treats each record change as its own key-value pair. Takes `include_shadow_metadata` as a query flag |
-| `POST /zones/{zone_id}/dns_records/scan/trigger` | starts a scan for records at the registrar, for a zone being onboarded |
-| `GET /zones/{zone_id}/dns_records/scan/review` | lists what the scan found |
-| `POST /zones/{zone_id}/dns_records/scan/review` | accepts or rejects the scanned records |
+| Endpoint | What it does | Why it is not wrapped yet |
+| --- | --- | --- |
+| `POST /zones/{zone_id}/dns_records/scan/trigger` | starts a scan for records at the registrar, for a zone being onboarded | neither the request body nor the result is published, and a scan is a real action against the zone, so it is not something to probe with an empty body |
+| `POST /zones/{zone_id}/dns_records/scan/review` | accepts or rejects the scanned records | same, and worse: it writes records into the zone |
 
 `POST /zones/{zone_id}/dns_records/scan` is deliberately left out: Cloudflare marks it **Deprecated** and
 `scan/trigger` is the supported replacement, the same call made about `custom_ns`. There is no

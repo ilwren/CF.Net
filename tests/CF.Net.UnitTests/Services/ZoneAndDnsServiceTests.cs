@@ -3951,3 +3951,157 @@ public class ZoneSettingIdTests
         Assert.True(ZoneSettingIds.SslAutomaticMode.Length > 15);
     }
 }
+
+/// <summary>
+/// <c>POST /zones/{zone_id}/dns_records/batch</c> and <c>GET …/dns_records/scan/review</c>. The batch body
+/// is the part Cloudflare documents; its successful result is not, which is why the service hands that back
+/// raw and these tests assert on the request rather than inventing a response model.
+/// </summary>
+public class DnsRecordBatchTests
+{
+    [Fact]
+    public async Task BatchAsync_sends_the_groups_it_was_given_in_one_post()
+    {
+        using var harness = CloudflareHarness.Create();
+        harness.RespondWithResult("""{"records_added":2}""");
+
+        var batch = new DnsRecordBatch()
+            .WithPosts(new DnsRecord
+            {
+                Name = "batch.test",
+                Type = DnsRecordTypes.Txt,
+                Content = "cf-net",
+                Ttl = 120,
+            })
+            .WithDeletes("rec-1", "rec-2");
+
+        var result = await harness.Client.DnsRecords.BatchAsync(batch);
+
+        Assert.Equal(
+            $"/client/v4/zones/{CloudflareHarness.TestZoneId}/dns_records/batch",
+            harness.LastRequest.Path);
+        Assert.Equal(HttpMethod.Post, harness.LastRequest.Method);
+        Assert.Contains("\"posts\":[{\"name\":\"batch.test\"", harness.LastRequest.Body!, StringComparison.Ordinal);
+        Assert.Contains("\"deletes\":[{\"id\":\"rec-1\"},{\"id\":\"rec-2\"}]", harness.LastRequest.Body!, StringComparison.Ordinal);
+        // Groups that were not used are left out entirely rather than sent as null.
+        Assert.DoesNotContain("patches", harness.LastRequest.Body!, StringComparison.Ordinal);
+        Assert.DoesNotContain("puts", harness.LastRequest.Body!, StringComparison.Ordinal);
+
+        // The result is Cloudflare's own JSON, untouched.
+        Assert.NotNull(result);
+        Assert.Equal(2, result!.Value.GetProperty("records_added").GetInt32());
+    }
+
+    [Fact]
+    public async Task BatchAsync_adds_include_shadow_metadata_only_when_asked()
+    {
+        using var harness = CloudflareHarness.Create();
+        harness.RespondWithResult("{}");
+        harness.RespondWithResult("{}");
+
+        var batch = new DnsRecordBatch().WithDeletes("rec-1");
+
+        await harness.Client.DnsRecords.BatchAsync(batch);
+        await harness.Client.DnsRecords.BatchAsync(batch, includeShadowMetadata: true);
+
+        Assert.Equal(string.Empty, harness.Requests[0].Query);
+        Assert.Equal("?include_shadow_metadata=true", harness.Requests[1].Query);
+    }
+
+    [Fact]
+    public async Task BatchAsync_rejects_an_empty_batch_before_sending_anything()
+    {
+        using var harness = CloudflareHarness.Create();
+
+        var exception = await Assert.ThrowsAsync<CloudflareConfigurationException>(() =>
+            harness.Client.DnsRecords.BatchAsync(new DnsRecordBatch()));
+
+        // 9207 is what Cloudflare answers an empty body with, observed live, so it is worth quoting.
+        Assert.Contains("9207", exception.Message, StringComparison.Ordinal);
+        Assert.Equal(0, harness.RequestCount);
+    }
+
+    [Fact]
+    public async Task BatchAsync_names_every_delete_and_patch_that_has_no_id()
+    {
+        using var harness = CloudflareHarness.Create();
+
+        var exception = await Assert.ThrowsAsync<CloudflareConfigurationException>(() =>
+            harness.Client.DnsRecords.BatchAsync(new DnsRecordBatch
+            {
+                Deletes = new List<DnsRecordBatchDelete> { new() { Id = "rec-1" }, new() },
+                Patches = new List<DnsRecord> { new() { Comment = "no id here" } },
+            }));
+
+        Assert.Contains("deletes[1]", exception.Message, StringComparison.Ordinal);
+        Assert.Contains("patches[0]", exception.Message, StringComparison.Ordinal);
+        Assert.DoesNotContain("deletes[0]", exception.Message, StringComparison.Ordinal);
+        Assert.Equal(0, harness.RequestCount);
+    }
+
+    [Fact]
+    public void A_batch_counts_its_changes_and_says_what_it_is()
+    {
+        var empty = new DnsRecordBatch();
+        Assert.True(empty.IsEmpty);
+        Assert.Equal(0, empty.ChangeCount);
+        Assert.Equal("(empty batch)", empty.ToString());
+
+        var batch = new DnsRecordBatch
+        {
+            Deletes = new List<DnsRecordBatchDelete> { new() { Id = "rec-1" } },
+            Patches = new List<DnsRecord> { new() { Id = "rec-2" } },
+            Puts = new List<DnsRecord> { new() { Id = "rec-3" } },
+            Posts = new List<DnsRecord> { new() { Name = "a.test" }, new() { Name = "b.test" } },
+        };
+
+        Assert.False(batch.IsEmpty);
+        Assert.Equal(5, batch.ChangeCount);
+        Assert.Equal("batch: 1 delete(s), 1 patch(es), 1 put(s), 2 post(s)", batch.ToString());
+    }
+
+    [Fact]
+    public async Task ListScannedRecordsAsync_uses_the_scan_review_path()
+    {
+        using var harness = CloudflareHarness.Create();
+        harness.RespondWithResult("""[{"id":"scanned-1","name":"www.test","type":"A","content":"198.51.100.4","ttl":1}]""");
+
+        var page = await harness.Client.DnsRecords.ListScannedRecordsAsync();
+
+        Assert.Equal(
+            $"/client/v4/zones/{CloudflareHarness.TestZoneId}/dns_records/scan/review",
+            harness.LastRequest.Path);
+        Assert.Equal(string.Empty, harness.LastRequest.Query);
+        var record = Assert.Single(page.Items);
+        Assert.Equal("scanned-1", record.Id);
+        Assert.Equal(DnsRecordTypes.A, record.Type);
+    }
+
+    [Fact]
+    public async Task ListScannedRecordsAsync_passes_per_page_only_when_given()
+    {
+        using var harness = CloudflareHarness.Create();
+        harness.RespondWithResult("[]");
+        harness.RespondWithResult("[]");
+
+        await harness.Client.DnsRecords.ListScannedRecordsAsync();
+        await harness.Client.DnsRecords.ListScannedRecordsAsync(perPage: 5);
+
+        Assert.Equal(string.Empty, harness.Requests[0].Query);
+        Assert.Equal("?per_page=5", harness.Requests[1].Query);
+    }
+
+    [Fact]
+    public async Task ListScannedRecordsAsync_answers_an_empty_page_for_a_zone_never_scanned()
+    {
+        using var harness = CloudflareHarness.Create();
+        // The live API answers 200 with an empty list here, which is a normal answer and not a refusal.
+        harness.RespondWithResult("[]");
+
+        var page = await harness.Client.DnsRecords.ListScannedRecordsAsync();
+
+        Assert.Equal(0, page.Count);
+        Assert.False(page.HasMore);
+        Assert.Null(page.TotalCount);
+    }
+}

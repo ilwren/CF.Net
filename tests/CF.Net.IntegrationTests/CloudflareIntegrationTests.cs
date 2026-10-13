@@ -567,6 +567,67 @@ public class WriteIntegrationTests : CloudflareIntegrationTest
     }
 
     [Fact]
+    public async Task Dns_records_can_be_created_and_deleted_in_one_batch()
+    {
+        if (!SkipWithoutZone() || !SkipWithoutWritePermission())
+        {
+            return;
+        }
+
+        var zone = await ReadableZoneAsync();
+        if (zone is null)
+        {
+            return;
+        }
+
+        var firstName = $"{UniqueSuffix("cfnet-it-batch")}.{zone.Name}";
+        var secondName = $"{UniqueSuffix("cfnet-it-batch")}.{zone.Name}";
+        var createdIds = new List<string>();
+
+        try
+        {
+            var result = await Client.DnsRecords.BatchAsync(new DnsRecordBatch().WithPosts(
+                new DnsRecord
+                {
+                    Name = firstName, Type = DnsRecordTypes.Txt, Content = "cf-net batch first",
+                    Ttl = 120, Proxied = false,
+                },
+                new DnsRecord
+                {
+                    Name = secondName, Type = DnsRecordTypes.Txt, Content = "cf-net batch second",
+                    Ttl = 120, Proxied = false,
+                }));
+
+            // Cloudflare publishes the batch request body but not what a successful answer's result looks
+            // like, so the service returns it raw and this logs it: the output of this run is the evidence
+            // that turns it into a typed model, rather than a shape somebody guessed at.
+            Log($"batch result: {result?.GetRawText() ?? "(no result)"}");
+
+            foreach (var name in new[] { firstName, secondName })
+            {
+                var found = await Client.DnsRecords.FindAsync(name, DnsRecordTypes.Txt);
+                foreach (var record in found)
+                {
+                    Log($"  created {record.Id} {record.Name}");
+                    createdIds.Add(record.Id!);
+                }
+            }
+
+            Assert.Equal(2, createdIds.Count);
+        }
+        finally
+        {
+            if (createdIds.Count > 0)
+            {
+                // The same endpoint removes them, which exercises the deletes group as well as posts.
+                var removed = await Client.DnsRecords.BatchAsync(
+                    new DnsRecordBatch().WithDeletes(createdIds.ToArray()));
+                Log($"batch delete result: {removed?.GetRawText() ?? "(no result)"}");
+            }
+        }
+    }
+
+    [Fact]
     public async Task A_txt_record_can_be_created_read_updated_and_deleted()
     {
         if (!SkipWithoutZone() || !SkipWithoutWritePermission())
@@ -1075,6 +1136,31 @@ public class WriteIntegrationTests : CloudflareIntegrationTest
         {
             // A token without the permission is account state, not a defect: say what is missing and skip.
             SkipUnless(false, $"The token cannot read SSL for this zone (HTTP 403, Cloudflare error {exception.ErrorCode}). It needs 'SSL and Certificates Read'.");
+        }
+    }
+
+    [Fact]
+    public async Task Scanned_dns_records_can_be_listed()
+    {
+        if (!SkipWithoutZone())
+        {
+            return;
+        }
+
+        var page = await RunZoneScopedAsync(() => Client.DnsRecords.ListScannedRecordsAsync(perPage: 5));
+        if (page is null)
+        {
+            return;
+        }
+
+        // A zone that has never been scanned answers 200 with an empty list, so an empty page here is the
+        // normal answer rather than a refusal or a missing permission - which is what the reach matrix
+        // recorded before this test existed.
+        Log($"scanned records: {page.Count}");
+        foreach (var record in page.Items)
+        {
+            Log($"  {record.Id} {record.Name} [{record.Type}] -> {record.Content}");
+            Assert.False(string.IsNullOrWhiteSpace(record.Name));
         }
     }
 

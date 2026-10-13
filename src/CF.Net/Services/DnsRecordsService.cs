@@ -1,4 +1,5 @@
 using System.Runtime.CompilerServices;
+using System.Text.Json;
 using CFNet.Http;
 using CFNet.Models.Dns;
 
@@ -156,6 +157,45 @@ public interface IDnsRecordsService
     Task<DnsRecordsImportResult?> ImportAsync(
         string bindContents,
         bool? proxied = null,
+        string? zoneId = null,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Sends a batch of record changes - deletes, patches, puts and posts - as a single call.
+    /// </summary>
+    /// <remarks>
+    /// Cloudflare executes the four groups in its own order (deletes, then patches, puts and posts) inside
+    /// one database transaction, though propagation is not atomic because each record change is its own
+    /// key-value pair in the store behind it. The published reference documents the request body but not
+    /// what a successful answer's <c>result</c> looks like, so this returns it raw rather than modelling a
+    /// guess; the integration suite logs what Cloudflare sends, which is how that shape gets pinned down.
+    /// </remarks>
+    /// <param name="batch">The changes to make. Checked by <see cref="DnsRecordBatch.EnsureValid"/> first.</param>
+    /// <param name="includeShadowMetadata">
+    /// Whether each returned record carries shadow metadata in its <c>meta</c> field. <c>null</c> leaves the
+    /// query parameter out and Cloudflare's default stands.
+    /// </param>
+    /// <param name="zoneId">Zone id; falls back to the configured default when null.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    Task<JsonElement?> BatchAsync(
+        DnsRecordBatch batch,
+        bool? includeShadowMetadata = null,
+        string? zoneId = null,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Lists the records found by a registrar scan - the ones a scan review accepts or rejects.
+    /// </summary>
+    /// <remarks>
+    /// <c>GET /zones/{zone_id}/dns_records/scan/review</c>. A zone that has never been scanned answers 200
+    /// with an empty list rather than an error, observed live, so an empty page is a normal answer here and
+    /// not a refusal or a missing permission.
+    /// </remarks>
+    /// <param name="perPage">Page size; <c>null</c> leaves Cloudflare's default in place.</param>
+    /// <param name="zoneId">Zone id; falls back to the configured default when null.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    Task<CloudflarePage<DnsRecord>> ListScannedRecordsAsync(
+        int? perPage = null,
         string? zoneId = null,
         CancellationToken cancellationToken = default);
 }
@@ -481,6 +521,43 @@ public sealed class DnsRecordsService : CloudflareService, IDnsRecordsService
 
         var response = await Transport.SendAsync<DnsRecordsImportResult>(request, cancellationToken).ConfigureAwait(false);
         return response.Result;
+    }
+
+    /// <inheritdoc />
+    public async Task<JsonElement?> BatchAsync(
+        DnsRecordBatch batch,
+        bool? includeShadowMetadata = null,
+        string? zoneId = null,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(batch);
+        batch.EnsureValid();
+
+        var request = new CloudflareRequest(
+            HttpMethod.Post,
+            $"{ZonePath(ResolveZoneId(zoneId))}/dns_records/batch")
+        {
+            Body = batch,
+            OperationName = "Batch DNS Records",
+        };
+        request.Query.Add("include_shadow_metadata", includeShadowMetadata);
+
+        var response = await Transport.SendAsync<JsonElement?>(request, cancellationToken).ConfigureAwait(false);
+        return response.Result;
+    }
+
+    /// <inheritdoc />
+    public async Task<CloudflarePage<DnsRecord>> ListScannedRecordsAsync(
+        int? perPage = null,
+        string? zoneId = null,
+        CancellationToken cancellationToken = default)
+    {
+        var request = CloudflareRequest.Get($"{ZonePath(ResolveZoneId(zoneId))}/dns_records/scan/review");
+        request.OperationName = "List Scanned DNS Records";
+        request.Query.Add("per_page", perPage);
+
+        var response = await Transport.SendAsync<List<DnsRecord>>(request, cancellationToken).ConfigureAwait(false);
+        return response.ToPage();
     }
 
     private async Task<DnsRecord> SendForRecordAsync(CloudflareRequest request, CancellationToken cancellationToken)

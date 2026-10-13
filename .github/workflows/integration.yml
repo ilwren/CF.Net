@@ -364,7 +364,8 @@ jobs:
               ('account', 'GET /accounts/{account_id}', 'Account Settings - Read', 'account_settings', 'read', ''),
               ('permission_groups', 'GET /accounts/{account_id}/tokens/permission_groups',
                'Account API Tokens - Read', 'account_api_tokens', 'read',
-               'lists every permission group with the key a token-creation URL needs'),
+               'an account-owned token (cfat_) is refused here even with Account API Tokens read, the way '
+               'it is refused at GET /user; enumerating permission groups needs a user token (cfut_)'),
               ('workers_scripts', 'GET /accounts/{account_id}/workers/scripts', 'Workers Scripts - Read',
                'workers_scripts', 'read', ''),
               ('workers_domains', 'GET /accounts/{account_id}/workers/domains', 'Workers Scripts - Read',

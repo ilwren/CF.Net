@@ -3981,7 +3981,11 @@ public class DnsRecordBatchTests
             $"/client/v4/zones/{CloudflareHarness.TestZoneId}/dns_records/batch",
             harness.LastRequest.Path);
         Assert.Equal(HttpMethod.Post, harness.LastRequest.Method);
-        Assert.Contains("\"posts\":[{\"name\":\"batch.test\"", harness.LastRequest.Body!, StringComparison.Ordinal);
+        // Asserted as separate fragments on purpose: which field a record serialises first is a property
+        // declaration order, not part of the contract, and pinning it would make this test brittle.
+        Assert.Contains("\"posts\":[{", harness.LastRequest.Body!, StringComparison.Ordinal);
+        Assert.Contains("\"name\":\"batch.test\"", harness.LastRequest.Body!, StringComparison.Ordinal);
+        Assert.Contains("\"content\":\"cf-net\"", harness.LastRequest.Body!, StringComparison.Ordinal);
         Assert.Contains("\"deletes\":[{\"id\":\"rec-1\"},{\"id\":\"rec-2\"}]", harness.LastRequest.Body!, StringComparison.Ordinal);
         // Groups that were not used are left out entirely rather than sent as null.
         Assert.DoesNotContain("patches", harness.LastRequest.Body!, StringComparison.Ordinal);

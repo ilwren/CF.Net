@@ -533,13 +533,9 @@ public sealed class DnsRecordsService : CloudflareService, IDnsRecordsService
         ArgumentNullException.ThrowIfNull(batch);
         batch.EnsureValid();
 
-        var request = new CloudflareRequest(
-            HttpMethod.Post,
-            $"{ZonePath(ResolveZoneId(zoneId))}/dns_records/batch")
-        {
-            Body = batch,
-            OperationName = "Batch DNS Records",
-        };
+        var request = CloudflareRequest.Post(
+            $"{ZonePath(ResolveZoneId(zoneId))}/dns_records/batch", batch);
+        request.OperationName = "Batch DNS Records";
         request.Query.Add("include_shadow_metadata", includeShadowMetadata);
 
         var response = await Transport.SendAsync<JsonElement?>(request, cancellationToken).ConfigureAwait(false);

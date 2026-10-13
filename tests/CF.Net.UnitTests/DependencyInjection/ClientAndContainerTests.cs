@@ -275,6 +275,16 @@ public class UserServiceTests
     }
 }
 
+/// <summary>
+/// Four tests here and in <see cref="ServiceCollectionExtensionsTests"/> set and restore
+/// <c>CLOUDFLARE_API_TOKEN</c> in the process environment, and <c>FromEnvironment</c> reads that environment
+/// live rather than from a snapshot. xunit runs different classes in parallel, so one class's <c>finally</c>
+/// restoring the variable to <c>null</c> can land between another's set and its read - which is exactly how
+/// <c>AddCloudflareFromEnvironment_reads_the_process_environment</c> failed on the windows-latest job of CI
+/// run 38356357755 with "Expected di-token, Actual null" while passing on ubuntu. Both classes therefore run
+/// in the collection that disables parallelism.
+/// </summary>
+[Collection("Environment")]
 public class CloudflareClientTests
 {
     [Fact]
@@ -483,6 +493,12 @@ public class CloudflareClientTests
     }
 }
 
+/// <summary>
+/// Runs in the non-parallel collection for the reason documented on <see cref="CloudflareClientTests"/>:
+/// these tests mutate <c>CLOUDFLARE_API_TOKEN</c> and <c>CLOUDFLARE_ACCOUNT_ID</c> process-wide, and so does
+/// that class.
+/// </summary>
+[Collection("Environment")]
 public class ServiceCollectionExtensionsTests
 {
     [Fact]

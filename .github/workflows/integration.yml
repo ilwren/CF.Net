@@ -806,6 +806,58 @@ jobs:
                   handle.write(text + '\n')
           PY
 
+      # The observations a run makes - a quirk Cloudflare has, a response shape it does not publish, a
+      # setting this zone does not report - used to travel inside the call transcript, where the ten
+      # annotations per step that GitHub keeps were already spoken for by the outcome tally, the skip
+      # table and the transcript chunks. That is how the batch response this suite exists to record went
+      # missing once. They get their own step, and therefore their own budget.
+      - name: Report what the run learned
+        if: always()
+        shell: bash
+        run: |
+          set -o pipefail
+          export CLOUDFLARE_IT_REPORT="${CLOUDFLARE_IT_REPORT:-$RUNNER_TEMP/integration-report.tsv}"
+          if [ ! -f "$CLOUDFLARE_IT_REPORT" ]; then
+            echo "No run report was written."
+            exit 0
+          fi
+
+          PY=$(command -v python3 || command -v python || true)
+          if [ -z "$PY" ]; then echo "no python"; exit 0; fi
+          "$PY" - <<'PY'
+          import os
+
+          report = os.environ.get('CLOUDFLARE_IT_REPORT')
+          observations = []
+          if report and os.path.exists(report):
+              with open(report, encoding='utf-8') as handle:
+                  for line in handle.read().splitlines():
+                      fields = line.split('\t')
+                      # INFO lines whose subject is 'configuration' are what Warn() writes; every other
+                      # INFO line is one row of the call transcript.
+                      if len(fields) >= 3 and fields[0].upper() == 'INFO' and fields[1] == 'configuration':
+                          observations.append(fields[2])
+
+          if not observations:
+              print('Nothing to report beyond the call transcript.')
+              raise SystemExit(0)
+
+          body = '\n'.join(['### What this run learned', ''] +
+                            ['- ' + observation for observation in observations])
+          summary = os.environ.get('GITHUB_STEP_SUMMARY')
+          if summary:
+              with open(summary, 'a', encoding='utf-8') as handle:
+                  handle.write(body + '\n')
+          print(body)
+
+          for observation in observations[:9]:
+              safe = observation.replace('%', '%25').replace('\r', '%0D').replace('\n', '%0A')
+              print('::notice::Learned: ' + safe[:1600])
+          if len(observations) > 9:
+              print('::notice::Learned: and ' + str(len(observations) - 9) +
+                    ' more observation(s), listed in the job summary')
+          PY
+
       - name: Show what was recorded
         if: always() && github.event_name == 'workflow_dispatch' && github.event.inputs.cassette != ''
         run: |

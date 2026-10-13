@@ -237,6 +237,64 @@
           </StackPanel>
         </TabItem>
 
+        <!-- ============================ DNSSEC ============================ -->
+        <TabItem Header="DNSSEC">
+          <StackPanel Orientation="Vertical" MaxWidth="900" HorizontalAlignment="Left" Margin="0,10,0,0">
+
+            <Border Classes="card">
+              <StackPanel Orientation="Vertical" Spacing="10">
+                <TextBlock Classes="h2" Text="DNSSEC state  -  GET /zones/{zone_id}/dnssec" />
+                <StackPanel Orientation="Horizontal" Spacing="10">
+                  <TextBlock Text="Zone id" Width="140" VerticalAlignment="Center" />
+                  <TextBox Text="{Binding DnssecZoneId, Mode=TwoWay}" MinWidth="380" PlaceholderText="blank uses the configured default zone" />
+                </StackPanel>
+                <WrapPanel Orientation="Horizontal">
+                  <Button Classes="run" Content="Get DNSSEC" Command="{Binding GetDnssecCommand}" Margin="0,0,8,0" />
+                  <Button Content="List Zone Signing Keys" Command="{Binding ListDnssecZsksCommand}" />
+                </WrapPanel>
+                <TextBlock Classes="hint" Text="The result carries the DS record as one string plus the parts it is assembled from - key tag, algorithm, digest, digest type - so either form can be handed to a registrar. Permissions are DNS Read and DNS Write, not the zone settings ones, which is why this is its own service rather than another zone setting." TextWrapping="Wrap" />
+                <TextBlock Classes="hint" Text="The ZSK list comes back in PascalCase - DNSKEY, Hdr, Rdlength - because Cloudflare serialises DNS library structs there, unlike every other endpoint. Two of its five fields have no published type, so they arrive untyped rather than guessed." TextWrapping="Wrap" />
+              </StackPanel>
+            </Border>
+
+            <Border Classes="card">
+              <StackPanel Orientation="Vertical" Spacing="10">
+                <TextBlock Classes="h2" Text="Enable, disable, delete  -  PATCH and DELETE /zones/{zone_id}/dnssec" />
+                <WrapPanel Orientation="Horizontal">
+                  <Button Classes="run" Content="Enable" Command="{Binding EnableDnssecCommand}" Margin="0,0,8,0" />
+                  <Button Content="Disable" Command="{Binding DisableDnssecCommand}" Margin="0,0,8,0" />
+                  <Button Content="Delete the records" Command="{Binding DeleteDnssecCommand}" />
+                </WrapPanel>
+                <TextBlock Classes="hint" Text="Enabling is two phases and only the first is ours: the call sends status active, the zone reports pending, and it stays pending until the DS record above is published at the registrar, at which point it becomes active. Get DNSSEC again to watch that happen." TextWrapping="Wrap" />
+                <TextBlock Classes="hint" Text="Disabling mirrors it with its own waiting state, pending-disabled, which lasts until the registrar drops the DS record. Remove the DS record at the registrar first: turning signing off while it is still published breaks resolution for validating resolvers." TextWrapping="Wrap" />
+                <TextBlock Classes="hint" Text="Delete removes the records without going through either waiting state, and its result is a bare string rather than an object - one of the few endpoints in the API that answers that way, so the result pane shows the text itself." TextWrapping="Wrap" />
+              </StackPanel>
+            </Border>
+
+            <Border Classes="card">
+              <StackPanel Orientation="Vertical" Spacing="10">
+                <TextBlock Classes="h2" Text="Signing switches  -  PATCH /zones/{zone_id}/dnssec" />
+                <StackPanel Orientation="Horizontal" Spacing="10">
+                  <TextBlock Text="Multi-signer" Width="140" VerticalAlignment="Center" />
+                  <TextBox Text="{Binding DnssecMultiSigner, Mode=TwoWay}" MinWidth="380" PlaceholderText="true, false, or blank to leave it" />
+                </StackPanel>
+                <StackPanel Orientation="Horizontal" Spacing="10">
+                  <TextBlock Text="Presigned" Width="140" VerticalAlignment="Center" />
+                  <TextBox Text="{Binding DnssecPresigned, Mode=TwoWay}" MinWidth="380" PlaceholderText="true, false, or blank to leave it" />
+                </StackPanel>
+                <StackPanel Orientation="Horizontal" Spacing="10">
+                  <TextBlock Text="Use NSEC3" Width="140" VerticalAlignment="Center" />
+                  <TextBox Text="{Binding DnssecUseNsec3, Mode=TwoWay}" MinWidth="380" PlaceholderText="true, false, or blank to leave it" />
+                </StackPanel>
+                <Button Classes="run" Content="Patch the switches" Command="{Binding UpdateDnssecSigningCommand}" />
+                <TextBlock Classes="hint" Text="This PATCH merges: only the boxes that are filled in are sent, so the enabled state is untouched when only switches change. Multi-signer lets several providers sign the same zone and is required before DNSKEY records other than Cloudflare's own can be added; presigned lets an already-signed zone transfer in as secondary; NSEC3 replaces NSEC, generated per request unless presigned is on." TextWrapping="Wrap" />
+                <TextBlock Classes="hint" Text="Only two of the five statuses can be asked for - active and disabled - and a body that changes nothing is refused here rather than sent. pending, pending-disabled and error are states Cloudflare reports, not instructions. A box holding anything other than true, 1, yes, false, 0 or no counts as blank, so a typo leaves that switch alone instead of sending nonsense." TextWrapping="Wrap" />
+              </StackPanel>
+            </Border>
+
+          </StackPanel>
+        </TabItem>
+
         <!-- ============================ settings ============================ -->
         <TabItem Header="Settings">
           <StackPanel Orientation="Vertical" MaxWidth="900" HorizontalAlignment="Left" Margin="0,10,0,0">

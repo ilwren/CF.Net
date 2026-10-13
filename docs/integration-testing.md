@@ -426,7 +426,12 @@ Always safe. They run whenever credentials are present.
 | `D1_databases_can_be_listed_and_queried` | `/d1/database`, plus `SELECT 1` and `FirstColumn<int>` |
 | `Kv_namespaces_can_be_listed` | `/storage/kv/namespaces` |
 | `R2_buckets_can_be_listed` | `/r2/buckets`, including the `{buckets:[…]}` unwrap |
-| `Every_product_area_is_reachable_through_the_client_facade` | all twelve services wired to one transport |
+| `Ssl_certificate_packs_and_the_enrolment_settings_can_be_read` | `/ssl/certificate_packs` with `per_page`, `/ssl/universal/settings`, and the three enrolment settings Cloudflare files under SSL - `ssl/auto_origin_tls_kex`, `ssl/automatic_mode` and `ssl/origin_tls_compliance_modes` |
+| `Custom_hostnames_can_be_listed_and_the_fallback_origin_read` | `/custom_hostnames` with its filters, and `/custom_hostnames/fallback_origin`, whose own `errors` array of plain strings is read back inside a successful response |
+| `Origin_tls_client_auth_settings_and_certificates_can_be_read` | `/origin_tls_client_auth/settings`, `…/hostnames/certificates`, and the deprecated zone-level list - asserted to log the private key's length and never the key |
+| `Dnssec_state_can_be_read_without_changing_it` | `/dnssec`, read-only on purpose: enabling would leave the zone `pending` on a DS record no test run can publish at the registrar, and disabling a signed zone would break resolution |
+| `Dnssec_zone_signing_keys_can_be_listed` | `/dnssec/zsk`, the one call that proves the PascalCase payload against the real API rather than a fixture; an unsigned zone answering with an empty list is a normal result |
+| `Every_product_area_is_reachable_through_the_client_facade` | all thirteen services wired to one transport |
 | `An_insufficiently_scoped_token_is_reported_as_an_authentication_failure` | 403/404 map onto `IsAuthenticationFailure` / `IsNotFound` |
 
 ### `WriteIntegrationTests`

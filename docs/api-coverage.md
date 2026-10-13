@@ -75,7 +75,60 @@ Record types modelled with constants and typed data: `A`, `AAAA`, `CAA`, `CERT`,
 `DnsRecordSshfpData`, `DnsRecordDnskeyData`, `DnsRecordTlsaData`, `DnsRecordUriData`, … reachable
 through `DnsRecord.Data` and `DnsRecord.GetData<T>()`.
 
-⛔ DNS analytics, DNSSEC, custom nameservers, secondary zone transfers.
+⛔ DNS analytics and secondary zone transfers.
+
+⛔ `GET` and `PUT /zones/{zone_id}/custom_ns`. Both are **deprecated** by Cloudflare in favour of the DNS
+settings view, both serve the partner flow (`/tenants/{tenant_tag}/custom_ns`), and the supported
+replacement is already wrapped here through the zone settings above. That is why these are skipped where the
+deprecated `origin_tls_client_auth` endpoints were not: those are still the only way to read and dismantle an
+existing zone-level client certificate, so a wrapper is the difference between supported and stranded, while
+these have a live replacement. The `PUT` is also worth knowing about rather than calling — its `result` is a
+bare string, not an object, and its response reports which of the 1–5 nameserver sets the zone is on.
+
+---
+
+## DNSSEC
+
+`IDnssecService` — `client.Dnssec`. Cloudflare files DNSSEC under `dns`, beside `dns_records`, and it takes
+`DNS Read` / `DNS Write` rather than the zone-settings permissions, so it has its own service instead of
+hanging off `IZonesService`.
+
+| Method | Endpoint | Notes |
+| --- | --- | --- |
+| `GetAsync(zoneId)` | `GET /zones/{zone_id}/dnssec` | `Dnssec`, all fourteen published fields: `status`, `modified_on`, the DS record and its parts (`ds`, `key_tag`, `algorithm`, `digest`, `digest_algorithm`, `digest_type`, `flags`, `key_type`, `public_key`) and the three signing switches |
+| `UpdateAsync(UpdateDnssecRequest, zoneId)` | `PATCH /zones/{zone_id}/dnssec` | a **merge**, not a replace: only the fields that are set are sent, so the signing switches can change without touching the enabled state |
+| `EnableAsync(zoneId)` / `DisableAsync(zoneId)` | `PATCH …/dnssec` | conveniences for `{"status":"active"}` and `{"status":"disabled"}` |
+| `DeleteAsync(zoneId)` | `DELETE /zones/{zone_id}/dnssec` | the `result` is a **bare string**, not an object, so this returns `Task<string?>` |
+| `ListZoneSigningKeysAsync(zoneId)` | `GET /zones/{zone_id}/dnssec/zsk` | an array, with no paging and no filters |
+
+Two status lists, deliberately not one:
+
+- `DnssecStatuses.All` — the five the response reports: `active`, `pending`, `disabled`, `pending-disabled`,
+  `error`.
+- `DnssecSettableStatuses.All` — the two the PATCH accepts: `active`, `disabled`.
+
+`UpdateDnssecRequest.EnsureValid()` rejects the other three locally, because `pending`, `pending-disabled`
+and `error` are outcomes Cloudflare computes from the desired state plus what the registrar has published,
+not states a caller can ask for. `EnsureValid()` also rejects a request that sets nothing at all: an empty
+PATCH is a round trip that cannot do anything.
+
+The waiting states are the part that trips people up. Enabling returns `pending` and stays there until the DS
+record from `Dnssec.Ds` is published at the registrar; disabling returns `pending-disabled` until the
+registrar drops it. Neither is a failure, and neither can be finished through this API — poll `GetAsync`.
+`Dnssec.IsActive` is true only for `active`, and `IsPending` covers both waiting states. Disabling before the
+DS record is removed breaks resolution for validating resolvers, so the record goes first and
+`DisableAsync` follows.
+
+The ZSK response is spelled in **PascalCase** — `DNSKEY`, `Hdr`, `Rdlength`, `Rrtype`, `Ttl` — because
+Cloudflare is serialising DNS library structs straight out, which no other endpoint in the API does; the names
+are pinned with explicit `[JsonPropertyName]` rather than left to the snake_case policy.
+`DnssecRecordHeader` carries all five published header fields, and `DnssecDnsKey.IsKeySigningKey` reads the
+`257`-vs-`256` flag distinction. The schema counts five fields on the ZSK wrapper and five on `DNSKEY`, but
+only `DNSKEY`'s contents are published: `DnssecZoneSigningKey` types that one and leaves `Location`, `Name`
+and the other two in `AdditionalData` rather than inventing types for fields whose types have not been
+confirmed — a guessed property is worse than an untyped one, because it looks like a contract.
+
+⛔ Nothing in DNSSEC itself. The undocumented remainder of the ZSK payload is described above.
 
 ---
 
@@ -429,8 +482,17 @@ back positive, and every asset 404s forever. A wrapper that cannot be verified o
 error is worse than no wrapper, so this library hands over the token (`GetUploadTokenAsync`) and leaves the
 bytes to wrangler, which is the supported path.
 
-⛔ Functions routes and the `_headers`/`_redirects` equivalents. Build logs and the deployment lifecycle are
-covered above.
+**There is no Functions-routes, `_headers` or `_redirects` endpoint to wrap**, and this line used to promise
+one. All three are files rather than resources: `_headers` and `_redirects` are plain-text files in the build
+output, and a Function's routes come from the `/functions` directory, with `_routes.json` generated from it
+(`version`, `include`, `exclude`, where an exclude always wins). The Pages resource exposes projects,
+deployments, deployments history logs and domains and nothing else, so the only API-level view of those files
+is the assets they were built into. Two consequences worth keeping: a redirect set larger than `_redirects`
+allows (2,000 static plus 100 dynamic, each declaration under 1,000 characters) belongs in **Bulk Redirects**,
+which this library does not wrap yet; and neither file applies to a response a Pages Function generated, so a
+Function sets its own headers on the `Response` it returns.
+
+⛔ Build logs and the deployment lifecycle are covered above; Bulk Redirects is the real remaining gap.
 
 ## D1
 

@@ -48,6 +48,10 @@ public sealed class ZonesViewModel : ModuleViewModelBase
     private string _bulkSettingsJson = string.Empty;
     private string _zoneFile = string.Empty;
     private string _importProxied = string.Empty;
+    private string _dnssecZoneId = string.Empty;
+    private string _dnssecMultiSigner = string.Empty;
+    private string _dnssecPresigned = string.Empty;
+    private string _dnssecUseNsec3 = string.Empty;
 
     /// <summary>Creates the page.</summary>
     /// <param name="gallery">Owning shell.</param>
@@ -83,6 +87,12 @@ public sealed class ZonesViewModel : ModuleViewModelBase
         DnsCreateAddressCommand = new RelayCommand(DnsCreateAddressAsync);
         DnsCreateCnameCommand = new RelayCommand(DnsCreateCnameAsync);
         DnsCreateTxtCommand = new RelayCommand(DnsCreateTxtAsync);
+        GetDnssecCommand = new RelayCommand(GetDnssecAsync);
+        EnableDnssecCommand = new RelayCommand(EnableDnssecAsync);
+        DisableDnssecCommand = new RelayCommand(DisableDnssecAsync);
+        UpdateDnssecSigningCommand = new RelayCommand(UpdateDnssecSigningAsync);
+        DeleteDnssecCommand = new RelayCommand(DeleteDnssecAsync);
+        ListDnssecZsksCommand = new RelayCommand(ListDnssecZsksAsync);
     }
 
     /// <inheritdoc />
@@ -298,6 +308,36 @@ public sealed class ZonesViewModel : ModuleViewModelBase
 
     /// <summary>Creates a TXT record, which is never proxied.</summary>
     public RelayCommand DnsCreateTxtCommand { get; }
+
+    /// <summary>Reads DNSSEC, including the DS record a registrar needs.</summary>
+    public RelayCommand GetDnssecCommand { get; }
+
+    /// <summary>Turns DNSSEC on; the zone then waits on the registrar.</summary>
+    public RelayCommand EnableDnssecCommand { get; }
+
+    /// <summary>Turns DNSSEC off.</summary>
+    public RelayCommand DisableDnssecCommand { get; }
+
+    /// <summary>Changes the three signing switches without touching the enabled state.</summary>
+    public RelayCommand UpdateDnssecSigningCommand { get; }
+
+    /// <summary>Deletes the zone's DNSSEC records.</summary>
+    public RelayCommand DeleteDnssecCommand { get; }
+
+    /// <summary>Lists the Zone Signing Keys.</summary>
+    public RelayCommand ListDnssecZsksCommand { get; }
+
+    /// <summary>Zone the DNSSEC calls run against; blank uses the configured default.</summary>
+    public string DnssecZoneId { get => _dnssecZoneId; set => SetProperty(ref _dnssecZoneId, value); }
+
+    /// <summary>Multi-signer DNSSEC: <c>true</c>, <c>false</c>, or blank to leave it alone.</summary>
+    public string DnssecMultiSigner { get => _dnssecMultiSigner; set => SetProperty(ref _dnssecMultiSigner, value); }
+
+    /// <summary>Take an externally signed zone as secondary: <c>true</c>, <c>false</c>, or blank.</summary>
+    public string DnssecPresigned { get => _dnssecPresigned; set => SetProperty(ref _dnssecPresigned, value); }
+
+    /// <summary>Use NSEC3 rather than NSEC: <c>true</c>, <c>false</c>, or blank.</summary>
+    public string DnssecUseNsec3 { get => _dnssecUseNsec3; set => SetProperty(ref _dnssecUseNsec3, value); }
 
     /// <summary>Zone the settings and zone-file calls run against; blank uses the configured default.</summary>
     public string SettingZoneId { get => _settingZoneId; set => SetProperty(ref _settingZoneId, value); }
@@ -563,6 +603,29 @@ public sealed class ZonesViewModel : ModuleViewModelBase
 
     private string RecordId() =>
         Blank(DnsRecordId) ?? throw new ArgumentException("Enter a record id - list the records first and copy it from the result.");
+
+    private Task GetDnssecAsync() => RunAsync("Get DNSSEC", async () =>
+        await Client.Dnssec.GetAsync(ZoneIdFor(DnssecZoneId)));
+
+    private Task EnableDnssecAsync() => RunAsync("Enable DNSSEC", async () =>
+        await Client.Dnssec.EnableAsync(ZoneIdFor(DnssecZoneId)));
+
+    private Task DisableDnssecAsync() => RunAsync("Disable DNSSEC", async () =>
+        await Client.Dnssec.DisableAsync(ZoneIdFor(DnssecZoneId)));
+
+    private Task UpdateDnssecSigningAsync() => RunAsync("Change the DNSSEC signing switches", async () =>
+        await Client.Dnssec.UpdateAsync(
+            UpdateDnssecRequest.SigningOptions(
+                OptionalBool(DnssecMultiSigner),
+                OptionalBool(DnssecPresigned),
+                OptionalBool(DnssecUseNsec3)),
+            ZoneIdFor(DnssecZoneId)));
+
+    private Task DeleteDnssecAsync() => RunAsync("Delete DNSSEC records", async () =>
+        await Client.Dnssec.DeleteAsync(ZoneIdFor(DnssecZoneId)));
+
+    private Task ListDnssecZsksAsync() => RunAsync("List DNSSEC ZSKs", async () =>
+        await Client.Dnssec.ListZoneSigningKeysAsync(ZoneIdFor(DnssecZoneId)));
 
     private string? ZoneIdFor(string? explicitZoneId) => Blank(explicitZoneId) ?? Blank(ZoneId);
 }

@@ -312,6 +312,7 @@ public class CloudflareClientTests
         Assert.Same(transport, ((ICloudflareClient)client).Transport);
         Assert.IsAssignableFrom<IZonesService>(client.Zones);
         Assert.IsAssignableFrom<IDnsRecordsService>(client.DnsRecords);
+        Assert.IsAssignableFrom<IDnssecService>(client.Dnssec);
         Assert.IsAssignableFrom<IWorkersScriptsService>(client.Workers);
         Assert.IsAssignableFrom<IPagesProjectsService>(client.Pages);
         Assert.IsAssignableFrom<ID1DatabaseService>(client.D1);
@@ -504,6 +505,7 @@ public class ServiceCollectionExtensionsTests
         // Each service resolves to the same singleton the client exposes.
         Assert.Same(client.Zones, provider.GetRequiredService<IZonesService>());
         Assert.Same(client.DnsRecords, provider.GetRequiredService<IDnsRecordsService>());
+        Assert.Same(client.Dnssec, provider.GetRequiredService<IDnssecService>());
         Assert.Same(client.Workers, provider.GetRequiredService<IWorkersScriptsService>());
         Assert.Same(client.Pages, provider.GetRequiredService<IPagesProjectsService>());
         Assert.Same(client.D1, provider.GetRequiredService<ID1DatabaseService>());

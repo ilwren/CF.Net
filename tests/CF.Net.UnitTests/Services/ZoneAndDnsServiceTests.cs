@@ -3480,3 +3480,400 @@ public class OriginTlsClientAuthServiceTests
         Assert.Equal("void", new OriginTlsHostnameAssociation { Hostname = null }.ToString());
     }
 }
+
+public class DnssecServiceTests
+{
+    private const string RootPath = "/client/v4/zones/zone-5678/dnssec";
+
+    private const string ZskPath = RootPath + "/zsk";
+
+    private const string DsRecord = "example.com. 3600 IN DS 12345 13 2 ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789";
+
+    private const string DnssecJson = """
+        {
+          "algorithm": "13",
+          "digest": "ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789",
+          "digest_algorithm": "SHA256",
+          "digest_type": "2",
+          "dnssec_multi_signer": false,
+          "dnssec_presigned": false,
+          "dnssec_use_nsec3": false,
+          "ds": "example.com. 3600 IN DS 12345 13 2 ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789",
+          "flags": 257,
+          "key_tag": 12345,
+          "key_type": "ECDSAP256SHA256",
+          "modified_on": "2026-10-01T09:00:00Z",
+          "public_key": "mGt8lqBbYcVW4pQ0vN2xR7sT9uY1aB3cD5eF7gH9iJ0kL2mN4oP6qR8sT0uV2wX4",
+          "status": "active",
+          "some_new_dnssec_field": "kept"
+        }
+        """;
+
+    private const string ZskJson = """
+        [
+          {
+            "DNSKEY": {
+              "Algorithm": 13,
+              "Flags": 257,
+              "Hdr": {
+                "Class": 1,
+                "Name": "example.com.",
+                "Rdlength": 67,
+                "Rrtype": 48,
+                "Ttl": 3600
+              },
+              "Protocol": 3,
+              "PublicKey": "mGt8lqBbYcVW4pQ0vN2xR7sT9uY1aB3cD5eF7gH9iJ0kL2mN4oP6qR8sT0uV2wX4"
+            },
+            "Location": "us-east",
+            "Name": "example.com.",
+            "KeyTag": 12345,
+            "some_new_zsk_field": true
+          }
+        ]
+        """;
+
+    [Fact]
+    public async Task GetAsync_reads_every_published_field_including_the_DS_record()
+    {
+        using var harness = CloudflareHarness.Create();
+        harness.RespondWithResult(DnssecJson);
+
+        var dnssec = await harness.Client.Dnssec.GetAsync();
+
+        Assert.Equal(HttpMethod.Get, harness.LastRequest.Method);
+        Assert.Equal(RootPath, harness.LastRequest.Path);
+        Assert.Equal(string.Empty, harness.LastRequest.Query);
+
+        Assert.Equal(DnssecStatuses.Active, dnssec.Status);
+        Assert.Equal(DsRecord, dnssec.Ds);
+        Assert.Equal(12345, dnssec.KeyTag);
+        Assert.Equal(257, dnssec.Flags);
+        Assert.Equal("13", dnssec.Algorithm);
+        Assert.Equal("2", dnssec.DigestType);
+        Assert.Equal("SHA256", dnssec.DigestAlgorithm);
+        Assert.Equal("ECDSAP256SHA256", dnssec.KeyType);
+        Assert.StartsWith("ABCDEF0123", dnssec.Digest, StringComparison.Ordinal);
+        Assert.StartsWith("mGt8lqBb", dnssec.PublicKey, StringComparison.Ordinal);
+        Assert.Equal(2026, dnssec.ModifiedOn?.Year);
+
+        // The three signing switches are separate features, not one "advanced" blob.
+        Assert.False(dnssec.DnssecMultiSigner);
+        Assert.False(dnssec.DnssecPresigned);
+        Assert.False(dnssec.DnssecUseNsec3);
+
+        Assert.True(dnssec.IsActive);
+        Assert.False(dnssec.IsPending);
+        Assert.True(dnssec.AdditionalData!.ContainsKey("some_new_dnssec_field"));
+        Assert.Equal("active (key tag 12345, algorithm 13)", dnssec.ToString());
+    }
+
+    [Fact]
+    public async Task GetAsync_tells_a_signed_zone_from_the_two_waiting_states()
+    {
+        using var harness = CloudflareHarness.Create();
+        harness.RespondWithResult("""{ "status": "pending", "key_tag": 999 }""");
+        harness.RespondWithResult("""{ "status": "pending-disabled" }""");
+        harness.RespondWithResult("""{ "status": "disabled" }""");
+        harness.RespondWithResult("""{ "status": "error", "algorithm": "13" }""");
+
+        // Enabling is not finished when the call returns: the DS record has to reach the registrar first.
+        var pending = await harness.Client.Dnssec.GetAsync();
+        Assert.True(pending.IsPending);
+        Assert.False(pending.IsActive);
+        Assert.Equal("pending (key tag 999, algorithm unknown)", pending.ToString());
+
+        // Disabling has its own waiting state, and it is still "pending" as far as a caller cares.
+        var pendingDisabled = await harness.Client.Dnssec.GetAsync();
+        Assert.True(pendingDisabled.IsPending);
+        Assert.False(pendingDisabled.IsActive);
+        Assert.Equal("pending-disabled", pendingDisabled.ToString());
+
+        var disabled = await harness.Client.Dnssec.GetAsync();
+        Assert.False(disabled.IsPending);
+        Assert.False(disabled.IsActive);
+        Assert.Equal(DnssecStatuses.Disabled, disabled.Status);
+
+        var error = await harness.Client.Dnssec.GetAsync();
+        Assert.False(error.IsPending);
+        Assert.False(error.IsActive);
+        Assert.Equal(DnssecStatuses.Error, error.Status);
+        Assert.Equal(4, harness.RequestCount);
+    }
+
+    [Fact]
+    public async Task GetAsync_uses_the_configured_zone_and_accepts_an_explicit_one()
+    {
+        using var harness = CloudflareHarness.Create();
+        harness.RespondWithResult("""{ "status": "disabled" }""");
+        harness.RespondWithResult("""{ "status": "disabled" }""");
+
+        await harness.Client.Dnssec.GetAsync();
+        Assert.Equal(RootPath, harness.LastRequest.Path);
+
+        await harness.Client.Dnssec.GetAsync("other");
+        Assert.Equal("/client/v4/zones/other/dnssec", harness.LastRequest.Path);
+    }
+
+    [Fact]
+    public async Task GetAsync_throws_when_no_zone_id_is_available()
+    {
+        using var harness = CloudflareHarness.Create(options => options.ZoneId = null);
+
+        var exception = await Assert.ThrowsAsync<CloudflareConfigurationException>(() => harness.Client.Dnssec.GetAsync());
+
+        Assert.Contains("CLOUDFLARE_ZONE_ID", exception.Message, StringComparison.Ordinal);
+        Assert.Equal(0, harness.RequestCount);
+    }
+
+    [Fact]
+    public async Task GetAsync_surfaces_a_DNS_validation_error_with_its_code()
+    {
+        using var harness = CloudflareHarness.Create();
+        harness.RespondWithError(HttpStatusCode.BadRequest, 1004, "DNS Validation Error");
+
+        var exception = await Assert.ThrowsAsync<CloudflareApiException>(() => harness.Client.Dnssec.GetAsync());
+
+        Assert.Equal(HttpStatusCode.BadRequest, exception.StatusCode);
+        Assert.True(exception.HasErrorCode(1004));
+        Assert.True(exception.IsValidationFailure);
+        Assert.False(exception.IsRateLimited);
+    }
+
+    [Fact]
+    public async Task UpdateAsync_sends_only_the_fields_that_are_set()
+    {
+        using var harness = CloudflareHarness.Create();
+        harness.RespondWithResult(DnssecJson);
+        harness.RespondWithResult(DnssecJson);
+
+        await harness.Client.Dnssec.UpdateAsync(new UpdateDnssecRequest { Status = DnssecSettableStatuses.Active });
+        Assert.Equal(HttpMethod.Patch, harness.LastRequest.Method);
+        Assert.Equal(RootPath, harness.LastRequest.Path);
+        Assert.Equal("""{"status":"active"}""", harness.LastRequest.Body);
+
+        // A PATCH here merges: the status is untouched when only the switches are sent.
+        await harness.Client.Dnssec.UpdateAsync(
+            UpdateDnssecRequest.SigningOptions(multiSigner: true, useNsec3: false));
+        Assert.Equal("""{"dnssec_multi_signer":true,"dnssec_use_nsec3":false}""", harness.LastRequest.Body);
+    }
+
+    [Fact]
+    public async Task UpdateAsync_keeps_a_switch_that_is_turned_off_on_the_wire()
+    {
+        using var harness = CloudflareHarness.Create();
+        harness.RespondWithResult(DnssecJson);
+        harness.RespondWithResult(DnssecJson);
+
+        // The serializer drops nulls, not false values - "off" has to survive the round trip.
+        await harness.Client.Dnssec.UpdateAsync(UpdateDnssecRequest.SigningOptions(presigned: false));
+        Assert.Equal("""{"dnssec_presigned":false}""", harness.LastRequest.Body);
+
+        await harness.Client.Dnssec.UpdateAsync(
+            new UpdateDnssecRequest { DnssecUseNsec3 = false, DnssecMultiSigner = false });
+        Assert.Equal("""{"dnssec_multi_signer":false,"dnssec_use_nsec3":false}""", harness.LastRequest.Body);
+    }
+
+    [Theory]
+    [InlineData("pending")]
+    [InlineData("pending-disabled")]
+    [InlineData("error")]
+    public async Task UpdateAsync_rejects_the_three_statuses_only_Cloudflare_can_report(string status)
+    {
+        using var harness = CloudflareHarness.Create();
+
+        var exception = await Assert.ThrowsAsync<CloudflareConfigurationException>(
+            () => harness.Client.Dnssec.UpdateAsync(new UpdateDnssecRequest { Status = status }));
+
+        Assert.Contains("a state Cloudflare reports", exception.Message, StringComparison.Ordinal);
+        Assert.Equal(0, harness.RequestCount);
+    }
+
+    [Fact]
+    public async Task UpdateAsync_rejects_a_request_that_changes_nothing()
+    {
+        using var harness = CloudflareHarness.Create();
+
+        var exception = await Assert.ThrowsAsync<CloudflareConfigurationException>(
+            () => harness.Client.Dnssec.UpdateAsync(new UpdateDnssecRequest()));
+
+        Assert.Contains("something to change", exception.Message, StringComparison.Ordinal);
+        Assert.Equal(0, harness.RequestCount);
+    }
+
+    [Fact]
+    public async Task UpdateAsync_throws_before_sending_when_the_request_is_null()
+    {
+        using var harness = CloudflareHarness.Create();
+
+        await Assert.ThrowsAsync<ArgumentNullException>(
+            () => harness.Client.Dnssec.UpdateAsync(null!));
+
+        Assert.Equal(0, harness.RequestCount);
+    }
+
+    [Fact]
+    public async Task EnableAsync_and_DisableAsync_send_the_two_settable_statuses()
+    {
+        using var harness = CloudflareHarness.Create();
+        harness.RespondWithResult("""{ "status": "pending", "ds": "example.com. 3600 IN DS 12345 13 2 ABCD" }""");
+        harness.RespondWithResult("""{ "status": "pending-disabled" }""");
+
+        var enabled = await harness.Client.Dnssec.EnableAsync();
+        Assert.Equal(HttpMethod.Patch, harness.LastRequest.Method);
+        Assert.Equal(RootPath, harness.LastRequest.Path);
+        Assert.Equal("""{"status":"active"}""", harness.LastRequest.Body);
+
+        // The DS record is what the caller has to hand to the registrar, so it comes back on the enable.
+        Assert.Contains("IN DS 12345", enabled.Ds, StringComparison.Ordinal);
+        Assert.True(enabled.IsPending);
+
+        var disabled = await harness.Client.Dnssec.DisableAsync();
+        Assert.Equal("""{"status":"disabled"}""", harness.LastRequest.Body);
+        Assert.True(disabled.IsPending);
+        Assert.False(disabled.IsActive);
+    }
+
+    [Fact]
+    public async Task DeleteAsync_returns_the_bare_string_result_and_null_when_there_is_none()
+    {
+        using var harness = CloudflareHarness.Create();
+        harness.Respond("""{"success":true,"errors":[],"messages":[],"result":"DNSSEC records deleted"}""");
+        harness.Respond("""{"success":true,"errors":[],"messages":[],"result":null}""");
+
+        // One of the few endpoints whose result is a string rather than an object.
+        var message = await harness.Client.Dnssec.DeleteAsync();
+        Assert.Equal(HttpMethod.Delete, harness.LastRequest.Method);
+        Assert.Equal(RootPath, harness.LastRequest.Path);
+        Assert.Equal("DNSSEC records deleted", message);
+
+        Assert.Null(await harness.Client.Dnssec.DeleteAsync());
+    }
+
+    [Fact]
+    public async Task DeleteAsync_throws_when_Cloudflare_reports_a_failure()
+    {
+        using var harness = CloudflareHarness.Create();
+        harness.RespondWithError(HttpStatusCode.Forbidden, 10000, "Zone is not yours");
+
+        var exception = await Assert.ThrowsAsync<CloudflareApiException>(() => harness.Client.Dnssec.DeleteAsync());
+
+        Assert.True(exception.HasErrorCode(10000));
+        Assert.Equal(HttpStatusCode.Forbidden, exception.StatusCode);
+    }
+
+    [Fact]
+    public async Task ListZoneSigningKeysAsync_reads_the_PascalCase_payload()
+    {
+        using var harness = CloudflareHarness.Create();
+        harness.RespondWithResult(ZskJson);
+
+        var keys = await harness.Client.Dnssec.ListZoneSigningKeysAsync();
+
+        Assert.Equal(HttpMethod.Get, harness.LastRequest.Method);
+        Assert.Equal(ZskPath, harness.LastRequest.Path);
+        Assert.Equal(string.Empty, harness.LastRequest.Query);
+
+        var key = Assert.Single(keys);
+        Assert.Equal(13, key.DnsKey!.Algorithm);
+        Assert.Equal(257, key.DnsKey.Flags);
+        Assert.True(key.DnsKey.IsKeySigningKey);
+
+        // The header is the one nested object whose five fields are all published.
+        Assert.Equal("example.com.", key.DnsKey.Hdr!.Name);
+        Assert.Equal(1, key.DnsKey.Hdr.Class);
+        Assert.Equal(48, key.DnsKey.Hdr.Rrtype);
+        Assert.Equal(67, key.DnsKey.Hdr.Rdlength);
+        Assert.Equal(3600, key.DnsKey.Hdr.Ttl);
+        Assert.Equal("example.com. type=48 class=1 ttl=3600", key.DnsKey.Hdr.ToString());
+
+        // This endpoint is spelled like a DNS library, not like the rest of the API, and the fields whose
+        // types are not published stay untyped rather than guessed.
+        Assert.True(key.AdditionalData!.ContainsKey("Location"));
+        Assert.True(key.AdditionalData.ContainsKey("Name"));
+        Assert.True(key.AdditionalData.ContainsKey("some_new_zsk_field"));
+        Assert.True(key.DnsKey.AdditionalData!.ContainsKey("Protocol"));
+        Assert.Equal("KSK flags=257 algorithm=13 name=example.com.", key.DnsKey.ToString());
+        // Four, not two: the schema counts five fields at this level and only DNSKEY is typed, so
+        // Location, Name, KeyTag and anything new all land in the extension data.
+        Assert.Equal("algorithm 13, flags 257, 4 untyped field(s)", key.ToString());
+    }
+
+    [Fact]
+    public async Task ListZoneSigningKeysAsync_returns_an_empty_list_and_never_pages()
+    {
+        using var harness = CloudflareHarness.Create();
+        harness.RespondWithResult("[]");
+
+        var keys = await harness.Client.Dnssec.ListZoneSigningKeysAsync();
+
+        Assert.Empty(keys);
+        Assert.DoesNotContain("per_page", harness.LastRequest.Query, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void A_ZSK_with_the_other_flag_is_a_zone_signing_key_not_a_key_signing_one()
+    {
+        var zsk = new DnssecDnsKey { Flags = 256, Algorithm = 13 };
+
+        Assert.False(zsk.IsKeySigningKey);
+        Assert.Equal("ZSK flags=256 algorithm=13 name=?", zsk.ToString());
+    }
+
+    [Fact]
+    public void The_reported_and_the_settable_statuses_stay_two_lists()
+    {
+        Assert.Equal(
+            new[] { "active", "pending", "disabled", "pending-disabled", "error" },
+            DnssecStatuses.All);
+        Assert.Equal(new[] { "active", "disabled" }, DnssecSettableStatuses.All);
+
+        // Every status that can be asked for can also be reported, and three cannot be asked for.
+        Assert.All(DnssecSettableStatuses.All, status => Assert.Contains(status, DnssecStatuses.All));
+        Assert.Equal(
+            DnssecSettableStatuses.All.Count + 3,
+            DnssecStatuses.All.Count);
+        Assert.DoesNotContain("pending", DnssecSettableStatuses.All);
+        Assert.DoesNotContain("error", DnssecSettableStatuses.All);
+    }
+
+    [Fact]
+    public void The_state_and_the_requests_describe_themselves()
+    {
+        Assert.Equal("(no DNSSEC state)", new Dnssec().ToString());
+        Assert.Equal("disabled", new Dnssec { Status = DnssecStatuses.Disabled }.ToString());
+        Assert.Equal("active", new Dnssec { Status = DnssecStatuses.Active, Algorithm = "13" }.ToString());
+        Assert.Equal("status active", UpdateDnssecRequest.Enable().ToString());
+        Assert.Equal("status disabled", UpdateDnssecRequest.Disable().ToString());
+        Assert.Equal("(no change)", new UpdateDnssecRequest().ToString());
+        Assert.Equal(
+            "multi-signer on, presigned off, NSEC3 on",
+            UpdateDnssecRequest.SigningOptions(true, false, true).ToString());
+        Assert.Equal(
+            "status active, NSEC3 off",
+            new UpdateDnssecRequest { Status = "active", DnssecUseNsec3 = false }.ToString());
+        Assert.Equal("(empty)", new DnssecZoneSigningKey().ToString());
+        Assert.Equal("2 untyped field(s)", new DnssecZoneSigningKey
+        {
+            AdditionalData = new Dictionary<string, JsonElement>
+            {
+                ["Location"] = default,
+                ["Name"] = default,
+            },
+        }.ToString());
+        Assert.Equal("? type=? class=? ttl=?", new DnssecRecordHeader().ToString());
+    }
+
+    [Fact]
+    public void The_signing_switches_are_independent_of_the_status()
+    {
+        var request = UpdateDnssecRequest.SigningOptions(useNsec3: true);
+
+        // Turning NSEC3 on does not enable DNSSEC, and the body says so by leaving the status out.
+        Assert.Null(request.Status);
+        Assert.True(request.DnssecUseNsec3);
+        Assert.Null(request.DnssecMultiSigner);
+        Assert.Null(request.DnssecPresigned);
+        request.EnsureValid();
+    }
+}

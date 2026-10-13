@@ -412,12 +412,13 @@ public class ReadOnlyIntegrationTests : CloudflareIntegrationTest
             return;
         }
 
-        // This is the smoke test for the facade: a single client, twelve services, all wired to the
+        // This is the smoke test for the facade: a single client, thirteen services, all wired to the
         // same transport and options instance.
         Assert.NotNull(Client.User);
         Assert.NotNull(Client.Accounts);
         Assert.NotNull(Client.Zones);
         Assert.NotNull(Client.DnsRecords);
+        Assert.NotNull(Client.Dnssec);
         Assert.NotNull(Client.Ssl);
         Assert.NotNull(Client.CustomHostnames);
         Assert.NotNull(Client.OriginTlsClientAuth);
@@ -1095,6 +1096,90 @@ public class WriteIntegrationTests : CloudflareIntegrationTest
         catch (CloudflareApiException exception) when (exception.StatusCode == System.Net.HttpStatusCode.Forbidden)
         {
             SkipUnless(false, $"The token cannot read origin TLS client auth on this zone (HTTP 403, Cloudflare error {exception.ErrorCode}). It needs 'SSL and Certificates Read'.");
+        }
+    }
+
+    [Fact]
+    public async Task Dnssec_state_can_be_read_without_changing_it()
+    {
+        if (!SkipWithoutZone())
+        {
+            return;
+        }
+
+        try
+        {
+            var dnssec = await RunZoneScopedAsync(() => Client.Dnssec.GetAsync());
+            if (dnssec is null)
+            {
+                return;
+            }
+
+            // Strictly read-only. Enabling DNSSEC would put the zone in 'pending' until a DS record is
+            // published at the registrar, which no test run can do, and disabling it on a zone that is
+            // already signed would break resolution for validating resolvers.
+            Log($"DNSSEC: {dnssec}");
+
+            // Every field in this response is optional, so a missing status is reported rather than
+            // asserted against - an empty string is not one of the five and the test would fail for the
+            // wrong reason.
+            if (dnssec.Status is { Length: > 0 } status)
+            {
+                Assert.Contains(status, DnssecStatuses.All);
+            }
+            else
+            {
+                Warn("DNSSEC came back with no status, which the schema allows but no zone has ever done.");
+            }
+
+            // A signed zone has to have the record a registrar would be given, and the summary that gets
+            // logged has to be short enough to read - the DS record itself is not a secret, it is published
+            // in DNS, but it is long.
+            if (dnssec.IsActive)
+            {
+                Assert.False(string.IsNullOrWhiteSpace(dnssec.Ds));
+                Assert.NotNull(dnssec.KeyTag);
+                Assert.False(dnssec.IsPending);
+            }
+
+            // The summary that gets logged stays short: status, key tag and algorithm, never the DS
+            // record or the public key, both of which are long.
+            Assert.True(dnssec.ToString().Length < 80, $"summary is too long to log: {dnssec}");
+        }
+        catch (CloudflareApiException exception) when (exception.StatusCode == System.Net.HttpStatusCode.Forbidden)
+        {
+            SkipUnless(false, $"The token cannot read DNSSEC on this zone (HTTP 403, Cloudflare error {exception.ErrorCode}). It needs 'DNS Read'.");
+        }
+    }
+
+    [Fact]
+    public async Task Dnssec_zone_signing_keys_can_be_listed()
+    {
+        if (!SkipWithoutZone())
+        {
+            return;
+        }
+
+        try
+        {
+            var keys = await Client.Dnssec.ListZoneSigningKeysAsync();
+
+            // An unsigned zone has no keys, so an empty list is a normal answer rather than a failure. This
+            // call is the one that proves the PascalCase payload - DNSKEY, Hdr, Rdlength - deserialises
+            // against the real API rather than only against a fixture.
+            Log($"DNSSEC zone signing keys: {keys.Count}");
+            foreach (var key in keys)
+            {
+                Log($"  {key.DnsKey} ({key})");
+                if (key.DnsKey?.Hdr?.Name is { } name)
+                {
+                    Assert.False(string.IsNullOrWhiteSpace(name));
+                }
+            }
+        }
+        catch (CloudflareApiException exception) when (exception.StatusCode == System.Net.HttpStatusCode.Forbidden)
+        {
+            SkipUnless(false, $"The token cannot list DNSSEC keys on this zone (HTTP 403, Cloudflare error {exception.ErrorCode}). It needs 'DNS Read'.");
         }
     }
 }

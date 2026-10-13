@@ -48,6 +48,9 @@ public interface ICloudflareClient : IDisposable
     /// <summary>DNS records inside a zone.</summary>
     IDnsRecordsService DnsRecords { get; }
 
+    /// <summary>DNSSEC for a zone, and the Zone Signing Keys behind it.</summary>
+    IDnssecService Dnssec { get; }
+
     /// <summary>SSL certificate packs inside a zone.</summary>
     ISslService Ssl { get; }
 

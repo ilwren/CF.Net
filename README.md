@@ -85,7 +85,7 @@ Console.WriteLine($"{zones.Count} of {zones.TotalCount} zones");
 
 `CloudflareClient.CreateFromEnvironment()` does the same thing from environment variables, and `CloudflareClientFactory` is available when you need several clients over one set of defaults.
 
-### The twelve services
+### The thirteen services
 
 | Property | Interface | Covers |
 | --- | --- | --- |
@@ -93,6 +93,7 @@ Console.WriteLine($"{zones.Count} of {zones.TotalCount} zones");
 | `client.Accounts` | `IAccountsService` | account discovery |
 | `client.Zones` | `IZonesService` | zones, activation checks, cache purge |
 | `client.DnsRecords` | `IDnsRecordsService` | DNS records, including typed SRV/LOC/MX data, zone file export and import |
+| `client.Dnssec` | `IDnssecService` | DNSSEC: the DS record and its parts, enable/disable/delete, the three signing switches, Zone Signing Keys |
 | `client.Ssl` | `ISslService` | certificate packs, Universal SSL, validation details, the enrolment settings Cloudflare files under SSL, the origin TLS compliance modes that bound them, certificate analysis |
 | `client.CustomHostnames` | `ICustomHostnamesService` | SSL for SaaS: custom hostnames, their certificates, the challenges that validate them and the zone-wide fallback origin |
 | `client.OriginTlsClientAuth` | `IOriginTlsClientAuthService` | mutual TLS towards the origin: the zone switch, per-hostname certificate associations, uploaded client certificates, and the deprecated zone-level ones |
@@ -149,7 +150,7 @@ builder.Services.AddCloudflare(options =>
 | `AddCloudflareHttpClient(configure?, httpClientName?, configureClient?)` | route through `IHttpClientFactory` |
 | `AddCloudflareClientFactory(configure?)` | several clients over shared defaults |
 
-Any of these registers `ICloudflareClient`, `CloudflareClient`, `ICloudflareTransport`, `ICloudflareClientFactory` and all twelve service interfaces, so you can inject exactly the surface you need:
+Any of these registers `ICloudflareClient`, `CloudflareClient`, `ICloudflareTransport`, `ICloudflareClientFactory` and all thirteen service interfaces, so you can inject exactly the surface you need:
 
 ```csharp
 public sealed class DnsProvisioner(IDnsRecordsService dns, IZonesService zones)
@@ -182,7 +183,7 @@ Registrations use `TryAdd*`, so registering your own `ICloudflareTransport` **be
 
 Phase 1 covers six product areas. See [docs/api-coverage.md](docs/api-coverage.md) for the endpoint-by-endpoint list.
 
-**Domains (Zones + DNS)** — list/get/create/update/delete zones, `ListAllAsync` across pages, activation checks, cache purge (everything, files, tags, hosts, prefixes, ignore-tags), DNS records with typed `A`/`AAAA`/`CNAME`/`TXT`/`MX`/`NS`/`SRV`/`CAA`/`LOC` data, `FindAsync`, PATCH and PUT semantics.
+**Domains (Zones + DNS)** — list/get/create/update/delete zones, `ListAllAsync` across pages, activation checks, cache purge (everything, files, tags, hosts, prefixes, ignore-tags), DNS records with typed `A`/`AAAA`/`CNAME`/`TXT`/`MX`/`NS`/`SRV`/`CAA`/`LOC` data, `FindAsync`, PATCH and PUT semantics, and DNSSEC — the DS record and its parts, enable/disable/delete, the multi-signer / presigned / NSEC3 switches, and the Zone Signing Keys.
 
 **Workers** — list/search scripts, get script metadata, download module content (base64 decoded for you), read `script-settings`, multipart upload with any mix of modules and bindings, delete, gradual deployments with percentage validation, account and per-script `workers.dev` subdomain.
 
@@ -306,7 +307,7 @@ so a missing recording fails loudly with `CassetteMissException` instead of quie
 dotnet run --project samples/CF.Net.Gallery
 ```
 
-- **Left-hand navigation**, one page per module: Domains, Workers, Pages, D1, KV, R2, SSL, Origin TLS — plus a Credentials page. The Domains page is tabbed, because zones, DNS records and zone settings are three different conversations.
+- **Left-hand navigation**, one page per module: Domains, Workers, Pages, D1, KV, R2, SSL, Origin TLS — plus a Credentials page. The Domains page is tabbed, because zones, DNS records, DNSSEC and zone settings are four different conversations.
 - **Every public service method is reachable from a button**, with two deliberate exceptions: `IUserService.VerifyTokenAsync` and `VerifyAccountTokenAsync`, which the Credentials page's connection check already drives — it tries the user-owned endpoint, then the account-owned one, and reports which answered.
 - **Credentials page** takes an API token or the legacy global key + email, the default account and zone ids, base address, timeout, retries and `ThrowOnApiError`. Values are pre-filled from the `CLOUDFLARE_*` environment variables and can optionally be saved to `%APPDATA%/CF.Net.Gallery/credentials.json` (plain text — opt-in, and off by default).
 - **Every page** lists the real operations with the real endpoint in its heading, and each button runs the corresponding library call.

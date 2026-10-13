@@ -298,11 +298,25 @@ jobs:
             # An empty body is refused before anything is purged, so this reads the permission without
             # touching the cache: 403 means Cache Purge is missing, a validation error means it is there.
             probe cache_purge "$zone/purge_cache" POST '{}'
+            # The endpoints below are wrapped in the library but their response shapes are not published
+            # anywhere this workflow can read, so the probe records what Cloudflare actually sends. That is
+            # what stops the next model from being a guess.
+            probe dns_export "$zone/dns_records/export"
+            probe dns_scan_list "$zone/dns_records/scan/review?per_page=1"
+            # Same empty-body trick as cache purge: an empty batch changes nothing, and 400 rather than 403
+            # is what proves DNS Write is there. The import endpoint is deliberately NOT probed - a POST
+            # there carries a zone file and a flag that can delete existing records first, and no empty body
+            # is worth that risk. Import needs DNS Write too, so this probe already covers it.
+            probe dns_batch "$zone/dns_records/batch" POST '{}'
           fi
 
           if [ -n "${CLOUDFLARE_ACCOUNT_ID:-}" ]; then
             account="$base/accounts/${CLOUDFLARE_ACCOUNT_ID}"
             probe account "$account"
+            # Every permission group this token could be given, with the key the token-creation URL wants.
+            # Guessing those keys has already produced two wrong URLs (Pages is 'page', R2 is 'workers_r2'),
+            # so the list comes from the API instead.
+            probe permission_groups "$account/tokens/permission_groups"
             probe workers_scripts "$account/workers/scripts?per_page=1"
             probe workers_domains "$account/workers/domains"
             probe pages "$account/pages/projects"
@@ -341,7 +355,16 @@ jobs:
                'SSL and Certificates - Read', 'ssl_and_certificates', 'read', ''),
               ('cache_purge', 'POST /zones/{zone_id}/purge_cache', 'Cache Purge - Purge', 'cache', 'purge',
                'probed with an empty body that Cloudflare refuses, so nothing is purged either way'),
+              ('dns_export', 'GET /zones/{zone_id}/dns_records/export', 'DNS - Read', 'dns', 'read',
+               'the BIND zone file; the shape recorded here is the one the library has to match'),
+              ('dns_scan_list', 'GET /zones/{zone_id}/dns_records/scan/review', 'DNS - Read', 'dns', 'read',
+               'a zone that has never been scanned answers with an empty list rather than an error'),
+              ('dns_batch', 'POST /zones/{zone_id}/dns_records/batch', 'DNS - Write', 'dns', 'edit',
+               'probed with an empty batch, which changes no records either way'),
               ('account', 'GET /accounts/{account_id}', 'Account Settings - Read', 'account_settings', 'read', ''),
+              ('permission_groups', 'GET /accounts/{account_id}/tokens/permission_groups',
+               'Account API Tokens - Read', 'account_api_tokens', 'read',
+               'lists every permission group with the key a token-creation URL needs'),
               ('workers_scripts', 'GET /accounts/{account_id}/workers/scripts', 'Workers Scripts - Read',
                'workers_scripts', 'read', ''),
               ('workers_domains', 'GET /accounts/{account_id}/workers/domains', 'Workers Scripts - Read',
@@ -363,6 +386,10 @@ jobs:
               'workers_scripts': 'edit', 'page': 'edit', 'd1': 'edit', 'workers_kv_storage': 'edit',
               'workers_r2': 'edit', 'cache': 'purge',
           }
+
+          # Probes that send a body Cloudflare is expected to refuse, so a validation error proves the
+          # permission is there without changing anything.
+          EMPTY_BODY_PROBES = {'cache_purge', 'dns_batch'}
 
           def read(label):
               status_file = os.path.join(temp, f'reach-{label}.status')
@@ -412,7 +439,11 @@ jobs:
               # a permission that is there as one that is not.
               return bool(status) and status.startswith('2')
 
-          granted = {key for label, _, _, key, _, _ in AREAS if answered(answers[label][0])}
+          # Granted as (key, type) pairs, not keys alone: DNS Read being there says nothing about DNS
+          # Write, and treating a 403 on the batch probe as "the group reads fine elsewhere" would send
+          # somebody hunting for a paid feature instead of adding a permission.
+          granted = {(key, ptype) for label, _, _, key, ptype, _ in AREAS
+                     if answered(answers[label][0])}
 
           rows = []
           missing = []
@@ -427,7 +458,7 @@ jobs:
               form = shape(payload)
               compact.append(f'{label}={status}[{form}]')
 
-              if label == 'cache_purge' and not answered(status) and status not in ('403', '404'):
+              if label in EMPTY_BODY_PROBES and not answered(status) and status not in ('403', '404'):
                   verdict = 'permission present - the empty body was refused, nothing was purged'
               elif answered(status):
                   verdict = f'readable ({form})'
@@ -440,7 +471,7 @@ jobs:
                       verdict = ("FORBIDDEN - this zone is outside the token's Zone Resources, or "
                                  f'CLOUDFLARE_ZONE_ID is not a zone in this account ({refused})')
                       scope.append(endpoint)
-                  elif key in granted:
+                  elif (key, ptype) in granted:
                       verdict = 'FORBIDDEN, but the same permission group read fine elsewhere - ' + (
                           note or 'a feature or entitlement limit rather than a missing permission')
                       entitlement.append((endpoint, group, note))
@@ -504,6 +535,25 @@ jobs:
               lines += ['**Refused but not a permission problem:**']
               lines += [f'- `{endpoint}` ({group}) - {note}' for endpoint, group, note in entitlement]
               lines.append('')
+
+          groups = []
+          pg_status, pg_payload = answers['permission_groups']
+          if answered(pg_status) and isinstance((pg_payload or {}).get('result'), list):
+              groups = pg_payload['result']
+
+          if groups:
+              wanted = ('ruleset', 'redirect', 'list', 'filter', 'firewall', 'waf', 'rate limit')
+              interesting = [g for g in groups
+                             if any(word in json.dumps(g).lower() for word in wanted)]
+              lines += ['#### Permission groups this account can grant', '',
+                        f'{len(groups)} groups in total. These are the ones that matter for the endpoints '
+                        'still to be wrapped - Bulk Redirects, the Rulesets API, firewall and WAF rules - and '
+                        'the `id` or key shown here is what a `permissionGroupKeys` URL has to carry:', '',
+                        '```json', json.dumps(interesting, indent=1)[:7000], '```', '',
+                        '<details><summary>All ' + str(len(groups)) + ' groups</summary>', '',
+                        '```json', json.dumps(groups)[:60000], '```', '', '</details>', '']
+              print('::notice::Permission groups for the next batch: ' +
+                    json.dumps(interesting, separators=(',', ':'))[:1500])
 
           def encode(permissions):
               return urllib.parse.quote(

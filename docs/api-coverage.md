@@ -92,6 +92,21 @@ Record types modelled with constants and typed data: `A`, `AAAA`, `CAA`, `CERT`,
 `DnsRecordSshfpData`, `DnsRecordDnskeyData`, `DnsRecordTlsaData`, `DnsRecordUriData`, … reachable
 through `DnsRecord.Data` and `DnsRecord.GetData<T>()`.
 
+Still unwrapped here, all four of them under **DNS Read / DNS Write** — the same permissions the methods
+above already use, so nothing new is needed in the token:
+
+| Endpoint | What it does |
+| --- | --- |
+| `POST /zones/{zone_id}/dns_records/batch` | sends deletes, patches, puts and posts in one call, always executed in that order, in a single database transaction — though propagation is not atomic, because Cloudflare's KV store treats each record change as its own key-value pair. Takes `include_shadow_metadata` as a query flag |
+| `POST /zones/{zone_id}/dns_records/scan/trigger` | starts a scan for records at the registrar, for a zone being onboarded |
+| `GET /zones/{zone_id}/dns_records/scan/review` | lists what the scan found |
+| `POST /zones/{zone_id}/dns_records/scan/review` | accepts or rejects the scanned records |
+
+`POST /zones/{zone_id}/dns_records/scan` is deliberately left out: Cloudflare marks it **Deprecated** and
+`scan/trigger` is the supported replacement, the same call made about `custom_ns`. There is no
+`GET /zones/{zone_id}/dns_records/usage` in the published API — an earlier note here claimed there was, and
+the records index does not list it; that note was wrong rather than the endpoint being missed.
+
 ⛔ DNS analytics and secondary zone transfers.
 
 ⛔ `GET` and `PUT /zones/{zone_id}/custom_ns`. Both are **deprecated** by Cloudflare in favour of the DNS

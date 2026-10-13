@@ -4,8 +4,8 @@ using System.Text.Json.Serialization;
 namespace CFNet.Serialization;
 
 /// <summary>
-/// Reads a blank JSON string as <see langword="null"/> for nullable value types, so a field Cloudflare
-/// empties out does not take the whole response with it.
+/// Reads a blank JSON string as <see langword="null"/> for the nullable date, time and GUID types, so a
+/// field Cloudflare empties out does not take the whole response with it.
 /// </summary>
 /// <remarks>
 /// <para>
@@ -17,17 +17,40 @@ namespace CFNet.Serialization;
 /// types costs nothing and keeps the rest of the payload.
 /// </para>
 /// <para>
-/// <see cref="JsonElement"/> is deliberately excluded: it is the escape hatch used by the fields this
-/// library intentionally leaves untyped, and a blank string there is data rather than an absent value.
+/// Only the types whose JSON value is <b>always</b> a string are covered: dates, times and GUIDs. Numbers,
+/// booleans and enums are deliberately left out, and the reason is worth knowing before widening this.
+/// <see cref="JsonSerializerOptions.NumberHandling"/> is set to
+/// <see cref="JsonNumberHandling.AllowReadingFromString"/> because Cloudflare sends some numbers as strings
+/// (<c>"file_size": "12345"</c>), and that behaviour lives in the built-in converters. Routing a read
+/// through a custom converter and on to <c>options.GetConverter(typeof(T))</c> loses it: a converter for
+/// <c>long?</c> installed here made <c>{"total":"42"}</c> throw
+/// <c>Cannot get the value of a token type 'String' as a number</c>, which is a worse trade than the blank
+/// string it was there to absorb. So for numeric and boolean types the built-in handling stands, and a
+/// blank string is left to fail loudly where the transport can report which field it was.
+/// </para>
+/// <para>
+/// <see cref="JsonElement"/> is excluded for the opposite reason: it is the escape hatch used by the fields
+/// this library intentionally leaves untyped, and a blank string there is data rather than an absent value.
 /// Writing is unaffected - a null still writes as <c>null</c>, and is still omitted entirely where
 /// <see cref="JsonIgnoreCondition.WhenWritingNull"/> applies.
 /// </para>
 /// </remarks>
 public sealed class BlankStringAsNullConverterFactory : JsonConverterFactory
 {
+    /// <summary>The underlying types whose JSON representation is a string, so a blank one can only mean "no value".</summary>
+    private static readonly HashSet<Type> StringValuedTypes = new()
+    {
+        typeof(DateTimeOffset),
+        typeof(DateTime),
+        typeof(TimeSpan),
+        typeof(DateOnly),
+        typeof(TimeOnly),
+        typeof(Guid),
+    };
+
     /// <inheritdoc />
     public override bool CanConvert(Type typeToConvert) =>
-        Nullable.GetUnderlyingType(typeToConvert) is { } underlying && underlying != typeof(JsonElement);
+        Nullable.GetUnderlyingType(typeToConvert) is { } underlying && StringValuedTypes.Contains(underlying);
 
     /// <inheritdoc />
     public override JsonConverter CreateConverter(Type typeToConvert, JsonSerializerOptions options) =>

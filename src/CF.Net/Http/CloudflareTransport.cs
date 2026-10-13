@@ -384,8 +384,10 @@ public sealed class CloudflareTransport : ICloudflareTransport, IDisposable
         // read in full: Success fell back to the status code, Result fell back to default, and the parser's
         // diagnosis went to a logger nobody had attached. Fail loudly instead, naming the field it choked on.
         // The envelope check matters - endpoints that answer with a bare array or with script content are
-        // not envelopes, and those legitimately parse to nothing here.
-        if (parseFailure is not null && raw.IsSuccessStatusCode && HasEnvelopeRoot(body))
+        // not envelopes, and those legitimately parse to nothing here. ThrowOnApiError = false is honoured
+        // too: a caller that asked to inspect failures itself gets the response, with the body Cloudflare
+        // sent on RawBody and this parse failure in the log, rather than an exception.
+        if (parseFailure is not null && raw.IsSuccessStatusCode && Options.ThrowOnApiError && HasEnvelopeRoot(body))
         {
             throw BuildApiException(
                 DescribeParseFailure(request, raw.StatusCode, parseFailure),

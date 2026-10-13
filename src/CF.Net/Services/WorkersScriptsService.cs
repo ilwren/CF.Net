@@ -28,21 +28,34 @@ public interface IWorkersScriptsService
         string? accountId = null,
         CancellationToken cancellationToken = default);
 
-    /// <summary>Fetches one script's metadata.</summary>
+    /// <summary>Downloads a script's source.</summary>
     /// <param name="scriptName">The Worker name.</param>
     /// <param name="accountId">Account id; falls back to the configured default when null.</param>
     /// <param name="cancellationToken">Cancellation token.</param>
-    /// <returns>The script, or <c>null</c> when it does not exist.</returns>
-    Task<WorkerScript?> GetAsync(
+    /// <returns>The script content, or <c>null</c> when it does not exist.</returns>
+    /// <remarks>
+    /// <c>GET /accounts/{account_id}/workers/scripts/{script_name}</c> is documented by Cloudflare as
+    /// "Download Worker Script - fetch raw content for a Worker script; note this is the original script
+    /// content, not JSON encoded", and their own SDKs return a string from it. Metadata - bindings, usage
+    /// model, compatibility date, observability - comes from <see cref="GetSettingsAsync"/> or from the
+    /// list endpoint, not from here.
+    /// </remarks>
+    Task<string?> GetAsync(
         string scriptName,
         string? accountId = null,
         CancellationToken cancellationToken = default);
 
-    /// <summary>Downloads the deployed module list of a script.</summary>
+    /// <summary>Downloads a script's content through the versioned content endpoint.</summary>
     /// <param name="scriptName">The Worker name.</param>
     /// <param name="accountId">Account id; falls back to the configured default when null.</param>
     /// <param name="cancellationToken">Cancellation token.</param>
-    Task<WorkerScriptContent?> GetContentAsync(
+    /// <returns>The script content, or <c>null</c> when it does not exist.</returns>
+    /// <remarks>
+    /// The documented path is <c>…/scripts/{script_name}/content/v2</c> ("fetch script content only"); the
+    /// unversioned <c>…/content</c> is the <c>PUT</c> that replaces content without touching config. This
+    /// answers with raw content too, so like <see cref="GetAsync"/> it returns text rather than a model.
+    /// </remarks>
+    Task<string?> GetContentAsync(
         string scriptName,
         string? accountId = null,
         CancellationToken cancellationToken = default);
@@ -280,7 +293,7 @@ public sealed class WorkersScriptsService : CloudflareService, IWorkersScriptsSe
     }
 
     /// <inheritdoc />
-    public async Task<WorkerScript?> GetAsync(
+    public async Task<string?> GetAsync(
         string scriptName,
         string? accountId = null,
         CancellationToken cancellationToken = default)
@@ -290,14 +303,16 @@ public sealed class WorkersScriptsService : CloudflareService, IWorkersScriptsSe
 
         var request = CloudflareRequest.Get($"{AccountPath(account)}/workers/scripts/{CloudflareUrl.EncodeSegment(name)}")
             .Tolerate(System.Net.HttpStatusCode.NotFound);
-        request.OperationName = "Get Worker Script";
+        request.OperationName = "Download Worker Script";
 
-        var response = await Transport.SendAsync<WorkerScript>(request, cancellationToken).ConfigureAwait(false);
-        return response.Result;
+        // Not an envelope: Cloudflare returns the script source verbatim, the way KV returns a stored
+        // value. Reading it as JSON produced a null for a script that had just been uploaded with a 200.
+        var raw = await Transport.SendRawAsync(request, cancellationToken).ConfigureAwait(false);
+        return raw.IsSuccessStatusCode ? raw.Body : null;
     }
 
     /// <inheritdoc />
-    public async Task<WorkerScriptContent?> GetContentAsync(
+    public async Task<string?> GetContentAsync(
         string scriptName,
         string? accountId = null,
         CancellationToken cancellationToken = default)
@@ -306,12 +321,12 @@ public sealed class WorkersScriptsService : CloudflareService, IWorkersScriptsSe
         var name = Require(scriptName, nameof(scriptName));
 
         var request = CloudflareRequest
-            .Get($"{AccountPath(account)}/workers/scripts/{CloudflareUrl.EncodeSegment(name)}/content")
+            .Get($"{AccountPath(account)}/workers/scripts/{CloudflareUrl.EncodeSegment(name)}/content/v2")
             .Tolerate(System.Net.HttpStatusCode.NotFound);
         request.OperationName = "Get Worker Script Content";
 
-        var response = await Transport.SendAsync<WorkerScriptContent>(request, cancellationToken).ConfigureAwait(false);
-        return response.Result;
+        var raw = await Transport.SendRawAsync(request, cancellationToken).ConfigureAwait(false);
+        return raw.IsSuccessStatusCode ? raw.Body : null;
     }
 
     /// <inheritdoc />

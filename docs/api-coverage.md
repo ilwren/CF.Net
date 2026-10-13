@@ -29,6 +29,16 @@ Status legend: ✅ wrapped · ⛔ deliberately out of scope for this phase.
 | `RunActivationCheckAsync(string? zoneId)` | `POST /zones/{zone_id}/activation_check` | |
 | `PurgeCacheAsync(PurgeCacheRequest, string? zoneId)` | `POST /zones/{zone_id}/purge_cache` | `purge_everything`, `files`, `tags`, `hosts`, `prefixes`, `ignore_tags` |
 
+Two fields in the published `Zone` schema are objects rather than the identifiers they look like:
+`tenant` is `{ id, name }` and `tenant_unit` is `{ id }`, so both are modelled as `CloudflareIdentifier`.
+Getting that wrong is not a small mistake — one field of one zone that does not fit its model discards the
+whole envelope, and because the transport used to fall back to "success, no result" for a 2xx it could not
+parse, a zone that answered 200 with 22 fields was reported as unreadable and every zone-scoped test
+skipped or failed on an assertion that named nothing. The transport now throws on a 2xx it cannot read,
+quoting the failing JSON path (`$.result[0].tenant` is what caught this), and
+`ZonePublishedExampleTests` feeds Cloudflare's own 200 example through the models so the next drift shows
+up offline instead of in a live run.
+
 ### Zone settings
 
 | Method | Endpoint | Notes |
@@ -410,8 +420,8 @@ Credentials created before 2026 carry no prefix, so a prefix check can only ever
 | --- | --- | --- |
 | `ListAsync(WorkerScriptListParameters?, string? accountId)` | `GET /accounts/{account_id}/workers/scripts` | cursor paginated: `cursor`, `per_page`, `name`, `order`, `direction` |
 | `ListAllAsync(...)` | `GET …/workers/scripts` | walks the cursor, guarded against a cursor that never advances |
-| `GetAsync(scriptName, accountId)` | `GET /accounts/{account_id}/workers/scripts/{script_name}` | `null` on 404 |
-| `GetContentAsync(scriptName, accountId)` | `GET …/workers/scripts/{script_name}/content` | modules decoded from base64; `MainModule` exposed directly |
+| `GetAsync(scriptName, accountId)` | `GET /accounts/{account_id}/workers/scripts/{script_name}` | **the script source as text**, `null` on 404 — Cloudflare documents this one as "fetch raw content for a Worker script … not JSON encoded", and their SDKs return a string. Metadata comes from `GetSettingsAsync` or the list |
+| `GetContentAsync(scriptName, accountId)` | `GET …/workers/scripts/{script_name}/content/v2` | also raw text. The unversioned `…/content` path is the `PUT` that replaces content without touching config, so a `GET` there was never the documented endpoint |
 | `GetSettingsAsync(scriptName, accountId)` | `GET …/workers/scripts/{script_name}/script-settings` | **not** `/settings` — a common mistake |
 | `UploadAsync(UploadWorkerScriptRequest, accountId)` | `PUT …/workers/scripts/{script_name}` | `multipart/form-data`: a JSON `metadata` part plus one file part per module |
 | `UploadAsync(scriptName, source, compatibilityDate, bindings, accountId)` | `PUT …/workers/scripts/{script_name}` | convenience overload for a single-module worker |

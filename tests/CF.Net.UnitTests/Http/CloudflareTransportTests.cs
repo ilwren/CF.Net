@@ -710,7 +710,10 @@ public class CloudflareTransportRetryTests
             (_, index) => index == 0 ? Status(HttpStatusCode.ServiceUnavailable) : Status(HttpStatusCode.OK),
             options => options.MaxRetries = 1);
 
-        await harness.Transport.SendAsync<Zone?>(
+        // A list, because the responder's canned body carries "result": [] and the transport now reports a
+        // 2xx it cannot read as the model instead of handing back a null that looks like an empty answer.
+        // What this test is about is the request body, not the response.
+        await harness.Transport.SendAsync<List<Zone>?>(
             CloudflareRequest.Post("zones", new CreateZoneRequest("example.com", "acct-1")),
             CancellationToken.None);
 
@@ -777,6 +780,22 @@ public class CloudflareTransportParseFailureTests
 
         Assert.True(response.Success);
         Assert.Null(response.Result);
+    }
+
+    [Fact]
+    public async Task A_body_that_does_not_fit_is_returned_with_its_raw_text_when_the_caller_opted_out_of_throwing()
+    {
+        using var harness = CloudflareHarness.Create(options => options.ThrowOnApiError = false);
+        harness.Respond("""{"success": true, "result": {"id": 12345}}""");
+
+        var response = await harness.Transport.SendAsync<Zone>(
+            CloudflareRequest.Get("zones/zone-5678"), CancellationToken.None);
+
+        // The caller asked to inspect failures itself, so it gets the response back - with the body
+        // Cloudflare actually sent, which is the only way to see which field the model got wrong.
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.Null(response.Result);
+        Assert.Contains("12345", response.RawBody, StringComparison.Ordinal);
     }
 
     [Fact]

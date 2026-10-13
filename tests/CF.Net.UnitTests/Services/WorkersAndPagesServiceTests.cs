@@ -99,57 +99,32 @@ public class WorkersScriptsServiceTests
     }
 
     [Fact]
-    public async Task GetAsync_parses_the_script_metadata()
+    public async Task GetAsync_returns_the_script_source_rather_than_metadata()
     {
         using var harness = CloudflareHarness.Create();
-        harness.RespondWithResult("""
-        {
-          "id": "hello",
-          "etag": "etag-1",
-          "handlers": ["fetch"],
-          "compatibility_date": "2025-01-01",
-          "compatibility_flags": ["nodejs_compat"],
-          "usage_model": "bundled",
-          "logpush": false,
-          "created_on": "2024-01-01T00:00:00Z",
-          "modified_on": "2024-02-01T00:00:00Z",
-          "observability": { "enabled": true, "head_sampling_rate": 0.5 },
-          "limits": { "cpu_ms": 50, "subrequests": 50 },
-          "placement": { "mode": "off" },
-          "tail_consumers": [ { "service": "logger", "environment": "production" } ]
-        }
-        """);
+        // Cloudflare documents this endpoint as "fetch raw content for a Worker script; note this is the
+        // original script content, not JSON encoded", so the stub answers the way the API does.
+        harness.Respond("export default { async fetch() { return new Response('cf-net'); } }");
 
-        var script = await harness.Client.Workers.GetAsync("hello");
+        var content = await harness.Client.Workers.GetAsync("hello");
 
-        Assert.NotNull(script);
-        Assert.Equal("hello", script!.Name);
-        Assert.Equal("hello", script.Id);
-        Assert.Equal("etag-1", script.Etag);
-        Assert.Equal("fetch", Assert.Single(script.Handlers!));
-        Assert.Equal("2025-01-01", script.CompatibilityDate);
-        Assert.Equal("nodejs_compat", Assert.Single(script.CompatibilityFlags!));
-        Assert.Equal("bundled", script.UsageModel);
-        Assert.False(script.Logpush);
-        Assert.Equal(2024, script.CreatedOn?.Year);
-        Assert.True(script.Observability?.Enabled);
-        Assert.Equal(0.5, script.Observability!.HeadSamplingRate);
-        Assert.Equal(50, script.Limits?.CpuMs);
-        Assert.Equal("off", script.Placement?.Mode);
-        Assert.Equal("logger", Assert.Single(script.TailConsumers!)!.Service);
+        Assert.Equal($"/client/v4/accounts/{CloudflareHarness.TestAccountId}/workers/scripts/hello", harness.LastRequest.Path);
+        Assert.Equal("export default { async fetch() { return new Response('cf-net'); } }", content);
     }
 
     [Fact]
-    public async Task GetContentAsync_uses_the_content_sub_resource()
+    public async Task GetContentAsync_uses_the_versioned_content_sub_resource()
     {
         using var harness = CloudflareHarness.Create();
-        harness.RespondWithResult("{\"main_module\":\"worker.mjs\",\"modules\":[{\"name\":\"worker.mjs\",\"content_type\":\"application/javascript+module\"}]}");
+        harness.Respond("export default {}");
 
         var content = await harness.Client.Workers.GetContentAsync("hello");
 
-        Assert.Equal($"/client/v4/accounts/{CloudflareHarness.TestAccountId}/workers/scripts/hello/content", harness.LastRequest.Path);
-        Assert.Equal("worker.mjs", content!.MainModule);
-        Assert.Equal("application/javascript+module", Assert.Single(content.Modules!)!.ContentType);
+        // content/v2 is the documented GET; the unversioned path is the PUT that replaces content.
+        Assert.Equal(
+            $"/client/v4/accounts/{CloudflareHarness.TestAccountId}/workers/scripts/hello/content/v2",
+            harness.LastRequest.Path);
+        Assert.Equal("export default {}", content);
     }
 
     [Fact]

@@ -95,13 +95,28 @@ public sealed class Zone
     [JsonPropertyName("meta")]
     public ZoneMeta? Meta { get; set; }
 
-    /// <summary>Tenant id, for enterprise accounts using tenants.</summary>
+    /// <summary>
+    /// The tenant this zone belongs to, for enterprise and Cloudflare-for-Platforms accounts: an object
+    /// carrying <c>id</c> and <c>name</c>.
+    /// </summary>
+    /// <remarks>
+    /// Published schema and live response agree that this is an object, and modelling it as the id string
+    /// made every zone unreadable: one field of one zone threw the whole envelope away, which surfaced as
+    /// "no such zone" rather than as an error. Read <c>Tenant?.Id</c> for the identifier.
+    /// </remarks>
     [JsonPropertyName("tenant")]
-    public string? Tenant { get; set; }
+    public CloudflareIdentifier? Tenant { get; set; }
 
-    /// <summary>Tenant unit id.</summary>
+    /// <summary>
+    /// The immediate parent organisational unit this zone belongs to, such as a tenant or a
+    /// sub-organisation: an object carrying <c>id</c>.
+    /// </summary>
     [JsonPropertyName("tenant_unit")]
-    public string? TenantUnit { get; set; }
+    public CloudflareIdentifier? TenantUnit { get; set; }
+
+    /// <summary>CNAME suffix used by partial (CNAME) setups, for example <c>cdn.cloudflare.com</c>.</summary>
+    [JsonPropertyName("cname_suffix")]
+    public string? CnameSuffix { get; set; }
 
     /// <summary>Status of the universal SSL certificate.</summary>
     [JsonPropertyName("certificate_status")]

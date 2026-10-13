@@ -469,9 +469,13 @@ that, the same situation produced a `null` result and a `Success` taken from the
 `curl` could read in full was reported by the suite as unreadable and every test that needed it skipped or
 failed on an assertion that said nothing. The zone-scoped helper in the fixture recognises this case
 (`InnerException is JsonException`) and reports it once as a skip reason rather than failing twenty tests
-the same way. Blank strings are already handled: Cloudflare spells "no value" as `""` in places, and
-`BlankStringAsNullConverterFactory` reads those as null for nullable value types instead of losing the
-whole payload.
+the same way. Blank strings are partly handled: Cloudflare spells "no value" as `""` in places, and
+`BlankStringAsNullConverterFactory` reads those as null for the nullable date, time and GUID types.
+Numbers and booleans are deliberately left out, because a custom converter for them would disable
+`JsonNumberHandling.AllowReadingFromString`, which is what reads the numbers Cloudflare sends as strings
+(`"file_size": "12345"`) — a worse trade than the blank string it would absorb. With
+`ThrowOnApiError = false` the same unparseable 2xx is returned rather than thrown, with the body on
+`RawBody`.
 
 The writer is `CFNet.TestKit.RunReport`, and its file format is pinned down by offline unit tests in
 `tests/CF.Net.UnitTests/Testing/RunReportTests.cs`. With `CLOUDFLARE_IT_REPORT` unset — the normal

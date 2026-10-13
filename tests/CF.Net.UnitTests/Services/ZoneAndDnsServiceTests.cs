@@ -3907,8 +3907,8 @@ public class ZoneSettingIdTests
             ZoneSettingIds.OriginTlsComplianceModesReportedId[.."origin_tls_".Length]);
         Assert.Equal(15, ZoneSettingIds.OriginTlsComplianceModesReportedId.Length);
         Assert.NotEqual(
-            ZoneSettingIds.OriginTlsComplianceModes[..15],
-            ZoneSettingIds.OriginTlsComplianceModesReportedId);
+            ZoneSettingIds.OriginTlsComplianceModesReportedId,
+            ZoneSettingIds.OriginTlsComplianceModes[..15]);
         // And neither is a prefix of the other, which is what makes the two constants irreducible: no
         // amount of trimming or padding turns one into the other.
         Assert.False(ZoneSettingIds.OriginTlsComplianceModes

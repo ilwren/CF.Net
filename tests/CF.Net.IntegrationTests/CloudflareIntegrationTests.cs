@@ -788,29 +788,28 @@ public class WriteIntegrationTests : CloudflareIntegrationTest
 
             Log($"uploaded {uploaded.Name}");
 
-            var read = await Client.Workers.GetAsync(name);
-            if (read is null)
+            // This endpoint is documented as returning the script source itself rather than JSON metadata,
+            // which is why a successful upload reads back as text. Metadata comes from script-settings.
+            var source = await Client.Workers.GetAsync(name);
+            if (source is null)
             {
-                // GetAsync answers null for a 404, and a script Cloudflare has just accepted with a 200 can
-                // still take a moment to become readable, so this is retried once before being called a
-                // failure rather than asserted on straight away.
+                // A script Cloudflare has just accepted with a 200 can still take a moment to be readable,
+                // so this is retried once before being called a failure rather than asserted on outright.
                 Log($"{name} was not readable straight after the upload; waiting and trying once more.");
                 await Task.Delay(TimeSpan.FromSeconds(3));
-                read = await Client.Workers.GetAsync(name);
+                source = await Client.Workers.GetAsync(name);
             }
 
             Assert.True(
-                read is not null,
+                source is not null,
                 $"GET /accounts/{{account_id}}/workers/scripts/{name} still answered 'not there' on the second " +
-                "try, even though the PUT for that same name returned 200. Either Cloudflare is inconsistent " +
-                "about a freshly uploaded script, or the response is not the shape this library models - and " +
-                "if it is the latter, the transport now throws with the parser's own diagnosis instead of " +
-                "handing back a null that looks like a 404.");
-            Assert.Equal(name, read!.Name);
+                "try, even though the PUT for that same name returned 200 and the delete below found it.");
+            Assert.Contains("cf-net", source!, StringComparison.Ordinal);
+            Log($"downloaded {source!.Length} characters of script source");
 
             var content = await Client.Workers.GetContentAsync(name);
             Assert.NotNull(content);
-            Log($"main module={content!.MainModule} modules={content.Modules?.Count}");
+            Log($"content/v2 returned {content!.Length} characters");
 
             var settings = await Client.Workers.GetSettingsAsync(name);
             Log($"logpush={settings?.Logpush} tags={string.Join(",", settings?.Tags ?? new List<string>())}");

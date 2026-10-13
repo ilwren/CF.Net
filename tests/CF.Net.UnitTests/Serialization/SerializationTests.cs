@@ -671,14 +671,30 @@ public class CloudflareJsonTests
 /// </summary>
 public class BlankStringAsNullTests
 {
-    private sealed class EveryNullableValueType
+    /// <summary>
+    /// The types the converter covers: every one of them is a string in JSON, so a blank string cannot be
+    /// a value, only the absence of one.
+    /// </summary>
+    private sealed class StringValuedNullables
+    {
+        public DateTimeOffset? ModifiedOn { get; set; }
+        public DateTime? CreatedOn { get; set; }
+        public TimeSpan? Duration { get; set; }
+        public DateOnly? Day { get; set; }
+        public TimeOnly? Clock { get; set; }
+        public Guid? ExternalId { get; set; }
+    }
+
+    /// <summary>
+    /// The types the converter deliberately does not cover, because Cloudflare sends some of them as
+    /// strings and JsonNumberHandling.AllowReadingFromString is what reads those.
+    /// </summary>
+    private sealed class NumericNullables
     {
         public int? Count { get; set; }
         public long? Total { get; set; }
         public decimal? Price { get; set; }
         public bool? Enabled { get; set; }
-        public DateTimeOffset? ModifiedOn { get; set; }
-        public Guid? ExternalId { get; set; }
     }
 
     [Fact]
@@ -696,26 +712,44 @@ public class BlankStringAsNullTests
     }
 
     [Fact]
-    public void Every_nullable_value_type_treats_a_blank_string_as_null()
+    public void Every_string_valued_nullable_treats_a_blank_string_as_null()
     {
-        var parsed = JsonSerializer.Deserialize<EveryNullableValueType>(
-            """{"count":"","total":"  ","price":"","enabled":"","modified_on":"","external_id":""}""",
+        var parsed = JsonSerializer.Deserialize<StringValuedNullables>(
+            """{"modified_on":"","created_on":"  ","duration":"","day":"","clock":"","external_id":""}""",
             CloudflareJson.Default);
 
         Assert.NotNull(parsed);
-        Assert.Null(parsed!.Count);
-        Assert.Null(parsed.Total);
-        Assert.Null(parsed.Price);
-        Assert.Null(parsed.Enabled);
-        Assert.Null(parsed.ModifiedOn);
+        Assert.Null(parsed!.ModifiedOn);
+        Assert.Null(parsed.CreatedOn);
+        Assert.Null(parsed.Duration);
+        Assert.Null(parsed.Day);
+        Assert.Null(parsed.Clock);
         Assert.Null(parsed.ExternalId);
     }
 
     [Fact]
     public void Real_values_still_parse_the_way_they_did()
     {
-        var parsed = JsonSerializer.Deserialize<EveryNullableValueType>(
-            """{"count":3,"total":"42","price":1.25,"enabled":true,"modified_on":"2024-05-01T12:00:00Z"}""",
+        var parsed = JsonSerializer.Deserialize<StringValuedNullables>(
+            """{"modified_on":"2024-05-01T12:00:00Z","created_on":"2024-05-01T12:00:00","duration":"00:05:00","day":"2024-05-01","clock":"12:30:00","external_id":"0f8fad5b-d9cb-469f-a165-70867728950e"}""",
+            CloudflareJson.Default);
+
+        Assert.NotNull(parsed);
+        Assert.Equal(2024, parsed!.ModifiedOn!.Value.Year);
+        Assert.Equal(5, parsed.Duration!.Value.TotalMinutes);
+        Assert.Equal(1, parsed.Day!.Value.Day);
+        Assert.Equal(30, parsed.Clock!.Value.Minute);
+        Assert.Equal(Guid.Parse("0f8fad5b-d9cb-469f-a165-70867728950e"), parsed.ExternalId);
+    }
+
+    [Fact]
+    public void A_number_sent_as_a_string_still_parses()
+    {
+        // This is the regression the first version of the converter caused, and the reason it does not
+        // cover numeric types: installing a custom converter for long? made the built-in string handling
+        // stop applying, and "42" threw "Cannot get the value of a token type 'String' as a number".
+        var parsed = JsonSerializer.Deserialize<NumericNullables>(
+            """{"count":3,"total":"42","price":"1.25","enabled":true}""",
             CloudflareJson.Default);
 
         Assert.NotNull(parsed);
@@ -723,8 +757,18 @@ public class BlankStringAsNullTests
         Assert.Equal(42L, parsed.Total);
         Assert.Equal(1.25m, parsed.Price);
         Assert.True(parsed.Enabled);
-        Assert.Equal(2024, parsed.ModifiedOn!.Value.Year);
     }
+
+    [Fact]
+    public void A_blank_string_for_a_number_is_left_to_fail_where_it_can_be_reported()
+    {
+        // Deliberate, and the other half of the same trade: absorbing "" for numbers would mean giving up
+        // AllowReadingFromString for them. Failing here is not silent - the transport turns it into an
+        // exception naming the JSON path, which beats a null that reads as "no such zone".
+        Assert.Throws<JsonException>(() =>
+            JsonSerializer.Deserialize<NumericNullables>("""{"count":""}""", CloudflareJson.Default));
+    }
+
 
     [Fact]
     public void A_field_left_deliberately_untyped_keeps_its_blank_string()
@@ -758,5 +802,89 @@ public class BlankStringAsNullTests
             CloudflareJson.Default);
 
         Assert.Contains("2024-05-01T12:00:00", withDate, StringComparison.Ordinal);
+    }
+}
+
+/// <summary>
+/// Cloudflare's published 200 example for <c>GET /zones/{zone_id}</c>, fed through the real models. A live
+/// run found what offline stubs could not: the example carries <c>tenant</c> and <c>tenant_unit</c> as
+/// <b>objects</b>, and modelling them as id strings meant one field of one zone threw the whole envelope
+/// away - which surfaced as "no such zone" for a zone that answered 200 with 22 fields.
+/// </summary>
+public class ZonePublishedExampleTests
+{
+    private const string Example = """
+    {
+      "id": "023e105f4ecef8ad9ca31a8372d0c353",
+      "account": { "id": "023e105f4ecef8ad9ca31a8372d0c353", "name": "Example Account Name" },
+      "activated_on": "2014-01-02T00:01:00.12345Z",
+      "created_on": "2014-01-01T05:20:00.12345Z",
+      "development_mode": 7200,
+      "meta": {
+        "cdn_only": true, "custom_certificate_quota": 1, "dns_only": true, "foundation_dns": true,
+        "page_rule_quota": 100, "phishing_detected": false, "step": 2
+      },
+      "modified_on": "2014-01-01T05:20:00.12345Z",
+      "name": "example.com",
+      "name_servers": ["bob.ns.cloudflare.com", "lola.ns.cloudflare.com"],
+      "original_dnshost": "NameCheap",
+      "original_name_servers": ["ns1.originaldnshost.com", "ns2.originaldnshost.com"],
+      "original_registrar": "GoDaddy",
+      "owner": { "id": "023e105f4ecef8ad9ca31a8372d0c353", "name": "Example Org", "type": "organization" },
+      "plan": {
+        "id": "023e105f4ecef8ad9ca31a8372d0c353", "can_subscribe": false, "currency": "USD",
+        "externally_managed": false, "frequency": "monthly", "is_subscribed": false,
+        "legacy_discount": false, "legacy_id": "free", "name": "Example Org", "price": 10.99
+      },
+      "cname_suffix": "cdn.cloudflare.com",
+      "paused": true,
+      "permissions": ["#worker:read"],
+      "status": "active",
+      "tenant": { "id": "023e105f4ecef8ad9ca31a8372d0c353", "name": "Example Account Name" },
+      "tenant_unit": { "id": "023e105f4ecef8ad9ca31a8372d0c353" },
+      "type": "full",
+      "vanity_name_servers": ["ns1.example.com", "ns2.example.com"],
+      "verification_key": "284344499-1084221259"
+    }
+    """;
+
+    [Fact]
+    public void The_published_example_deserialises_without_losing_the_zone()
+    {
+        var zone = JsonSerializer.Deserialize<Zone>(Example, CloudflareJson.Default);
+
+        Assert.NotNull(zone);
+        Assert.Equal("example.com", zone!.Name);
+        Assert.Equal("active", zone.Status);
+        Assert.True(zone.IsActive);
+        Assert.Equal("full", zone.Type);
+    }
+
+    [Fact]
+    public void Tenant_and_tenant_unit_are_objects_carrying_an_id()
+    {
+        var zone = JsonSerializer.Deserialize<Zone>(Example, CloudflareJson.Default);
+
+        Assert.NotNull(zone);
+        Assert.Equal("023e105f4ecef8ad9ca31a8372d0c353", zone!.Tenant?.Id);
+        Assert.Equal("Example Account Name", zone.Tenant?.Name);
+        Assert.Equal("023e105f4ecef8ad9ca31a8372d0c353", zone.TenantUnit?.Id);
+    }
+
+    [Fact]
+    public void The_fields_the_models_do_not_declare_survive_in_additional_data()
+    {
+        var zone = JsonSerializer.Deserialize<Zone>(Example, CloudflareJson.Default);
+
+        Assert.NotNull(zone);
+        Assert.Equal("cdn.cloudflare.com", zone!.CnameSuffix);
+        Assert.Equal(7200, zone.DevelopmentMode);
+        Assert.Equal(10.99m, zone.Plan?.Price);
+        Assert.Equal(2, zone.Meta?.Step);
+        Assert.Equal("NameCheap", zone.OriginalDnsHost);
+        Assert.Equal(2, zone.NameServers?.Count);
+        // meta carries flags this library does not declare; they are captured rather than dropped.
+        Assert.NotNull(zone.Meta?.AdditionalData);
+        Assert.True(zone.Meta!.AdditionalData!.ContainsKey("foundation_dns"));
     }
 }

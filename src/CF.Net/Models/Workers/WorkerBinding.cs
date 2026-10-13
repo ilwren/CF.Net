@@ -383,40 +383,6 @@ public static class WorkerModuleContentTypes
     public const string Text = "text";
 }
 
-/// <summary>
-/// The <c>result</c> of <c>GET /accounts/{account_id}/workers/scripts/{script_name}/content</c>:
-/// the module list that makes up the deployed bundle.
-/// </summary>
-public sealed class WorkerScriptContent
-{
-    /// <summary>Name of the entry module.</summary>
-    [JsonPropertyName("main_module")]
-    public string? MainModule { get; set; }
-
-    /// <summary>All modules in the bundle.</summary>
-    [JsonPropertyName("modules")]
-    public List<WorkerModule>? Modules { get; set; }
-
-    /// <summary>Runtime compatibility date.</summary>
-    [JsonPropertyName("compatibility_date")]
-    public string? CompatibilityDate { get; set; }
-
-    /// <summary>Runtime compatibility flags.</summary>
-    [JsonPropertyName("compatibility_flags")]
-    public List<string>? CompatibilityFlags { get; set; }
-
-    /// <summary>Name of the multipart part holding the body, for service worker syntax scripts.</summary>
-    [JsonPropertyName("body_part")]
-    public string? BodyPart { get; set; }
-
-    /// <summary>Bindings configured on the deployed version.</summary>
-    [JsonPropertyName("bindings")]
-    public List<WorkerBinding>? Bindings { get; set; }
-
-    /// <summary>Captures any field Cloudflare adds in the future.</summary>
-    [JsonExtensionData]
-    public IDictionary<string, JsonElement>? AdditionalData { get; set; }
-}
 
 /// <summary>
 /// Script level settings returned by

@@ -209,18 +209,25 @@ Cloudflare dashboard → **My Profile** → **API Tokens** → **Create Token** 
 
 For the full suite:
 
-| Permission | Access |
-| --- | --- |
-| User | API Tokens — Read |
-| Zone | Zone — Read |
-| Zone | DNS — Edit |
-| Zone | Zone Settings — Edit *(cache purge)* |
-| Account | Account Settings — Read |
-| Account | Workers Scripts — Edit |
-| Account | Pages — Edit |
-| Account | D1 — Edit |
-| Account | Workers KV Storage — Edit |
-| Account | Workers R2 Storage — Edit |
+| Permission | Access | What it covers here |
+| --- | --- | --- |
+| User | API Tokens — Read | `GET /user/tokens/verify` |
+| Zone | Zone — Read | the zone list, `GET /zones/{id}`, activation checks |
+| Zone | DNS — Edit | DNS records, zone file export and import, **and DNSSEC** — DNSSEC has no permission group of its own, it rides on DNS |
+| Zone | Zone Settings — Edit | `GET`/`PATCH /zones/{id}/settings`, including the SSL enrolment settings Cloudflare serves from that path |
+| Zone | Cache Purge — Purge | `POST /zones/{id}/purge_cache` |
+| Zone | SSL and Certificates — Edit | certificate packs, Universal SSL, custom hostnames, the fallback origin, origin TLS client auth |
+| Account | Account Settings — Read | `GET /accounts`, `GET /accounts/{id}` |
+| Account | Workers Scripts — Edit | scripts, deployments, the `workers.dev` subdomain and custom domains |
+| Account | Pages — Edit | projects, deployments, domains |
+| Account | D1 — Edit | databases, queries, backups |
+| Account | Workers KV Storage — Edit | namespaces, values, bulk writes |
+| Account | Workers R2 Storage — Edit | buckets — **and R2 must be enabled on the account**, which is a separate one-time dashboard step; until then the API answers 403 whatever the token says |
+
+Two rows are easy to get wrong. Cache purge is its own permission group — the dashboard calls it **Cache
+Purge** at the level **Purge**, and `Zone Settings — Edit` does not grant it. And SSL for SaaS, custom
+hostnames and origin TLS client auth all live under **SSL and Certificates**, not under Zone or DNS, so a token
+built for "just DNS" skips every one of them with a 403 that reads like a bug in the client.
 
 **Client IP address filtering**: leave it empty for CI. GitHub-hosted runners use a large, changing
 pool of egress addresses, and an IP allowlist will make every run fail with a 403 that looks like a
@@ -228,13 +235,29 @@ bad token.
 
 **TTL**: set one. A CI token that never expires is a standing risk.
 
-For read-only runs you can drop every `Edit` permission — the `ReadOnlyIntegrationTests` class will
-still exercise everything it can.
+For read-only runs take **Read** instead of **Edit** on every row and keep Cache Purge only if you want the
+purge probes to run. That is the set the Monday schedule uses, and it cannot change your account — the
+`ReadOnlyIntegrationTests` class still exercises everything it can.
 
 **Resources are as important as permissions.** Under *Account Resources* include the account you are
 testing; under *Zone Resources* include that one zone (or *All zones*). A token with the right
 permissions but no zone resource returns `10007 Route not found` for a zone you can see perfectly well
 in the dashboard, which reads like a bug in the client and is not.
+
+This is common enough that the workflow checks for it before running anything. The step named *Check what
+the credentials can actually reach* calls `GET /zones?per_page=1`, `GET /zones/{CLOUDFLARE_ZONE_ID}` and
+`GET /accounts/{CLOUDFLARE_ACCOUNT_ID}/r2/buckets?per_page=1` with the same credentials and turns the
+answers into annotations:
+
+| What it prints | What it means |
+| --- | --- |
+| `GET /zones succeeded but returned no zones` | the token authenticates but has no Zone Resources, or the zone belongs to a different account. Every zone-scoped test will skip — DNS records, DNSSEC, zone settings, SSL, custom hostnames, origin TLS, cache purge — and the run can be green without having verified any of them |
+| `CLOUDFLARE_ZONE_ID answered 403` | that zone is not in the token's Zone Resources, or is not in this account. Cloudflare answers 403 for both and does not distinguish them |
+| `CLOUDFLARE_ZONE_ID answered 404` | the id is wrong; an out-of-scope zone normally comes back 403/9109, not 404 |
+| `R2 answered 403` | either the R2 permission is missing or R2 is not enabled on the account. Reported as a notice, not an error, because the R2 tests skip with a reason by design |
+
+The step never fails the job — a repository with no credentials yet is still allowed to be green — so read
+the annotations rather than the conclusion.
 
 **Account-owned tokens.** *Manage Account* → **API Tokens** creates a token owned by the account
 (`cfat_…`) rather than by your user. For CI that is usually the better choice: it does not stop working

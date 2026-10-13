@@ -78,10 +78,10 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Setup .NET
-        uses: actions/setup-dotnet@v4
+        uses: actions/setup-dotnet@v6
         with:
           dotnet-version: 8.0.x
 
@@ -229,6 +229,110 @@ jobs:
               print(f'::error::  accounts/{{account_id}}/tokens/verify -> {rendered(account_payload)}')
           print('::error::Usual causes, most common first: the secret was saved with quotes or a trailing newline; the value is a token id, an account id or a dashboard URL rather than the secret; the token was rolled or revoked after it was saved; or it is account-owned (cfat_) and only the account-scoped endpoint accepts it.')
           sys.exit(1)
+          PY
+
+      - name: Check what the credentials can actually reach
+        if: steps.credentials.outputs.available == 'true'
+        shell: bash
+        run: |
+          set -o pipefail
+          base="${CLOUDFLARE_BASE_ADDRESS:-https://api.cloudflare.com/client/v4}"
+          base="${base%/}"
+
+          if [ -n "${CLOUDFLARE_API_TOKEN:-}" ]; then
+            auth=(-H "Authorization: Bearer ${CLOUDFLARE_API_TOKEN}")
+          else
+            auth=(-H "X-Auth-Key: ${CLOUDFLARE_GLOBAL_API_KEY}" -H "X-Auth-Email: ${CLOUDFLARE_API_EMAIL}")
+          fi
+
+          # A token can be perfectly valid and still be able to see nothing, which is the failure mode
+          # that used to produce a green run full of skips: the verify endpoint answers 200, and every
+          # zone-scoped test then has no zone to read. So the reach is probed here, before the tests,
+          # and named in an annotation rather than discovered in the summary table afterwards.
+          probe() {
+            label="$1"
+            url="$2"
+            code=$(curl --silent --show-error --max-time 30 \
+              --output "$RUNNER_TEMP/reach-$label.json" \
+              --write-out '%{http_code}' "$url" "${auth[@]}" || echo 000)
+            echo "$code" > "$RUNNER_TEMP/reach-$label.status"
+          }
+
+          probe zones "$base/zones?per_page=1"
+          if [ -n "${CLOUDFLARE_ZONE_ID:-}" ]; then
+            probe zone "$base/zones/${CLOUDFLARE_ZONE_ID}"
+          fi
+          if [ -n "${CLOUDFLARE_ACCOUNT_ID:-}" ]; then
+            probe r2 "$base/accounts/${CLOUDFLARE_ACCOUNT_ID}/r2/buckets?per_page=1"
+          fi
+
+          PY=$(command -v python3 || command -v python || true)
+          if [ -z "$PY" ]; then echo "no python"; exit 0; fi
+          "$PY" - <<'PY'
+          import json, os
+
+          temp = os.environ.get('RUNNER_TEMP', '.')
+
+          def read(label):
+              try:
+                  with open(os.path.join(temp, f'reach-{label}.status'), encoding='utf-8') as handle:
+                      status = handle.read().strip()
+              except OSError:
+                  return None, None
+              try:
+                  with open(os.path.join(temp, f'reach-{label}.json'), encoding='utf-8') as handle:
+                      return status, json.load(handle)
+              except Exception:
+                  return status, None
+
+          status, payload = read('zones')
+          if status == '200':
+              zones = (payload or {}).get('result') or []
+              if zones:
+                  first = zones[0]
+                  print(f"::notice::GET /zones can see {len(zones)} zone(s) on this page; the first is "
+                        f"'{first.get('name')}' ({first.get('id')}).")
+              else:
+                  print('::error::GET /zones succeeded but returned no zones, so every zone-scoped test will '
+                        'skip and the run can be green without having verified anything: DNS records, DNSSEC, '
+                        'zone settings, SSL, custom hostnames, origin TLS client auth and cache purge all need '
+                        'a zone.')
+                  print('::error::  Fix: edit the API token, and under Zone Resources include the zone in '
+                        'CLOUDFLARE_ZONE_ID (or All zones). Then grant the zone permissions the suite reads - '
+                        'Zone Read, DNS Read, Zone Settings Read, SSL and Certificates Read, Cache Purge Purge. '
+                        'Permissions alone are not enough: the zone has to be in the token\'s Zone Resources.')
+                  print('::error::  If the zone is under a different account than CLOUDFLARE_ACCOUNT_ID, an '
+                        'account-owned (cfat_) token will never see it - use a user-owned token, or the right '
+                        'account.')
+          elif status == '403':
+              print('::error::GET /zones is forbidden: the token lacks Zone - Zone Read, or it is '
+                    'account-owned and zones are not part of its account.')
+          else:
+              print(f'::warning::GET /zones answered {status}; zone-scoped tests may skip.')
+
+          status, payload = read('zone')
+          if status is not None:
+              if status == '200':
+                  print(f"::notice::CLOUDFLARE_ZONE_ID is readable: '{(payload or {}).get('result', {}).get('name')}'.")
+              elif status == '403':
+                  print('::error::CLOUDFLARE_ZONE_ID answered 403, which is how Cloudflare says either "this '
+                        'zone is not in the token\'s Zone Resources" or "this zone is not yours" - it does not '
+                        'distinguish them. Check that the token includes the zone, and that CLOUDFLARE_ZONE_ID '
+                        'is the 32-character Zone ID from that domain\'s Overview page.')
+              elif status == '404':
+                  print('::error::CLOUDFLARE_ZONE_ID answered 404, which this endpoint rarely does: an unknown '
+                        'or out-of-scope zone normally comes back as 403 with Cloudflare error 9109. Re-copy the '
+                        'Zone ID from the domain\'s Overview page - not the account id, not a dashboard URL.')
+              else:
+                  print(f'::warning::CLOUDFLARE_ZONE_ID answered {status}.')
+
+          status, _ = read('r2')
+          if status == '403':
+              print('::notice::R2 answered 403. Either the token lacks Account - Workers R2 Storage Read, or R2 '
+                    'is not enabled on this account yet; enabling it is a one-time dashboard step, and the R2 '
+                    'tests skip with a reason until then rather than failing.')
+          elif status == '200':
+              print('::notice::R2 is reachable on this account.')
           PY
 
       - name: Restore
@@ -425,7 +529,7 @@ jobs:
 
       - name: Upload recorded cassette
         if: always() && github.event_name == 'workflow_dispatch' && github.event.inputs.cassette != ''
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: cassette-${{ github.event.inputs.cassette }}
           path: tests/cassettes/**/*.json
@@ -434,7 +538,7 @@ jobs:
 
       - name: Upload test results
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: integration-results
           path: TestResults/**/*.trx

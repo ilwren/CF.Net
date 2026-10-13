@@ -229,6 +229,37 @@ Purge** at the level **Purge**, and `Zone Settings — Edit` does not grant it. 
 hostnames and origin TLS client auth all live under **SSL and Certificates**, not under Zone or DNS, so a token
 built for "just DNS" skips every one of them with a 403 that reads like a bug in the client.
 
+### Creating that token from a URL
+
+Cloudflare pre-fills the token form from a query string, so the whole table above can be applied in one
+click instead of twelve. `permissionGroupKeys` is a URL-encoded JSON array of `{"key": …, "type": …}`
+objects, where `type` is `read`, `edit`, `purge`, `run` or `revoke`.
+
+- **Account-owned (`cfat_`), full suite including writes**
+
+  `https://dash.cloudflare.com/?to=/:account/api-tokens&permissionGroupKeys=%5B%7B%22key%22%3A%22zone%22%2C%22type%22%3A%22edit%22%7D%2C%7B%22key%22%3A%22dns%22%2C%22type%22%3A%22edit%22%7D%2C%7B%22key%22%3A%22zone_settings%22%2C%22type%22%3A%22edit%22%7D%2C%7B%22key%22%3A%22ssl_and_certificates%22%2C%22type%22%3A%22edit%22%7D%2C%7B%22key%22%3A%22cache%22%2C%22type%22%3A%22purge%22%7D%2C%7B%22key%22%3A%22account_settings%22%2C%22type%22%3A%22read%22%7D%2C%7B%22key%22%3A%22workers_scripts%22%2C%22type%22%3A%22edit%22%7D%2C%7B%22key%22%3A%22page%22%2C%22type%22%3A%22edit%22%7D%2C%7B%22key%22%3A%22d1%22%2C%22type%22%3A%22edit%22%7D%2C%7B%22key%22%3A%22workers_kv_storage%22%2C%22type%22%3A%22edit%22%7D%2C%7B%22key%22%3A%22workers_r2%22%2C%22type%22%3A%22edit%22%7D%2C%7B%22key%22%3A%22account_api_tokens%22%2C%22type%22%3A%22read%22%7D%5D&name=CF.Net%20integration`
+
+- **Account-owned (`cfat_`), read-only** — everything the Monday schedule needs
+
+  `https://dash.cloudflare.com/?to=/:account/api-tokens&permissionGroupKeys=%5B%7B%22key%22%3A%22zone%22%2C%22type%22%3A%22read%22%7D%2C%7B%22key%22%3A%22dns%22%2C%22type%22%3A%22read%22%7D%2C%7B%22key%22%3A%22zone_settings%22%2C%22type%22%3A%22read%22%7D%2C%7B%22key%22%3A%22ssl_and_certificates%22%2C%22type%22%3A%22read%22%7D%2C%7B%22key%22%3A%22cache%22%2C%22type%22%3A%22purge%22%7D%2C%7B%22key%22%3A%22account_settings%22%2C%22type%22%3A%22read%22%7D%2C%7B%22key%22%3A%22workers_scripts%22%2C%22type%22%3A%22read%22%7D%2C%7B%22key%22%3A%22page%22%2C%22type%22%3A%22read%22%7D%2C%7B%22key%22%3A%22d1%22%2C%22type%22%3A%22read%22%7D%2C%7B%22key%22%3A%22workers_kv_storage%22%2C%22type%22%3A%22read%22%7D%2C%7B%22key%22%3A%22workers_r2%22%2C%22type%22%3A%22read%22%7D%2C%7B%22key%22%3A%22account_api_tokens%22%2C%22type%22%3A%22read%22%7D%5D&name=CF.Net%20integration`
+
+- **User-owned (`cfut_`), full suite** — also the only kind that can answer `GET /user/tokens/verify`
+
+  `https://dash.cloudflare.com/profile/api-tokens?permissionGroupKeys=%5B%7B%22key%22%3A%22zone%22%2C%22type%22%3A%22edit%22%7D%2C%7B%22key%22%3A%22dns%22%2C%22type%22%3A%22edit%22%7D%2C%7B%22key%22%3A%22zone_settings%22%2C%22type%22%3A%22edit%22%7D%2C%7B%22key%22%3A%22ssl_and_certificates%22%2C%22type%22%3A%22edit%22%7D%2C%7B%22key%22%3A%22cache%22%2C%22type%22%3A%22purge%22%7D%2C%7B%22key%22%3A%22account_settings%22%2C%22type%22%3A%22read%22%7D%2C%7B%22key%22%3A%22workers_scripts%22%2C%22type%22%3A%22edit%22%7D%2C%7B%22key%22%3A%22page%22%2C%22type%22%3A%22edit%22%7D%2C%7B%22key%22%3A%22d1%22%2C%22type%22%3A%22edit%22%7D%2C%7B%22key%22%3A%22workers_kv_storage%22%2C%22type%22%3A%22edit%22%7D%2C%7B%22key%22%3A%22workers_r2%22%2C%22type%22%3A%22edit%22%7D%2C%7B%22key%22%3A%22account_api_tokens%22%2C%22type%22%3A%22read%22%7D%5D&accountId=%2A&zoneId=all&name=CF.Net%20integration`
+
+The keys are Cloudflare's own, and two of them do not match the label the dashboard shows: Pages is
+**`page`**, not `pages`, and R2 is **`workers_r2`**, not `workers_r2_storage`. `cache` is the Cache Purge
+group and its type is `purge`. The read-only URL still carries `cache: purge`, because the workflow's
+reachability check reads that permission with a body Cloudflare refuses — only the write tests purge
+anything — so drop it if you want the strict minimum.
+
+An account-token URL pre-fills permissions only; **Zone Resources is still chosen in the form**, and that
+is the setting that decides whether the zone-scoped half of the suite runs at all. The user-token URL takes
+`accountId` and `zoneId` as well (`*` and `all` above), so it can pin both.
+
+The same URLs are printed by the *Check what the credentials can actually reach* step whenever it finds a
+permission missing, so a refused run tells you what to click.
+
 **Client IP address filtering**: leave it empty for CI. GitHub-hosted runners use a large, changing
 pool of egress addresses, and an IP allowlist will make every run fail with a 403 that looks like a
 bad token.

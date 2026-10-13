@@ -233,6 +233,9 @@ jobs:
 
       - name: Check what the credentials can actually reach
         if: steps.credentials.outputs.available == 'true'
+        # A diagnostic must never be the reason the suite reports failure: if this step's own curl or
+        # python misbehaves, the tests still have to run and still have to be believed.
+        continue-on-error: true
         shell: bash
         run: |
           set -o pipefail

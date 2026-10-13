@@ -598,12 +598,12 @@ public class WriteIntegrationTests : CloudflareIntegrationTest
                     Ttl = 120, Proxied = false,
                 }));
 
-            // Cloudflare publishes the batch request body but not what a successful answer's result looks
-            // like, so the service returns it raw and this reports it. Warn rather than Log on purpose: the
-            // job log is not readable once the run is over, and the run report is, so this is the only
-            // channel the shape can travel back through. It is what turns the raw result into a typed model.
-            Warn($"POST /zones/{{zone_id}}/dns_records/batch answered 200 with result: " +
-                 $"{result?.GetRawText() ?? "(no result)"}");
+            // The result mirrors the request's four groups, an unused one arriving as an explicit null,
+            // which is the shape a live run reported and DnsRecordBatchResult was written from.
+            Assert.NotNull(result);
+            Assert.Null(result!.Deletes);
+            Assert.Equal(2, result.Posts?.Count ?? 0);
+            Log($"batch created {result.AffectedCount} record(s): {string.Join(", ", result.AffectedIds)}");
 
             foreach (var name in new[] { firstName, secondName })
             {
@@ -624,8 +624,9 @@ public class WriteIntegrationTests : CloudflareIntegrationTest
                 // The same endpoint removes them, which exercises the deletes group as well as posts.
                 var removed = await Client.DnsRecords.BatchAsync(
                     new DnsRecordBatch().WithDeletes(createdIds.ToArray()));
-                Warn($"the same endpoint deleting {createdIds.Count} record(s) answered with result: " +
-                     $"{removed?.GetRawText() ?? "(no result)"}");
+                // Cloudflare echoes what it removed, in full, which is the only record of it that outlives
+                // the delete.
+                Log($"batch deleted {removed?.Deletes?.Count ?? 0} of {createdIds.Count} record(s)");
             }
         }
     }

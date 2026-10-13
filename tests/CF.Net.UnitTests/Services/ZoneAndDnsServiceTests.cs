@@ -3963,7 +3963,10 @@ public class DnsRecordBatchTests
     public async Task BatchAsync_sends_the_groups_it_was_given_in_one_post()
     {
         using var harness = CloudflareHarness.Create();
-        harness.RespondWithResult("""{"records_added":2}""");
+        // Stubbed with the answer a live run actually returned, because Cloudflare publishes the request
+        // body and not this: groups come back as they went in, an unused group as an explicit null, a used
+        // one as complete records carrying the id Cloudflare assigned.
+        harness.RespondWithResult("""{"deletes":null,"patches":null,"puts":null,"posts":[{"id":"rec-new-1","name":"batch.test","type":"TXT","content":"cf-net","proxiable":false,"proxied":false,"ttl":120,"settings":{},"meta":{},"comment":null,"tags":[],"created_on":"2026-10-13T08:44:29.031191Z","modified_on":"2026-10-13T08:44:29.031191Z"}]}""");
 
         var batch = new DnsRecordBatch()
             .WithPosts(new DnsRecord
@@ -3991,9 +3994,34 @@ public class DnsRecordBatchTests
         Assert.DoesNotContain("patches", harness.LastRequest.Body!, StringComparison.Ordinal);
         Assert.DoesNotContain("puts", harness.LastRequest.Body!, StringComparison.Ordinal);
 
-        // The result is Cloudflare's own JSON, untouched.
         Assert.NotNull(result);
-        Assert.Equal(2, result!.Value.GetProperty("records_added").GetInt32());
+        Assert.Null(result!.Deletes);
+        Assert.Null(result.Patches);
+        var created = Assert.Single(result.Posts!);
+        Assert.Equal("rec-new-1", created.Id);
+        Assert.Equal("batch.test", created.Name);
+        Assert.Equal(2026, created.CreatedOn?.Year);
+        Assert.Equal(1, result.AffectedCount);
+        Assert.Equal(new[] { "rec-new-1" }, result.AffectedIds);
+    }
+
+    [Fact]
+    public async Task A_delete_batch_echoes_the_records_it_removed()
+    {
+        using var harness = CloudflareHarness.Create();
+        harness.RespondWithResult("""{"deletes":[{"id":"rec-1","name":"batch.test","type":"TXT","content":"cf-net","proxiable":false,"proxied":false,"ttl":120,"settings":{},"meta":{},"comment":null,"tags":[],"created_on":"2026-10-13T08:44:29.031191Z","modified_on":"2026-10-13T08:44:29.031191Z"}],"patches":null,"puts":null,"posts":null}""");
+
+        var result = await harness.Client.DnsRecords.BatchAsync(new DnsRecordBatch().WithDeletes("rec-1"));
+
+        // Worth pinning: the answer to a delete carries the removed record in full - name, type, content,
+        // ttl and timestamps - so this is the only place its content survives the delete.
+        Assert.NotNull(result);
+        var removed = Assert.Single(result!.Deletes!);
+        Assert.Equal("rec-1", removed.Id);
+        Assert.Equal("batch.test", removed.Name);
+        Assert.Equal("cf-net", removed.Content);
+        Assert.Null(result.Posts);
+        Assert.Equal("batch result: 1 deleted, 0 patched, 0 replaced, 0 created", result.ToString());
     }
 
     [Fact]

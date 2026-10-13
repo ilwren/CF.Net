@@ -148,3 +148,67 @@ public sealed class DnsRecordBatchDelete
     /// <inheritdoc />
     public override string ToString() => Id ?? "(no id)";
 }
+
+/// <summary>
+/// The <c>result</c> of a successful <c>POST /zones/{zone_id}/dns_records/batch</c>: the same four groups
+/// the request carried, each holding the records that group acted on.
+/// </summary>
+/// <remarks>
+/// <para>
+/// Cloudflare's reference documents the request body and not this response, so the shape here was read off
+/// a live answer rather than inferred from the request. What came back, for a batch that created two TXT
+/// records, was <c>{"deletes":null,"patches":null,"puts":null,"posts":[{…},{…}]}</c> - a group the request
+/// did not use arrives as an explicit <c>null</c> rather than being left out, and a group it did use arrives
+/// as an array of <b>complete</b> records, with the id Cloudflare assigned and the <c>created_on</c> and
+/// <c>modified_on</c> stamps.
+/// </para>
+/// <para>
+/// The same holds for deletes, which is worth knowing before relying on it: the answer to a delete batch
+/// echoes the removed records in full - name, type, content, ttl and timestamps - not just their ids, so
+/// this is the place to capture what a batch removed before it is gone.
+/// </para>
+/// </remarks>
+public sealed class DnsRecordBatchResult
+{
+    /// <summary>The records a delete removed, in full. <c>null</c> when the batch deleted nothing.</summary>
+    [JsonPropertyName("deletes")]
+    public List<DnsRecord>? Deletes { get; set; }
+
+    /// <summary>The records a patch changed, as they are after the change. <c>null</c> when unused.</summary>
+    [JsonPropertyName("patches")]
+    public List<DnsRecord>? Patches { get; set; }
+
+    /// <summary>The records a put replaced, as they are after the replacement. <c>null</c> when unused.</summary>
+    [JsonPropertyName("puts")]
+    public List<DnsRecord>? Puts { get; set; }
+
+    /// <summary>The records a post created, carrying the ids Cloudflare assigned. <c>null</c> when unused.</summary>
+    [JsonPropertyName("posts")]
+    public List<DnsRecord>? Posts { get; set; }
+
+    /// <summary>Captures any field Cloudflare adds in the future.</summary>
+    [JsonExtensionData]
+    public IDictionary<string, JsonElement>? AdditionalData { get; set; }
+
+    /// <summary>How many records this batch touched, across all four groups.</summary>
+    [JsonIgnore]
+    public int AffectedCount =>
+        (Deletes?.Count ?? 0) + (Patches?.Count ?? 0) + (Puts?.Count ?? 0) + (Posts?.Count ?? 0);
+
+    /// <summary>The ids of every record the batch touched, whichever group it came through.</summary>
+    [JsonIgnore]
+    public IReadOnlyList<string> AffectedIds =>
+        new[] { Deletes, Patches, Puts, Posts }
+            .Where(group => group is not null)
+            .SelectMany(group => group!)
+            .Where(record => !string.IsNullOrWhiteSpace(record.Id))
+            .Select(record => record.Id!)
+            .ToList();
+
+    /// <inheritdoc />
+    public override string ToString() =>
+        AffectedCount == 0
+            ? "(no records affected)"
+            : $"batch result: {Deletes?.Count ?? 0} deleted, {Patches?.Count ?? 0} patched, " +
+              $"{Puts?.Count ?? 0} replaced, {Posts?.Count ?? 0} created";
+}

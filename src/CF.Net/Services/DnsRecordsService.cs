@@ -166,9 +166,11 @@ public interface IDnsRecordsService
     /// <remarks>
     /// Cloudflare executes the four groups in its own order (deletes, then patches, puts and posts) inside
     /// one database transaction, though propagation is not atomic because each record change is its own
-    /// key-value pair in the store behind it. The published reference documents the request body but not
-    /// what a successful answer's <c>result</c> looks like, so this returns it raw rather than modelling a
-    /// guess; the integration suite logs what Cloudflare sends, which is how that shape gets pinned down.
+    /// key-value pair in the store behind it. The published reference documents the request body and not
+    /// the result, so <see cref="DnsRecordBatchResult"/> was written from a live answer instead: the four
+    /// groups come back the way they went in, a group the batch did not use arrives as an explicit
+    /// <c>null</c>, and a group it did use arrives as complete records - for deletes, the records as they
+    /// were before they were removed.
     /// </remarks>
     /// <param name="batch">The changes to make. Checked by <see cref="DnsRecordBatch.EnsureValid"/> first.</param>
     /// <param name="includeShadowMetadata">
@@ -177,7 +179,7 @@ public interface IDnsRecordsService
     /// </param>
     /// <param name="zoneId">Zone id; falls back to the configured default when null.</param>
     /// <param name="cancellationToken">Cancellation token.</param>
-    Task<JsonElement?> BatchAsync(
+    Task<DnsRecordBatchResult?> BatchAsync(
         DnsRecordBatch batch,
         bool? includeShadowMetadata = null,
         string? zoneId = null,
@@ -524,7 +526,7 @@ public sealed class DnsRecordsService : CloudflareService, IDnsRecordsService
     }
 
     /// <inheritdoc />
-    public async Task<JsonElement?> BatchAsync(
+    public async Task<DnsRecordBatchResult?> BatchAsync(
         DnsRecordBatch batch,
         bool? includeShadowMetadata = null,
         string? zoneId = null,
@@ -538,7 +540,7 @@ public sealed class DnsRecordsService : CloudflareService, IDnsRecordsService
         request.OperationName = "Batch DNS Records";
         request.Query.Add("include_shadow_metadata", includeShadowMetadata);
 
-        var response = await Transport.SendAsync<JsonElement?>(request, cancellationToken).ConfigureAwait(false);
+        var response = await Transport.SendAsync<DnsRecordBatchResult>(request, cancellationToken).ConfigureAwait(false);
         return response.Result;
     }
 

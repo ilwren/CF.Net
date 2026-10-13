@@ -720,3 +720,76 @@ public class CloudflareTransportRetryTests
         Assert.Contains("\"account\":{\"id\":\"acct-1\"}", harness.Requests[1].Body!, StringComparison.Ordinal);
     }
 }
+
+/// <summary>
+/// A 2xx body that is shaped like a Cloudflare envelope but does not fit the model used to come back as a
+/// null <c>Result</c> with <c>Success</c> taken from the status code, which reads exactly like "not found".
+/// That is how a live run reported a zone as unreadable while curl fetched all 22 of its fields. These pin
+/// that it now says what actually happened, and that the endpoints which are not envelopes are left alone.
+/// </summary>
+public class CloudflareTransportParseFailureTests
+{
+    [Fact]
+    public async Task A_success_whose_body_does_not_fit_the_model_reports_itself_rather_than_returning_null()
+    {
+        using var harness = CloudflareHarness.Create();
+        harness.Respond("""{"success": true, "errors": [], "messages": [], "result": {"id": 12345, "name": "a.test"}}""");
+
+        var exception = await Assert.ThrowsAsync<CloudflareApiException>(() =>
+            harness.Transport.SendAsync<Zone>(
+                CloudflareRequest.Get("zones/zone-5678"), CancellationToken.None));
+
+        // The status is a success, so the message has to explain why an exception is being thrown at all.
+        Assert.Equal(HttpStatusCode.OK, exception.StatusCode);
+        Assert.Contains("$.result.id", exception.Message, StringComparison.Ordinal);
+        Assert.Contains("not an empty result", exception.Message, StringComparison.Ordinal);
+        // A bare request has no OperationName, so the message identifies the call by verb and path.
+        Assert.Contains("zones/zone-5678", exception.Message, StringComparison.Ordinal);
+
+        // And the body Cloudflare actually sent has to survive on the exception, because it is the only
+        // evidence of which field the model got wrong.
+        Assert.Contains("12345", exception.ResponseBody, StringComparison.Ordinal);
+        Assert.IsType<System.Text.Json.JsonException>(exception.InnerException);
+    }
+
+    [Fact]
+    public async Task A_page_whose_items_do_not_fit_the_model_reports_itself_rather_than_coming_back_empty()
+    {
+        using var harness = CloudflareHarness.Create();
+        harness.Respond("""{"success": true, "result": [{"id": "z-1", "development_mode": "not a number"}], "result_info": {"total_count": 1}}""");
+
+        var exception = await Assert.ThrowsAsync<CloudflareApiException>(() =>
+            harness.Transport.SendAsync<List<Zone>?>(CloudflareRequest.Get("zones"), CancellationToken.None));
+
+        Assert.Contains("$.result[0].development_mode", exception.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task A_success_that_is_not_an_envelope_is_left_alone()
+    {
+        using var harness = CloudflareHarness.Create();
+        // PUT /accounts/{a}/origin_tls_client_auth/hostnames answers with a bare array, and a few endpoints
+        // answer with something that is not JSON at all. Neither is a model mismatch, so neither throws.
+        harness.Respond("""["a", "b"]""");
+
+        var response = await harness.Transport.SendAsync<List<string>>(
+            CloudflareRequest.Get("accounts/acct-1234/origin_tls_client_auth/hostnames"), CancellationToken.None);
+
+        Assert.True(response.Success);
+        Assert.Null(response.Result);
+    }
+
+    [Fact]
+    public async Task A_tolerated_status_with_an_unreadable_body_still_answers_null()
+    {
+        using var harness = CloudflareHarness.Create();
+        harness.Respond("<html>502 from something in front of Cloudflare</html>", HttpStatusCode.NotFound);
+
+        var response = await harness.Transport.SendAsync<Zone>(
+            CloudflareRequest.Get("zones/zone-5678").Tolerate(HttpStatusCode.NotFound),
+            CancellationToken.None);
+
+        Assert.False(response.Success);
+        Assert.Null(response.Result);
+    }
+}

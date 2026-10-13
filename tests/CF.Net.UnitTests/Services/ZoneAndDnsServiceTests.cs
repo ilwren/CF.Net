@@ -3928,8 +3928,9 @@ public class ZoneSettingIdTests
                      ZoneSettingIds.OriginTlsComplianceModesReportedId,
                  })
         {
-            var modes = CloudflareJson.Default.Deserialize<OriginTlsComplianceModes>(
-                $$"""{"id":"{{id}}","editable":true,"value":["fips"]}""");
+            var modes = JsonSerializer.Deserialize<OriginTlsComplianceModes>(
+                $$"""{"id":"{{id}}","editable":true,"value":["fips"]}""",
+                CloudflareJson.Default);
 
             Assert.NotNull(modes);
             Assert.Equal(id, modes!.Id);

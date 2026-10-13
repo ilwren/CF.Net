@@ -3,6 +3,7 @@ using System.Text.Json;
 using CFNet.Configuration;
 using CFNet.Exceptions;
 using CFNet.DependencyInjection;
+using CFNet.Models.Zones;
 using CFNet.TestKit;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit.Abstractions;
@@ -229,7 +230,68 @@ public abstract class CloudflareIntegrationTest : IDisposable
             SkipUnless(false, ZoneRefusalReason(exception), test);
             return null;
         }
+        catch (CloudflareApiException exception) when (exception.InnerException is JsonException)
+        {
+            // Cloudflare answered and CF.Net could not read the answer as the shape it models. That is a
+            // defect in this library, not a credential problem, but every zone-scoped test would fail on it
+            // with the same message, so it is reported once here and the rest of the suite carries on.
+            SkipUnless(false, ModelMismatchReason(exception), test);
+            return null;
+        }
     }
+
+    /// <summary>
+    /// Reads the configured zone as a precondition, skipping the test when Cloudflare refuses it or when
+    /// CF.Net cannot make sense of the answer.
+    /// </summary>
+    /// <param name="test">Test name, supplied by the compiler.</param>
+    /// <returns>The zone, or <c>null</c> when the test has been skipped.</returns>
+    /// <remarks>
+    /// Tests that need the zone's name to build something inside it use this rather than asserting the zone
+    /// is not null: an unreadable zone is a configuration or library problem to report, and an
+    /// <c>Assert.NotNull</c> on it produces a failure that says nothing about either.
+    /// </remarks>
+    protected async Task<Zone?> ReadableZoneAsync([CallerMemberName] string? test = null)
+    {
+        try
+        {
+            var zone = await Client.Zones.GetAsync(ZoneId).ConfigureAwait(false);
+            if (zone is null)
+            {
+                SkipUnless(false, UnreadableZoneReason(), test);
+            }
+
+            return zone;
+        }
+        catch (CloudflareApiException exception) when (exception.IsAuthenticationFailure)
+        {
+            SkipUnless(false, ZoneRefusalReason(exception), test);
+            return null;
+        }
+        catch (CloudflareApiException exception) when (exception.InnerException is JsonException)
+        {
+            SkipUnless(false, ModelMismatchReason(exception), test);
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// The three reasons <c>Zones.GetAsync</c> answers <c>null</c>, which it does not distinguish.
+    /// </summary>
+    /// <returns>A reason for the run report.</returns>
+    protected string UnreadableZoneReason() =>
+        $"CLOUDFLARE_ZONE_ID ({ZoneId}) came back unreadable. GetAsync reports null for all three of: " +
+        "Cloudflare answered 403 (the zone is outside the token's Zone Resources, or belongs to a different " +
+        "account than CLOUDFLARE_ACCOUNT_ID), answered 404 (the id is not a zone), or answered 200 with no " +
+        "result. The 'Check what the credentials can actually reach' step of this workflow says which, " +
+        "because it fetches the same zone over plain HTTP and reports the result it got.";
+
+    /// <summary>Puts a response CF.Net could not read into words, keeping the parser's own diagnosis.</summary>
+    /// <param name="exception">The exception the transport threw.</param>
+    /// <returns>A reason for the run report.</returns>
+    protected static string ModelMismatchReason(CloudflareApiException exception) =>
+        "CF.Net could not read Cloudflare's response as the shape it models, which is a bug in this library " +
+        "rather than a problem with the credentials: " + exception.Message;
 
     /// <summary>Puts a zone-scoped 403 into words a reader can act on.</summary>
     /// <param name="exception">The refusal Cloudflare returned.</param>

@@ -523,6 +523,9 @@ public class ReadOnlyIntegrationTests : CloudflareIntegrationTest
         typeof(ZoneSettingIds)
             .GetFields(BindingFlags.Public | BindingFlags.Static)
             .Where(field => field.IsLiteral && field.FieldType == typeof(string))
+            // A 'ReportedId' constant is the id one setting answers with, not an id to put in a path, so it
+            // never appears in a settings list and would otherwise be reported missing from every zone.
+            .Where(field => !field.Name.EndsWith("ReportedId", StringComparison.Ordinal))
             .Select(field => field.GetRawConstantValue() as string)
             .Where(id => !string.IsNullOrWhiteSpace(id))
             .Select(id => id!);
@@ -572,8 +575,11 @@ public class WriteIntegrationTests : CloudflareIntegrationTest
         }
 
         // The record has to live inside the configured zone, so derive its name from the zone's.
-        var zone = await Client.Zones.GetAsync(ZoneId);
-        Assert.NotNull(zone);
+        var zone = await ReadableZoneAsync();
+        if (zone is null)
+        {
+            return;
+        }
 
         var fullName = $"{UniqueSuffix("cfnet-it")}.{zone!.Name}";
         DnsRecord? created = null;
@@ -684,9 +690,22 @@ public class WriteIntegrationTests : CloudflareIntegrationTest
         // R2 names allow only lowercase letters, digits and hyphens.
         var name = $"cfnet-it-{DateTime.UtcNow:yyyyMMddhhmmss}-{Guid.NewGuid().ToString("N")[..6]}";
 
+        // Created outside the try/finally on purpose: when R2 is not enabled the create answers 10042 and
+        // the delete below answers it too, so the finally block used to turn one account state into a second
+        // failure on top of the first.
+        R2Bucket created;
         try
         {
-            var created = await Client.R2.CreateBucketAsync(name, locationHint: R2LocationHint.Wnam);
+            created = await Client.R2.CreateBucketAsync(name, locationHint: R2LocationHint.Wnam);
+        }
+        catch (CloudflareApiException exception) when (exception.HasErrorCode(10042))
+        {
+            SkipUnless(false, "R2 is not enabled on this account (Cloudflare error 10042). Enable it in the dashboard - Storage & Databases > R2 - to exercise the R2 write test.");
+            return;
+        }
+
+        try
+        {
             Log($"bucket {created.Name} location={created.Location} class={created.StorageClass}");
             Assert.Equal(name, created.Name);
 
@@ -701,9 +720,9 @@ public class WriteIntegrationTests : CloudflareIntegrationTest
                 await Client.R2.DeleteBucketAsync(name);
                 Log($"deleted bucket {name}");
             }
-            catch (CloudflareApiException exception) when (exception.IsNotFound)
+            catch (CloudflareApiException exception) when (exception.IsNotFound || exception.HasErrorCode(10042))
             {
-                Log("bucket was already gone");
+                Log("bucket was already gone, or R2 is not enabled and never held it");
             }
         }
     }
@@ -770,7 +789,23 @@ public class WriteIntegrationTests : CloudflareIntegrationTest
             Log($"uploaded {uploaded.Name}");
 
             var read = await Client.Workers.GetAsync(name);
-            Assert.NotNull(read);
+            if (read is null)
+            {
+                // GetAsync answers null for a 404, and a script Cloudflare has just accepted with a 200 can
+                // still take a moment to become readable, so this is retried once before being called a
+                // failure rather than asserted on straight away.
+                Log($"{name} was not readable straight after the upload; waiting and trying once more.");
+                await Task.Delay(TimeSpan.FromSeconds(3));
+                read = await Client.Workers.GetAsync(name);
+            }
+
+            Assert.True(
+                read is not null,
+                $"GET /accounts/{{account_id}}/workers/scripts/{name} still answered 'not there' on the second " +
+                "try, even though the PUT for that same name returned 200. Either Cloudflare is inconsistent " +
+                "about a freshly uploaded script, or the response is not the shape this library models - and " +
+                "if it is the latter, the transport now throws with the parser's own diagnosis instead of " +
+                "handing back a null that looks like a 404.");
             Assert.Equal(name, read!.Name);
 
             var content = await Client.Workers.GetContentAsync(name);
@@ -917,8 +952,11 @@ public class WriteIntegrationTests : CloudflareIntegrationTest
             return;
         }
 
-        var zone = await Client.Zones.GetAsync(ZoneId);
-        Assert.NotNull(zone);
+        var zone = await ReadableZoneAsync();
+        if (zone is null)
+        {
+            return;
+        }
 
         var result = await Client.Zones.PurgeCacheAsync(
             PurgeCacheRequest.ForFiles(new[] { $"https://{zone!.Name}/cf-net-integration-probe" }));

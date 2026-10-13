@@ -379,6 +379,25 @@ public sealed class CloudflareTransport : ICloudflareTransport, IDisposable
             return response;
         }
 
+        // A body that is shaped like a Cloudflare envelope but did not parse is not an empty result, and
+        // reporting it as one is how a live run came to answer "no such zone" for a zone that curl could
+        // read in full: Success fell back to the status code, Result fell back to default, and the parser's
+        // diagnosis went to a logger nobody had attached. Fail loudly instead, naming the field it choked on.
+        // The envelope check matters - endpoints that answer with a bare array or with script content are
+        // not envelopes, and those legitimately parse to nothing here.
+        if (parseFailure is not null && raw.IsSuccessStatusCode && HasEnvelopeRoot(body))
+        {
+            throw BuildApiException(
+                DescribeParseFailure(request, raw.StatusCode, parseFailure),
+                raw.StatusCode,
+                raw.RequestUri,
+                errors,
+                messages,
+                body,
+                raw.RayId,
+                parseFailure);
+        }
+
         var failed = !success || !raw.IsSuccessStatusCode;
         if (failed && Options.ThrowOnApiError)
         {
@@ -451,6 +470,52 @@ public sealed class CloudflareTransport : ICloudflareTransport, IDisposable
             raw.Body,
             raw.RayId,
             innerException: null);
+    }
+
+    /// <summary>
+    /// Whether a body is shaped like a Cloudflare envelope - a JSON object carrying <c>result</c> or
+    /// <c>success</c> - as opposed to the bare arrays and non-JSON payloads some endpoints answer with.
+    /// </summary>
+    private static bool HasEnvelopeRoot(string body)
+    {
+        if (string.IsNullOrWhiteSpace(body))
+        {
+            return false;
+        }
+
+        try
+        {
+            using var document = JsonDocument.Parse(body);
+            return document.RootElement.ValueKind == JsonValueKind.Object &&
+                   (document.RootElement.TryGetProperty("result", out _) ||
+                    document.RootElement.TryGetProperty("success", out _));
+        }
+        catch (JsonException)
+        {
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// Builds the message for a 2xx whose body CF.Net could not read as the shape it models.
+    /// </summary>
+    private static string DescribeParseFailure(
+        CloudflareRequest request,
+        HttpStatusCode statusCode,
+        JsonException parseFailure)
+    {
+        var builder = new StringBuilder();
+        builder.Append("Cloudflare API call '").Append(request.OperationName ?? request.Method.Method).Append(' ').Append(request.Path)
+            .Append("' answered ").Append((int)statusCode).Append(' ').Append(statusCode)
+            .Append(", but CF.Net could not read the body as the shape it models: ").Append(parseFailure.Message);
+
+        if (parseFailure.Path is { Length: > 0 } path)
+        {
+            builder.Append(" The failing JSON path is ").Append(path).Append('.');
+        }
+
+        builder.Append(" This is a mismatch between the model and the live response, not an empty result, so it is reported as an error rather than as null; the body Cloudflare sent is on the exception's ResponseBody.");
+        return builder.ToString();
     }
 
     private static CloudflareApiException BuildApiException(

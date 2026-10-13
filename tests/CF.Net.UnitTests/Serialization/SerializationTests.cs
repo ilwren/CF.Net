@@ -662,3 +662,101 @@ public class CloudflareJsonTests
         public string? Name { get; set; }
     }
 }
+
+/// <summary>
+/// Cloudflare spells "no value" as JSON <c>null</c> most of the time and as <c>""</c> some of the time, and
+/// one blank field used to cost the whole response: the envelope failed to parse and the caller got a null
+/// that looked like "not found". These pin that a blank string now reads as null for nullable value types,
+/// that real values are untouched, and that the deliberately untyped fields keep their blank strings.
+/// </summary>
+public class BlankStringAsNullTests
+{
+    private sealed class EveryNullableValueType
+    {
+        public int? Count { get; set; }
+        public long? Total { get; set; }
+        public decimal? Price { get; set; }
+        public bool? Enabled { get; set; }
+        public DateTimeOffset? ModifiedOn { get; set; }
+        public Guid? ExternalId { get; set; }
+    }
+
+    [Fact]
+    public void A_blank_date_reads_as_null_and_the_rest_of_the_object_survives()
+    {
+        var zone = JsonSerializer.Deserialize<Zone>(
+            """{"id":"z-1","name":"a.test","activated_on":"","modified_on":null,"created_on":"2024-05-01T12:00:00Z"}""",
+            CloudflareJson.Default);
+
+        Assert.NotNull(zone);
+        Assert.Equal("z-1", zone!.Id);
+        Assert.Null(zone.ActivatedOn);
+        Assert.Null(zone.ModifiedOn);
+        Assert.Equal(2024, zone.CreatedOn!.Value.Year);
+    }
+
+    [Fact]
+    public void Every_nullable_value_type_treats_a_blank_string_as_null()
+    {
+        var parsed = JsonSerializer.Deserialize<EveryNullableValueType>(
+            """{"count":"","total":"  ","price":"","enabled":"","modified_on":"","external_id":""}""",
+            CloudflareJson.Default);
+
+        Assert.NotNull(parsed);
+        Assert.Null(parsed!.Count);
+        Assert.Null(parsed.Total);
+        Assert.Null(parsed.Price);
+        Assert.Null(parsed.Enabled);
+        Assert.Null(parsed.ModifiedOn);
+        Assert.Null(parsed.ExternalId);
+    }
+
+    [Fact]
+    public void Real_values_still_parse_the_way_they_did()
+    {
+        var parsed = JsonSerializer.Deserialize<EveryNullableValueType>(
+            """{"count":3,"total":"42","price":1.25,"enabled":true,"modified_on":"2024-05-01T12:00:00Z"}""",
+            CloudflareJson.Default);
+
+        Assert.NotNull(parsed);
+        Assert.Equal(3, parsed!.Count);
+        Assert.Equal(42L, parsed.Total);
+        Assert.Equal(1.25m, parsed.Price);
+        Assert.True(parsed.Enabled);
+        Assert.Equal(2024, parsed.ModifiedOn!.Value.Year);
+    }
+
+    [Fact]
+    public void A_field_left_deliberately_untyped_keeps_its_blank_string()
+    {
+        // ZoneSetting.Value is raw JSON on purpose, so a blank string there is data about the setting
+        // rather than an absent value, and turning it into null would lose the distinction.
+        var setting = JsonSerializer.Deserialize<ZoneSetting>(
+            """{"id":"always_online","value":""}""",
+            CloudflareJson.Default);
+
+        Assert.NotNull(setting);
+        Assert.True(setting!.Value.HasValue);
+        Assert.Equal(JsonValueKind.String, setting.Value!.Value.ValueKind);
+        Assert.Equal(string.Empty, setting.Value.Value.GetString());
+    }
+
+    [Fact]
+    public void Writing_is_unchanged_so_a_null_is_still_omitted_rather_than_sent()
+    {
+        // Several endpoints 400 on an explicit null, which is why the options ignore nulls when writing.
+        // A converter that reads blank strings must not start emitting them.
+        var json = JsonSerializer.Serialize(
+            new Zone { Id = "z-1", ActivatedOn = null, Paused = false },
+            CloudflareJson.Default);
+
+        Assert.DoesNotContain("activated_on", json, StringComparison.Ordinal);
+        Assert.Contains("\"paused\":false", json, StringComparison.Ordinal);
+
+        var withDate = JsonSerializer.Serialize(
+            new Zone { Id = "z-1", ActivatedOn = new DateTimeOffset(2024, 5, 1, 12, 0, 0, TimeSpan.Zero) },
+            CloudflareJson.Default);
+
+        Assert.Contains("2024-05-01T12:00:00", withDate, StringComparison.Ordinal);
+    }
+}

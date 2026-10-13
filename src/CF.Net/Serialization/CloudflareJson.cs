@@ -41,6 +41,9 @@ public static class CloudflareJson
             Encoder = System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping,
         };
 
+        // Some fields come back as "" rather than null, and one of those used to cost the whole response.
+        options.Converters.Add(new BlankStringAsNullConverterFactory());
+
         return options;
     }
 

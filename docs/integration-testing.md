@@ -276,19 +276,37 @@ permissions but no zone resource returns `10007 Route not found` for a zone you 
 in the dashboard, which reads like a bug in the client and is not.
 
 This is common enough that the workflow checks for it before running anything. The step named *Check what
-the credentials can actually reach* calls `GET /zones?per_page=1`, `GET /zones/{CLOUDFLARE_ZONE_ID}` and
-`GET /accounts/{CLOUDFLARE_ACCOUNT_ID}/r2/buckets?per_page=1` with the same credentials and turns the
-answers into annotations:
+the credentials can actually reach* makes one `curl` call per product area — seventeen of them, covering
+zones, DNS records, DNSSEC and its ZSK, zone settings, certificate packs, custom hostnames, origin TLS
+client auth, cache purge, the account, Workers scripts and domains, Pages, D1, KV and R2 — with the same
+credentials, and reports each answer as `label=status[shape]`:
+
+```
+Reach matrix: zones=200[1 item(s)] zone=200[object, 22 field(s)] dns=200[0 item(s) - EMPTY]
+  settings=200[56 item(s)] custom_hostnames=403[success=false 1404: No quota has been allocated…]
+  cache_purge=400[success=false 1012: Request must contain one of "purge_everything"…] r2=403[…]
+```
+
+The shape is the point. A status code alone cannot tell "readable" from "readable and empty", and a 200
+carrying `"result": null` is a third thing again — which is what makes the matrix worth more than the test
+results when something is misconfigured. From it, three different refusals are told apart:
 
 | What it prints | What it means |
 | --- | --- |
 | `GET /zones succeeded but returned no zones` | the token authenticates but has no Zone Resources, or the zone belongs to a different account. Every zone-scoped test will skip — DNS records, DNSSEC, zone settings, SSL, custom hostnames, origin TLS, cache purge — and the run can be green without having verified any of them |
-| `CLOUDFLARE_ZONE_ID answered 403` | that zone is not in the token's Zone Resources, or is not in this account. Cloudflare answers 403 for both and does not distinguish them |
-| `CLOUDFLARE_ZONE_ID answered 404` | the id is wrong; an out-of-scope zone normally comes back 403/9109, not 404 |
-| `R2 answered 403` | either the R2 permission is missing or R2 is not enabled on the account. Reported as a notice, not an error, because the R2 tests skip with a reason by design |
+| `CLOUDFLARE_ZONE_ID was refused (or not found)` | that zone is not in the token's Zone Resources, or is not in this account. Cloudflare answers 403 for both, and answers 200 with a null result for some out-of-scope zones, which the library reports as `null` the same way |
+| `N probe(s) were refused, covering M missing permission(s)` | the permission really is absent. The step summary carries a token-creation URL that pre-fills every permission this suite needs, so the fix is one click rather than a form |
+| `N probe(s) refused while their permission group read fine elsewhere` | a paid feature that is not switched on, not a token problem. Observed live: `custom_hostnames` answers `1404 No quota has been allocated for this zone` while certificate packs and origin TLS settings in the same *SSL and Certificates* group read fine — that is SSL for SaaS not being enabled |
+| `R2 answered 403` | either the R2 permission is missing or R2 is not enabled on the account (`10042`). Reported as a notice, not an error, because the R2 tests skip with a reason by design |
+
+A probe that answers 4xx for a reason that is *not* a refusal still proves the permission is there: cache
+purge is probed with an empty body, so `400 [1012 Request must contain one of "purge_everything"…]` means
+*Cache Purge — Purge* is granted and nothing was purged. Any 2xx counts as readable, which matters because
+`GET …/origin_tls_client_auth/settings` answers **202**, not 200.
 
 The step never fails the job — a repository with no credentials yet is still allowed to be green — so read
-the annotations rather than the conclusion.
+the annotations rather than the conclusion. Only the annotations, in fact: the step writes its table and the
+token URLs to `$GITHUB_STEP_SUMMARY`, which is visible in the run's UI but not through the API.
 
 **Account-owned tokens.** *Manage Account* → **API Tokens** creates a token owned by the account
 (`cfat_…`) rather than by your user. For CI that is usually the better choice: it does not stop working
@@ -356,6 +374,14 @@ credential either — `CloudflareIntegrationTest` logs the account id, zone name
 not tokens.
 
 ### Triggers, and why not `push`
+
+> **Temporary exception, in the file right now.** `workflow_dispatch` and `schedule` only fire for a
+> workflow that exists on the **default** branch, and this one lives on a feature branch until its pull
+> request is merged — so the Actions page lists it with no *Run workflow* button, and the Monday cron has
+> never fired. While that is true the file also carries `on: push: branches: [<that one branch>]`, plus a
+> matching `github.event_name == 'push'` clause in the `CLOUDFLARE_IT_ENABLE_WRITES` expression so a push
+> run exercises write operations too (a push carries no dispatch inputs). Both are marked TEMPORARY in the
+> file and both get deleted in one commit at the merge; everything below describes the design it returns to.
 
 ```yaml
 on:
@@ -433,6 +459,19 @@ Three things keep a run readable without opening the raw log.
    | `WriteIntegrationTests.An_r2_bucket_can_be_created_and_removed` | `CLOUDFLARE_IT_ENABLE_WRITES` is not 'true'. |
 
    If that table is not empty, a green tick means "there was nothing to verify", not "verified".
+
+**A response CF.Net cannot read.** One failure mode is neither a credential problem nor a Cloudflare
+error, and it is worth recognising because it used to hide: a 2xx whose body is shaped like an envelope but
+does not fit the model. The transport throws `CloudflareApiException` with the message *…answered 200 OK,
+but CF.Net could not read the body as the shape it models…* followed by the parser's own diagnosis — the
+failing JSON path, such as `$.result.activated_on` — and the body Cloudflare sent on `ResponseBody`. Before
+that, the same situation produced a `null` result and a `Success` taken from the status code, so a zone that
+`curl` could read in full was reported by the suite as unreadable and every test that needed it skipped or
+failed on an assertion that said nothing. The zone-scoped helper in the fixture recognises this case
+(`InnerException is JsonException`) and reports it once as a skip reason rather than failing twenty tests
+the same way. Blank strings are already handled: Cloudflare spells "no value" as `""` in places, and
+`BlankStringAsNullConverterFactory` reads those as null for nullable value types instead of losing the
+whole payload.
 
 The writer is `CFNet.TestKit.RunReport`, and its file format is pinned down by offline unit tests in
 `tests/CF.Net.UnitTests/Testing/RunReportTests.cs`. With `CLOUDFLARE_IT_REPORT` unset — the normal

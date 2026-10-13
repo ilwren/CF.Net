@@ -43,7 +43,14 @@ Status legend: ✅ wrapped · ⛔ deliberately out of scope for this phase.
 `ZoneSetting` carries `Id`, `Value` (raw JSON, because Cloudflare's value type differs per setting),
 `Editable`, `ModifiedOn`, plus `AsString()`/`AsNumber()`/`AsBoolean()`/`IsOn` for the common shapes.
 `ZoneSettingIds` declares only the ids that appear in Cloudflare's published schema — every method takes
-the id as a string, so any setting can be addressed. `ZoneSettingValues.On`/`.Off` are the switch literals.
+the id as a string, so any setting can be addressed. One caveat a live run surfaced: a setting is not
+always answered with the id it was requested by. `GET /zones/{zone_id}/settings/origin_tls_compliance_modes`
+reports `"id": "origin_tls_cmpl"` — an abbreviation, not a truncation: the first fifteen characters of the
+request id would be `origin_tls_comp`, so Cloudflare is compressing `compliance` to `cmpl` — while
+`auto_origin_tls_kex` and `ssl_automatic_mode`, both longer, come back intact. `ZoneSettingIds` carries both spellings
+(`OriginTlsComplianceModes` for the path, `OriginTlsComplianceModesReportedId` for the response) and the
+integration test accepts either, so Cloudflare fixing it will not turn the run red. The library never
+rewrites the id: what arrives is what you get. `ZoneSettingValues.On`/`.Off` are the switch literals.
 
 ⛔ Firewall rules, page rules, rate limits, WAF custom rules, Load balancing, Waiting Room, Turnstile —
 separate phases. Certificate packs have their own section below; what is still missing there is ordering,

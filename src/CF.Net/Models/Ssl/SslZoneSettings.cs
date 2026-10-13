@@ -18,7 +18,12 @@ namespace CFNet.Models.Ssl;
 /// </remarks>
 public sealed class AutoOriginTlsKex
 {
-    /// <summary>Setting id, always <c>auto_origin_tls_kex</c>.</summary>
+    /// <summary>
+    /// The setting's id as Cloudflare reported it, normally <c>auto_origin_tls_kex</c>. Its neighbour in the
+    /// same response family answers with a shorter id than the one it was requested by - see
+    /// <c>ZoneSettingIds.OriginTlsComplianceModesReportedId</c> - so this property carries whatever arrived
+    /// rather than echoing the request, and the live run logs it to show which spelling was used.
+    /// </summary>
     [JsonPropertyName("id")]
     public string? Id { get; set; }
 
@@ -88,7 +93,11 @@ public sealed class UpdateAutoOriginTlsKexRequest
 /// </remarks>
 public sealed class SslAutomaticMode
 {
-    /// <summary>Setting id, <c>ssl_automatic_mode</c>.</summary>
+    /// <summary>
+    /// The setting's id as Cloudflare reported it, normally <c>ssl_automatic_mode</c>. Read it rather than
+    /// assuming: one setting in this family reports a truncated id, so the reported value is not always the
+    /// requested one.
+    /// </summary>
     [JsonPropertyName("id")]
     public string? Id { get; set; }
 

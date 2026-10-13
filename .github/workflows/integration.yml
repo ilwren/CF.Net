@@ -14,9 +14,11 @@ name: Integration
 # workflow_dispatch and schedule only fire for a workflow that exists on the DEFAULT branch, and this one
 # lives on arena/5d11f1dd-cf-net until PR #1 is merged. So the Actions page shows no "Run workflow" button
 # and the Monday cron has never fired. Until the merge, a push trigger scoped to that one branch is how a
-# live run gets made. It stays read-only - a push event carries no dispatch inputs, so
-# CLOUDFLARE_IT_ENABLE_WRITES resolves to 'false' and every write test skips with a reason. Delete the
-# push trigger, and only it, once the branch is merged.
+# live run gets made. And because a push event carries no dispatch inputs, the writes switch in the env
+# block below also has a TEMPORARY 'github.event_name == push' clause in it, so a push run exercises write
+# operations as well as reads - which is what the first live run was asked to do. Both temporary parts, the
+# trigger and that clause, get deleted together in one commit once the branch is merged; neither belongs in
+# the schedule/dispatch-only design this workflow is meant to end up with.
 #
 # To make it do anything, add these repository secrets
 # (Settings -> Secrets and variables -> Actions -> New repository secret):
@@ -74,7 +76,10 @@ env:
   CLOUDFLARE_ZONE_ID: ${{ secrets.CLOUDFLARE_ZONE_ID }}
   CLOUDFLARE_API_EMAIL: ${{ secrets.CLOUDFLARE_API_EMAIL }}
   CLOUDFLARE_GLOBAL_API_KEY: ${{ secrets.CLOUDFLARE_GLOBAL_API_KEY }}
-  CLOUDFLARE_IT_ENABLE_WRITES: ${{ (github.event.inputs.enable_writes == true || github.event.inputs.enable_writes == 'true') && 'true' || 'false' }}
+  # TEMPORARY, together with the push trigger below: '|| github.event_name == \'push\'' makes a push run
+  # do write operations, because a push event carries no dispatch inputs and the person who asked for a
+  # first live run asked for it to include writes. Delete that clause and the push trigger in one commit.
+  CLOUDFLARE_IT_ENABLE_WRITES: ${{ (github.event_name == 'push' || github.event.inputs.enable_writes == true || github.event.inputs.enable_writes == 'true') && 'true' || 'false' }}
   # Recording is off unless a cassette name is given. CLOUDFLARE_IT_RECORD only means something
   # together with CLOUDFLARE_IT_CASSETTE.
   CLOUDFLARE_IT_CASSETTE: ${{ github.event.inputs.cassette || '' }}
@@ -313,30 +318,46 @@ jobs:
 
           temp = os.environ.get('RUNNER_TEMP', '.')
 
-          # label -> (endpoint, dashboard permission, template key, template type).
-          # The keys are Cloudflare's own: note that Pages is 'page' and R2 is 'workers_r2', neither of
-          # which is what the dashboard label suggests.
+          # label -> (endpoint, dashboard permission, template key, template type, entitlement note).
+          # The keys are Cloudflare's own, and two do not match their dashboard labels: Pages is 'page'
+          # and R2 is 'workers_r2'. The note carries the reasons a 403 here is not the token's fault.
           AREAS = [
-              ('zones',            'GET /zones',                              'Zone - Read',              'zone',                 'read'),
-              ('zone',             'GET /zones/{zone_id}',                    'Zone - Read',              'zone',                 'read'),
-              ('dns',              'GET /zones/{zone_id}/dns_records',        'DNS - Read',               'dns',                  'read'),
-              ('dnssec',           'GET /zones/{zone_id}/dnssec',             'DNS - Read',               'dns',                  'read'),
-              ('dnssec_zsk',       'GET /zones/{zone_id}/dnssec/zsk',         'DNS - Read',               'dns',                  'read'),
-              ('settings',         'GET /zones/{zone_id}/settings',           'Zone Settings - Read',     'zone_settings',        'read'),
-              ('ssl',              'GET /zones/{zone_id}/ssl/certificate_packs', 'SSL and Certificates - Read', 'ssl_and_certificates', 'read'),
-              ('custom_hostnames', 'GET /zones/{zone_id}/custom_hostnames',   'SSL and Certificates - Read', 'ssl_and_certificates', 'read'),
-              ('origin_tls',       'GET /zones/{zone_id}/origin_tls_client_auth/settings', 'SSL and Certificates - Read', 'ssl_and_certificates', 'read'),
-              ('cache_purge',      'POST /zones/{zone_id}/purge_cache',       'Cache Purge - Purge',      'cache',                'purge'),
-              ('account',          'GET /accounts/{account_id}',              'Account Settings - Read',  'account_settings',     'read'),
-              ('workers_scripts',  'GET /accounts/{account_id}/workers/scripts', 'Workers Scripts - Read', 'workers_scripts',      'read'),
-              ('workers_domains',  'GET /accounts/{account_id}/workers/domains', 'Workers Scripts - Read', 'workers_scripts',      'read'),
-              ('pages',            'GET /accounts/{account_id}/pages/projects', 'Pages - Read',           'page',                 'read'),
-              ('d1',               'GET /accounts/{account_id}/d1/database',  'D1 - Read',                'd1',                   'read'),
-              ('kv',               'GET /accounts/{account_id}/storage/kv/namespaces', 'Workers KV Storage - Read', 'workers_kv_storage', 'read'),
-              ('r2',               'GET /accounts/{account_id}/r2/buckets',   'Workers R2 Storage - Read', 'workers_r2',           'read'),
+              ('zones', 'GET /zones', 'Zone - Read', 'zone', 'read', ''),
+              ('zone', 'GET /zones/{zone_id}', 'Zone - Read', 'zone', 'read', ''),
+              ('dns', 'GET /zones/{zone_id}/dns_records', 'DNS - Read', 'dns', 'read', ''),
+              ('dnssec', 'GET /zones/{zone_id}/dnssec', 'DNS - Read', 'dns', 'read',
+               'an unsigned zone still answers 200 here, with status disabled'),
+              ('dnssec_zsk', 'GET /zones/{zone_id}/dnssec/zsk', 'DNS - Read', 'dns', 'read',
+               'an unsigned zone answers 200 with an empty list, so empty is not a failure'),
+              ('settings', 'GET /zones/{zone_id}/settings', 'Zone Settings - Read', 'zone_settings', 'read',
+               'which settings appear depends on the plan, so a short list is normal'),
+              ('ssl', 'GET /zones/{zone_id}/ssl/certificate_packs', 'SSL and Certificates - Read',
+               'ssl_and_certificates', 'read', ''),
+              ('custom_hostnames', 'GET /zones/{zone_id}/custom_hostnames', 'SSL and Certificates - Read',
+               'ssl_and_certificates', 'read',
+               'SSL for SaaS is a paid feature that has to be enabled on the zone; a 403 here while the rest '
+               'of this permission group reads fine is that, not the token'),
+              ('origin_tls', 'GET /zones/{zone_id}/origin_tls_client_auth/settings',
+               'SSL and Certificates - Read', 'ssl_and_certificates', 'read', ''),
+              ('cache_purge', 'POST /zones/{zone_id}/purge_cache', 'Cache Purge - Purge', 'cache', 'purge',
+               'probed with an empty body that Cloudflare refuses, so nothing is purged either way'),
+              ('account', 'GET /accounts/{account_id}', 'Account Settings - Read', 'account_settings', 'read', ''),
+              ('workers_scripts', 'GET /accounts/{account_id}/workers/scripts', 'Workers Scripts - Read',
+               'workers_scripts', 'read', ''),
+              ('workers_domains', 'GET /accounts/{account_id}/workers/domains', 'Workers Scripts - Read',
+               'workers_scripts', 'read',
+               'workers domains only exist once the account has a workers.dev subdomain or a custom domain, '
+               'so a refusal here while scripts read fine is usually that rather than the token'),
+              ('pages', 'GET /accounts/{account_id}/pages/projects', 'Pages - Read', 'page', 'read',
+               'this endpoint refuses page and per_page with 8000024 on some accounts, which the library '
+               'retries without'),
+              ('d1', 'GET /accounts/{account_id}/d1/database', 'D1 - Read', 'd1', 'read', ''),
+              ('kv', 'GET /accounts/{account_id}/storage/kv/namespaces', 'Workers KV Storage - Read',
+               'workers_kv_storage', 'read', ''),
+              ('r2', 'GET /accounts/{account_id}/r2/buckets', 'Workers R2 Storage - Read', 'workers_r2', 'read',
+               'R2 also has to be enabled on the account, under Storage and Databases, separately from the token'),
           ]
 
-          # The write tests need these on top, as Edit rather than Read.
           WRITE_LEVELS = {
               'zone': 'edit', 'dns': 'edit', 'zone_settings': 'edit', 'ssl_and_certificates': 'edit',
               'workers_scripts': 'edit', 'page': 'edit', 'd1': 'edit', 'workers_kv_storage': 'edit',
@@ -355,78 +376,147 @@ jobs:
               except Exception:
                   return status, None
 
+          def shape(payload):
+              # A 200 is not the same as an answer: this is what distinguishes "readable" from "readable
+              # and empty", which is the difference that a status code alone cannot show.
+              if payload is None:
+                  return 'unparsable body'
+              if payload.get('success') is False:
+                  errors = payload.get('errors') or []
+                  return 'success=false ' + '; '.join(
+                      f"{e.get('code')}: {e.get('message')}" for e in errors)[:120]
+              if 'result' not in payload:
+                  return 'no result field'
+              result = payload['result']
+              if result is None:
+                  return 'result is NULL'
+              if isinstance(result, list):
+                  return f'{len(result)} item(s)' + ('' if result else ' - EMPTY')
+              if isinstance(result, dict):
+                  return f'object, {len(result)} field(s)'
+              if isinstance(result, str):
+                  return f'string, {len(result)} char(s)'
+              return type(result).__name__
+
           def detail(payload):
               if not payload:
                   return ''
-              errors = payload.get('errors') or []
-              return '; '.join(f"{e.get('code')}: {e.get('message')}" for e in errors)[:160]
+              return '; '.join(f"{e.get('code')}: {e.get('message')}"
+                               for e in (payload.get('errors') or []))[:160]
+
+          answers = {label: read(label) for label, *_ in AREAS}
+
+          def answered(status):
+              # Anything 2xx counts: GET /zones/{zone_id}/origin_tls_client_auth/settings answers 202
+              # Accepted on a live zone, and treating that as anything other than "readable" would report
+              # a permission that is there as one that is not.
+              return bool(status) and status.startswith('2')
+
+          granted = {key for label, _, _, key, _, _ in AREAS if answered(answers[label][0])}
 
           rows = []
           missing = []
-          empty_zone_list = False
+          entitlement = []
+          scope = []
+          compact = []
 
-          for label, endpoint, group, key, ptype in AREAS:
-              status, payload = read(label)
+          for label, endpoint, group, key, ptype, note in AREAS:
+              status, payload = answers[label]
               if status is None:
                   continue
+              form = shape(payload)
+              compact.append(f'{label}={status}[{form}]')
 
-              # Cache purge is probed with a body Cloudflare refuses, so a validation error is the good
-              # answer: it means the permission is there and nothing was purged.
-              if label == 'cache_purge' and status not in ('200', '403', '404'):
-                  rows.append((endpoint, group, status, 'permission present - the empty body was refused, nothing was purged'))
-                  continue
-
-              if status == '200':
-                  if label == 'zones' and not ((payload or {}).get('result') or []):
-                      empty_zone_list = True
-                      rows.append((endpoint, group, status, 'OK but returned NO ZONES'))
-                  else:
-                      rows.append((endpoint, group, status, 'readable'))
+              if label == 'cache_purge' and not answered(status) and status not in ('403', '404'):
+                  verdict = 'permission present - the empty body was refused, nothing was purged'
+              elif answered(status):
+                  verdict = f'readable ({form})'
               elif status == '403':
-                  rows.append((endpoint, group, status, 'FORBIDDEN - ' + (detail(payload) or 'no error detail')))
-                  if label != 'r2':
+                  refused = detail(payload) or 'no error detail'
+                  if label == 'zone':
+                      # The list probe can answer 200 with nothing in it while this one is refused, and
+                      # calling that a feature limit would send somebody hunting through paid add-ons
+                      # instead of the token's Zone Resources.
+                      verdict = ("FORBIDDEN - this zone is outside the token's Zone Resources, or "
+                                 f'CLOUDFLARE_ZONE_ID is not a zone in this account ({refused})')
+                      scope.append(endpoint)
+                  elif key in granted:
+                      verdict = 'FORBIDDEN, but the same permission group read fine elsewhere - ' + (
+                          note or 'a feature or entitlement limit rather than a missing permission')
+                      entitlement.append((endpoint, group, note))
+                  elif label == 'r2':
+                      # R2 has to be enabled on the account before any token can read it, so a 403 here is
+                      # reported separately rather than as a permission to add.
+                      verdict = f'FORBIDDEN - {refused}. ' + note
+                  else:
+                      verdict = f'FORBIDDEN - needs {group} ({refused})' + (f'. {note}' if note else '')
                       missing.append((group, key, ptype))
               elif status == '404':
-                  rows.append((endpoint, group, status, 'not found - a wrong id or an absent resource, not a permission'))
+                  verdict = ('not found - a wrong id or an absent resource, not a permission' +
+                             (f'. {note}' if note else ''))
+                  if label == 'zone':
+                      scope.append(endpoint)
               else:
-                  rows.append((endpoint, group, status, detail(payload) or 'unexpected'))
+                  verdict = f'HTTP {status} ' + (detail(payload) or form)
+              rows.append((endpoint, group, status, verdict, note))
 
           lines = ['### What these credentials can reach', '',
                    '| Endpoint | Permission it needs | HTTP | Verdict |', '| --- | --- | ---: | --- |']
-          for endpoint, group, status, verdict in rows:
+          for endpoint, group, status, verdict, note in rows:
               lines.append(f'| `{endpoint}` | {group} | {status} | {verdict} |')
           lines.append('')
 
+          zones_status, zones_payload = answers['zones']
+          empty_zone_list = answered(zones_status) and not ((zones_payload or {}).get('result') or [])
           if empty_zone_list:
               lines += [
                   '**`GET /zones` succeeded but returned no zones.** The token authenticates and can see '
-                  'nothing zone-scoped, so DNS records, DNSSEC, zone settings, SSL, custom hostnames, '
-                  'origin TLS client auth and cache purge will all skip. Edit the token and, under **Zone '
-                  'Resources**, include the zone in `CLOUDFLARE_ZONE_ID` (or *All zones*) - permissions '
-                  'alone are not enough, the zone has to be in scope.', '']
+                  'nothing zone-scoped, so DNS records, DNSSEC, zone settings, SSL, custom hostnames, origin '
+                  'TLS client auth and cache purge will all skip. Edit the token and, under **Zone '
+                  'Resources**, include the zone in `CLOUDFLARE_ZONE_ID` (or *All zones*) - permissions alone '
+                  'are not enough, the zone has to be in scope.', '']
+
+          zone_status, zone_payload = answers['zone']
+          null_zone_result = answered(zone_status) and (zone_payload or {}).get('result') is None
+          if null_zone_result:
+              lines += [
+                  '**`GET /zones/{zone_id}` answered 200 with a null result**, which the library reports as '
+                  '`null` exactly as it does a 403 or a 404. Cloudflare does this for a zone outside the '
+                  'token\'s Zone Resources as well as for one that does not exist, so check the id and the '
+                  'token scope rather than the client.', '']
+
+          if scope:
+              lines += ['**The configured zone was refused.** `CLOUDFLARE_ZONE_ID` is either outside the '
+                        "token's **Zone Resources** or is not a zone in the account named by "
+                        '`CLOUDFLARE_ACCOUNT_ID`. Cloudflare answers 403 for both and does not distinguish '
+                        'them, and it also answers 200 with a null result for some out-of-scope zones, which '
+                        'the library reports as `null` the same way it reports a 404.', '']
 
           if missing:
               wanted = []
-              for group, key, ptype in missing:
-                  if (group, key, ptype) not in wanted:
-                      wanted.append((group, key, ptype))
-              lines += ['**Missing:** ' + ', '.join(f'{group} (`{{"key":"{key}","type":"{ptype}"}}`)'
-                                                    for group, key, ptype in wanted), '']
+              for entry in missing:
+                  if entry not in wanted:
+                      wanted.append(entry)
+              lines += ['**Missing permissions:** ' +
+                        ', '.join(f'{group} (`{{"key":"{key}","type":"{ptype}"}}`)'
+                                  for group, key, ptype in wanted), '']
+          if entitlement:
+              lines += ['**Refused but not a permission problem:**']
+              lines += [f'- `{endpoint}` ({group}) - {note}' for endpoint, group, note in entitlement]
+              lines.append('')
 
           def encode(permissions):
               return urllib.parse.quote(
                   json.dumps([{'key': key, 'type': ptype} for key, ptype in permissions],
-                             separators=(',', ':')),
-                  safe='')
+                             separators=(',', ':')), safe='')
 
-          read_only = [(key, ptype) for _, _, _, key, ptype in AREAS]
+          seen = []
+          for _, _, _, key, ptype, _ in AREAS:
+              if (key, ptype) not in seen:
+                  seen.append((key, ptype))
           # The verify step before this one calls accounts/{account_id}/tokens/verify, which has no probe
           # of its own here - a token built from the URLs below still has to be able to answer it.
-          read_only.append(('account_api_tokens', 'read'))
-          seen = []
-          for entry in read_only:
-              if entry not in seen:
-                  seen.append(entry)
+          seen.append(('account_api_tokens', 'read'))
           full = [(key, WRITE_LEVELS.get(key, ptype)) for key, ptype in seen]
           name = urllib.parse.quote('CF.Net integration')
 
@@ -448,45 +538,63 @@ jobs:
               '',
               f'- Account-owned (`cfat_`), **full suite including writes**: {account_full}',
               f'- Account-owned (`cfat_`), **read-only** (all the Monday schedule needs): {account_read}',
-              f'- User-owned (`cfut_`), full suite - also makes `GET /user/tokens/verify` work, which an '
-              f'account-owned token can never answer: {user_full}',
+              f'- User-owned (`cfut_`), full suite - also the only kind that can answer '
+              f'`GET /user/tokens/verify`: {user_full}',
               '',
-              'Keys are Cloudflare\'s own and two of them do not match their dashboard labels: Pages is '
-              '`page`, R2 is `workers_r2`. R2 also has to be enabled on the account separately, so a 403 '
-              'there is reported as a notice rather than a missing permission.',
-              '',
-              'The read-only URL still carries Cache Purge, because the probe above reads that permission '
-              'with a body Cloudflare refuses; only the write tests actually purge anything. Drop it if you '
-              'want the strict minimum.',
+              "Keys are Cloudflare's own and two of them do not match their dashboard labels: Pages is "
+              '`page`, R2 is `workers_r2`. The read-only URL still carries `cache: purge`, because the probe '
+              'above reads that permission with a body Cloudflare refuses; only the write tests purge '
+              'anything, so drop it if you want the strict minimum.',
               '']
 
-          text = '\n'.join(lines)
+          body = '\n'.join(lines)
           summary = os.environ.get('GITHUB_STEP_SUMMARY')
           if summary:
               with open(summary, 'a', encoding='utf-8') as handle:
-                  handle.write(text + '\n')
-          print(text)
+                  handle.write(body + '\n')
+          print(body)
 
-          # Annotations are capped at ten per level per step, so the detail lives in the summary above and
-          # only the verdict is announced here.
-          readable = sum(1 for row in rows if row[3] == 'readable' or row[3].startswith('permission present'))
+          # Annotations are the only part of a run that is readable through the API without downloading
+          # the job log, and GitHub keeps at most ten per level per step - so the whole matrix goes out as
+          # one dense notice and the verdicts stay in the summary above.
+          print('::notice::Reach matrix: ' + ' '.join(compact)[:1500])
           if missing:
               names = ', '.join(sorted({group for group, _, _ in missing}))
-              print(f'::error::{len(missing)} of {len(rows)} probe(s) were refused. Missing: {names}. '
-                    'The step summary has the per-endpoint table and a token-creation URL that pre-fills '
-                    'every permission this suite needs.')
-          else:
-              print(f'::notice::{readable} of {len(rows)} probe(s) answered; nothing was refused. '
-                    'Every product area this suite reads is in scope.')
-          r2_status, _ = read('r2')
-          if r2_status == '403':
-              print('::notice::R2 answered 403 and is deliberately not counted as missing: either the token '
-                    'lacks Workers R2 Storage - Read, or R2 is not enabled on this account, which is a '
-                    'one-time dashboard step. The R2 tests skip with a reason either way.')
+              groups = len({group for group, _, _ in missing})
+              print(f'::error::{len(missing)} probe(s) were refused, covering {groups} missing '
+                    f'permission(s): {names}. '
+                    'The step summary has a token-creation URL that pre-fills every permission this suite '
+                    'needs.')
+          if entitlement:
+              names = ', '.join(endpoint for endpoint, _, _ in entitlement)
+              print(f'::notice::{len(entitlement)} probe(s) refused while their permission group read fine '
+                    f'elsewhere: {names}. That is a feature or entitlement limit, not the token - the step '
+                    'summary says which feature each one is.')
+          if scope:
+              print("::error::CLOUDFLARE_ZONE_ID was refused (or not found): the zone is outside the token's "
+                    'Zone Resources, or it is not a zone in the account named by CLOUDFLARE_ACCOUNT_ID. '
+                    'Every zone-scoped test will skip until that is fixed.')
+          if not missing and not entitlement and not scope:
+              refused = sum(1 for row in rows if row[2] == '403')
+              if refused:
+                  print(f'::notice::{len(rows)} probes answered, {refused} refused for reasons that are not '
+                        'permissions (R2 not enabled, or a paid feature not switched on for the zone). '
+                        'Everything the suite needs from the token is in scope.')
+              else:
+                  print(f'::notice::{len(rows)} of {len(rows)} probes answered and nothing was refused: every '
+                        'product area this suite reads is in scope.')
           if empty_zone_list:
-              print('::error::GET /zones returned no zones: add the zone to the token\'s Zone Resources, '
-                    'or the zone belongs to a different account than CLOUDFLARE_ACCOUNT_ID and an '
+              print("::error::GET /zones returned no zones: add the zone to the token's Zone Resources, or "
+                    'the zone belongs to a different account than CLOUDFLARE_ACCOUNT_ID and an '
                     'account-owned token will never see it.')
+          if null_zone_result:
+              print('::error::GET /zones/{zone_id} answered 200 with a null result, which reads as "no such '
+                    'zone" to the library and usually means the zone is outside the token\'s Zone Resources.')
+          r2_status, _ = answers['r2']
+          if r2_status == '403':
+              print('::notice::R2 answered 403 and is not counted as missing: either the token lacks Workers '
+                    'R2 Storage - Read, or R2 is not enabled on this account, which is a one-time dashboard '
+                    'step. The R2 tests skip with a reason either way.')
           PY
 
       - name: Restore

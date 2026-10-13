@@ -21,7 +21,12 @@ namespace CFNet.Models.Ssl;
 /// </remarks>
 public sealed class OriginTlsComplianceModes
 {
-    /// <summary>Always <c>origin_tls_compliance_modes</c>.</summary>
+    /// <summary>
+    /// The setting's id - and not the one it was requested by. The path takes
+    /// <c>origin_tls_compliance_modes</c>; the result reports <c>origin_tls_cmpl</c>, observed live on
+    /// 2026-10-13. Both spellings are constants on <c>CFNet.Models.Zones.ZoneSettingIds</c>, so a caller
+    /// comparing this against the request id should compare against the reported one instead.
+    /// </summary>
     [JsonPropertyName("id")]
     public string? Id { get; set; }
 

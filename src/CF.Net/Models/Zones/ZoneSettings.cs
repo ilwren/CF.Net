@@ -165,7 +165,26 @@ public static class ZoneSettingIds
     /// Value is an <b>array</b> of mode strings (<c>"fips"</c>, <c>"pqh"</c>), not a scalar, and both its
     /// write verbs replace the whole list - <c>ISslService</c> wraps it typed instead.
     /// </summary>
+    /// <remarks>
+    /// This is the id to put in the <b>path</b>. The same setting reports a different, shorter id in its own
+    /// response - see <see cref="OriginTlsComplianceModesReportedId"/> - so comparing a setting read back
+    /// from Cloudflare against this constant fails even though nothing is wrong.
+    /// </remarks>
     public const string OriginTlsComplianceModes = "origin_tls_compliance_modes";
+
+    /// <summary>
+    /// The id <c>GET /zones/{zone_id}/settings/origin_tls_compliance_modes</c> reports back inside its own
+    /// result: <c>origin_tls_cmpl</c>. Observed against the live API on 2026-10-13.
+    /// </summary>
+    /// <remarks>
+    /// It is an abbreviation, not a truncation: the first fifteen characters of the request id would be
+    /// <c>origin_tls_comp</c>, whereas Cloudflare compresses <c>compliance</c> to <c>cmpl</c>. Nothing in the
+    /// response explains why, and only this one setting was observed doing it - the neighbouring
+    /// <c>auto_origin_tls_kex</c> and <c>ssl_automatic_mode</c> are longer and were read back without
+    /// complaint in the same run. So this constant records an observation rather than a rule: send
+    /// <see cref="OriginTlsComplianceModes"/> in the path, and be prepared to read this back.
+    /// </remarks>
+    public const string OriginTlsComplianceModesReportedId = "origin_tls_cmpl";
 }
 
 /// <summary>

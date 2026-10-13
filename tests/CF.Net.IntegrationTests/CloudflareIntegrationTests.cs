@@ -130,8 +130,10 @@ public class ReadOnlyIntegrationTests : CloudflareIntegrationTest
         Log($"zones: {zones.Count} of {zones.TotalCount}");
         if (zones.Count == 0)
         {
-            Warn("GET /zones returned no zones for this token, so every zone-scoped test has nothing to read. " +
-                 "Check the token's Zone Resources scope, and that CLOUDFLARE_ACCOUNT_ID owns the zone in CLOUDFLARE_ZONE_ID.");
+            Warn($"GET /zones returned no zones on this page (result_info reported {zones.TotalCount?.ToString() ?? "no total"}), " +
+                 "so every zone-scoped test has nothing to read. Check the token's Zone Resources scope, and that " +
+                 "CLOUDFLARE_ACCOUNT_ID owns the zone in CLOUDFLARE_ZONE_ID. A total above zero with an empty page " +
+                 "would instead mean the list is being filtered or paged somewhere it should not be.");
         }
         foreach (var zone in zones.Items)
         {
@@ -145,11 +147,13 @@ public class ReadOnlyIntegrationTests : CloudflareIntegrationTest
         {
             var zone = await Client.Zones.GetAsync(ZoneId);
 
-            // GetAsync answers null for a zone the token may not see as well as for one that does not
-            // exist, so this is a configuration problem to report rather than a bug to fail on.
+            // GetAsync answers null for a zone the token may not see, for one that does not exist, and -
+            // observed live - for a 200 whose result is null, so the three cannot be told apart from here.
+            // That makes this a configuration problem to report rather than a bug to fail on, and the
+            // message has to carry all three possibilities instead of naming one.
             if (!SkipUnless(
                     zone is not null,
-                    $"CLOUDFLARE_ZONE_ID ({ZoneId}) is not readable with this token: Cloudflare answered 403 or 404. Either the zone is in a different account than CLOUDFLARE_ACCOUNT_ID, or it is outside the token's Zone Resources."))
+                    $"CLOUDFLARE_ZONE_ID ({ZoneId}) came back unreadable, which GetAsync reports as null for any of three reasons: Cloudflare answered 403 (the zone is outside the token's Zone Resources, or belongs to a different account than CLOUDFLARE_ACCOUNT_ID), answered 404 (the id is not a zone), or answered 200 with no result. The zone list above returned {zones.Count} zone(s) of {zones.TotalCount?.ToString() ?? "unknown"}, which narrows it down."))
             {
                 return;
             }
@@ -1002,17 +1006,32 @@ public class WriteIntegrationTests : CloudflareIntegrationTest
             var universal = await Client.Ssl.GetUniversalSettingsAsync();
             Log($"universal ssl enabled={universal.Enabled?.ToString() ?? "unknown"}");
 
+            // Each of these logs the id it was answered with as well as the value. The compliance modes
+            // setting reports 'origin_tls_cmpl' for a request made with 'origin_tls_compliance_modes', so
+            // the three are compared here rather than assumed: whichever of them shorten, the next run says.
             var kex = await Client.Ssl.GetAutoOriginTlsKexAsync();
-            Log($"auto_origin_tls_kex enabled={kex.Enabled?.ToString() ?? "unknown"}");
+            Log($"auto_origin_tls_kex enabled={kex.Enabled?.ToString() ?? "unknown"} reported id={kex.Id ?? "(none)"}");
 
             var automatic = await Client.Ssl.GetAutomaticSslAsync();
-            Log($"ssl_automatic_mode value={automatic.Value} next_scan={automatic.NextScheduledScan?.ToString("O") ?? "(none)"}");
+            Log($"ssl_automatic_mode value={automatic.Value} reported id={automatic.Id ?? "(none)"} " +
+                $"next_scan={automatic.NextScheduledScan?.ToString("O") ?? "(none)"}");
 
             var modes = await Client.Ssl.GetOriginTlsComplianceModesAsync();
-            Log($"origin_tls_compliance_modes={modes?.ToString() ?? "(no result)"}");
+            Log($"origin_tls_compliance_modes={modes?.ToString() ?? "(no result)"} reported id={modes?.Id ?? "(none)"}");
             if (modes is not null)
             {
-                Assert.Equal("origin_tls_compliance_modes", modes.Id);
+                // Either spelling is accepted: Cloudflare answers with the short one today, and a constant
+                // that hard-codes that would turn their fix into a red run here.
+                Assert.Contains(
+                    modes.Id,
+                    new[] { ZoneSettingIds.OriginTlsComplianceModes, ZoneSettingIds.OriginTlsComplianceModesReportedId });
+
+                if (modes.Id != ZoneSettingIds.OriginTlsComplianceModes)
+                {
+                    Warn($"GET /zones/{{zone_id}}/settings/{ZoneSettingIds.OriginTlsComplianceModes} reported its id " +
+                         $"as '{modes.Id}' rather than the id it was requested by. The library sends the long one and " +
+                         $"reads back whatever arrives, so this is a Cloudflare quirk to know about, not a defect.");
+                }
             }
         }
         catch (CloudflareApiException exception) when (exception.StatusCode == System.Net.HttpStatusCode.Forbidden)

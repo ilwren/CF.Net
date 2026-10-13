@@ -6,6 +6,7 @@ using CFNet.Models.Common;
 using CFNet.Models.Dns;
 using CFNet.Models.Ssl;
 using CFNet.Models.Zones;
+using CFNet.Serialization;
 using CFNet.UnitTests.Testing;
 using Xunit;
 
@@ -3875,5 +3876,77 @@ public class DnssecServiceTests
         Assert.Null(request.DnssecMultiSigner);
         Assert.Null(request.DnssecPresigned);
         request.EnsureValid();
+    }
+}
+
+/// <summary>
+/// One zone setting is addressed by two different ids: the one in the path, and the one Cloudflare puts
+/// in the response. Both are pinned here because they were discovered by a live run answering
+/// <c>origin_tls_cmpl</c> to a request for <c>origin_tls_compliance_modes</c>, and nothing offline would
+/// ever have caught it.
+/// </summary>
+public class ZoneSettingIdTests
+{
+    [Fact]
+    public void The_compliance_modes_setting_has_a_path_id_and_a_reported_id()
+    {
+        Assert.Equal("origin_tls_compliance_modes", ZoneSettingIds.OriginTlsComplianceModes);
+        Assert.Equal("origin_tls_cmpl", ZoneSettingIds.OriginTlsComplianceModesReportedId);
+    }
+
+    [Fact]
+    public void The_reported_id_is_an_abbreviation_of_the_path_id_and_not_a_truncation_of_it()
+    {
+        // Worth pinning, because the tempting explanation is wrong. The reported id is fifteen characters
+        // long, but the first fifteen of the path id are 'origin_tls_comp': Cloudflare compresses
+        // 'compliance' to 'cmpl' rather than cutting the string. Anything that assumed a prefix match would
+        // quietly stop working here, so the relationship is stated as what it is - same prefix, same length
+        // as observed, different spelling.
+        Assert.Equal(
+            "origin_tls_",
+            ZoneSettingIds.OriginTlsComplianceModesReportedId[.."origin_tls_".Length]);
+        Assert.Equal(15, ZoneSettingIds.OriginTlsComplianceModesReportedId.Length);
+        Assert.NotEqual(
+            ZoneSettingIds.OriginTlsComplianceModes[..15],
+            ZoneSettingIds.OriginTlsComplianceModesReportedId);
+        // And neither is a prefix of the other, which is what makes the two constants irreducible: no
+        // amount of trimming or padding turns one into the other.
+        Assert.False(ZoneSettingIds.OriginTlsComplianceModes
+            .StartsWith(ZoneSettingIds.OriginTlsComplianceModesReportedId));
+        Assert.False(ZoneSettingIds.OriginTlsComplianceModesReportedId
+            .StartsWith(ZoneSettingIds.OriginTlsComplianceModes));
+    }
+
+    [Fact]
+    public void A_setting_read_back_under_either_id_deserialises_into_the_same_model()
+    {
+        // The library does not rewrite the id, so a caller comparing it against the constant they sent has
+        // to know which one Cloudflare used. Both spellings have to land in OriginTlsComplianceModes.
+        foreach (var id in new[]
+                 {
+                     ZoneSettingIds.OriginTlsComplianceModes,
+                     ZoneSettingIds.OriginTlsComplianceModesReportedId,
+                 })
+        {
+            var modes = CloudflareJson.Default.Deserialize<OriginTlsComplianceModes>(
+                $$"""{"id":"{{id}}","editable":true,"value":["fips"]}""");
+
+            Assert.NotNull(modes);
+            Assert.Equal(id, modes!.Id);
+            Assert.Equal(new[] { "fips" }, modes.Value);
+        }
+    }
+
+    [Fact]
+    public void The_neighbouring_setting_ids_are_not_truncated_themselves()
+    {
+        // Both are longer than the compliance modes setting's reported id and were read back in the same
+        // live run without complaint, so the abbreviation is specific to that one setting rather than a rule
+        // about the settings API. Their reported ids are logged by the integration run, which is what would
+        // show that changing.
+        Assert.Equal("auto_origin_tls_kex", ZoneSettingIds.AutoOriginTlsKex);
+        Assert.Equal("ssl_automatic_mode", ZoneSettingIds.SslAutomaticMode);
+        Assert.True(ZoneSettingIds.AutoOriginTlsKex.Length > 15);
+        Assert.True(ZoneSettingIds.SslAutomaticMode.Length > 15);
     }
 }

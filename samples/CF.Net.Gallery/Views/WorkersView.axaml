@@ -111,6 +111,22 @@
 
         <Border Classes="card">
           <StackPanel Orientation="Vertical" Spacing="10">
+            <TextBlock Classes="h2" Text="Cron triggers  -  GET / PUT /accounts/{account_id}/workers/scripts/{script_name}/schedules" />
+            <StackPanel Orientation="Vertical" Spacing="3" Margin="0,0,16,8">
+              <TextBlock Classes="hint" Text="Cron expressions, separated by commas or new lines" />
+              <TextBox Text="{Binding CronExpressions, Mode=TwoWay}" MinWidth="420" HorizontalAlignment="Left" AcceptsReturn="True" PlaceholderText="*/30 * * * *" />
+            </StackPanel>
+            <WrapPanel Orientation="Horizontal">
+              <Button Classes="run" Content="List triggers" Command="{Binding ListSchedulesCommand}" Margin="0,0,8,0" />
+              <Button Content="Set triggers" Command="{Binding UpdateSchedulesCommand}" Margin="0,0,8,0" />
+              <Button Content="Clear triggers" Command="{Binding ClearSchedulesCommand}" />
+            </WrapPanel>
+            <TextBlock Classes="hint" Text="The PUT replaces the whole set: a trigger not in the list is removed, so setting one expression on a Worker that has three leaves it with one. Its body is a bare JSON array of cron objects rather than an object holding one. Clearing sends an empty array. Reading needs Workers Scripts Read; writing needs Workers Scripts Write." />
+          </StackPanel>
+        </Border>
+
+        <Border Classes="card">
+          <StackPanel Orientation="Vertical" Spacing="10">
             <TextBlock Classes="h2" Text="Deployments  -  GET / POST /accounts/{account_id}/workers/scripts/{script_name}/deployments" />
             <WrapPanel Orientation="Horizontal">
               <StackPanel Orientation="Vertical" Spacing="3" Margin="0,0,16,8">

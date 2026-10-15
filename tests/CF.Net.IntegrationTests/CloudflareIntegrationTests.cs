@@ -848,7 +848,9 @@ public class WriteIntegrationTests : CloudflareIntegrationTest
         {
             var uploaded = await Client.Workers.UploadAsync(
                 name,
-                "export default { async fetch(request) { return new Response('cf-net'); } }",
+                // The scheduled handler is here so the cron triggers below are set on a Worker that can
+                // be triggered; the fetch assertion only looks for the response text.
+                "export default { async fetch(request) { return new Response('cf-net'); }, async scheduled(event) { } }",
                 "2025-01-01",
                 new[] { WorkerBinding.PlainText("GREETING", "hello") });
 
@@ -1021,7 +1023,7 @@ public class WriteIntegrationTests : CloudflareIntegrationTest
             // the only call that answers with startup_time_ms and exports_reconciliation.
             var secondRequest = new UploadWorkerScriptRequest(
                 name,
-                "export default { async fetch() { return new Response('v2'); } }",
+                "export default { async fetch() { return new Response('v2'); }, async scheduled(event) { } }",
                 DateTime.UtcNow.ToString("yyyy-MM-dd"))
             {
                 Annotations = new WorkerAnnotations
@@ -1083,6 +1085,37 @@ public class WriteIntegrationTests : CloudflareIntegrationTest
             var afterCreate = await Client.Workers.ListVersionsAsync(name);
             Assert.Equal(2, afterCreate!.Count);
             Assert.Equal(created.Id, afterCreate.Latest?.Id);
+
+            // Cron triggers are a whole-set replacement, so this writes two, reads them back and then
+            // clears them again - the empty PUT is how a script's triggers are removed. The script is
+            // deleted in the finally block below, which takes whatever is left of them with it.
+            var scheduled = await Client.Workers.UpdateSchedulesAsync(
+                name,
+                new[] { "*/30 * * * *", "0 3 * * *" });
+            Assert.NotNull(scheduled);
+            Assert.Equal(2, scheduled!.Count);
+            Assert.Equal(new[] { "*/30 * * * *", "0 3 * * *" }, scheduled.Expressions);
+            Log($"cron triggers set: {scheduled}");
+
+            var schedules = await Client.Workers.ListSchedulesAsync(name);
+            Assert.NotNull(schedules);
+            Assert.Equal(2, schedules!.Count);
+            Assert.Contains("*/30 * * * *", schedules.Expressions);
+            Log($"cron triggers read back: {schedules}; first created " +
+                $"{schedules.Schedules?[0].CreatedOn:O} modified {schedules.Schedules?[0].ModifiedOn:O}");
+
+            if (schedules.Schedules?[0].AdditionalData is { Count: > 0 } ||
+                schedules.AdditionalData is { Count: > 0 })
+            {
+                Warn($"GET /accounts/{{account_id}}/workers/scripts/{name}/schedules returned fields this " +
+                     $"library does not model yet - schedule: " +
+                     $"{JsonSerializer.Serialize(schedules.Schedules?[0].AdditionalData)}, result: " +
+                     $"{JsonSerializer.Serialize(schedules.AdditionalData)}.");
+            }
+
+            var cleared = await Client.Workers.UpdateSchedulesAsync(name, Array.Empty<string>());
+            Assert.Equal(0, cleared!.Count);
+            Log("cron triggers cleared with an empty PUT");
 
             var settings = await Client.Workers.GetSettingsAsync(name);
             Log($"logpush={settings?.Logpush} tags={string.Join(",", settings?.Tags ?? new List<string>())}");

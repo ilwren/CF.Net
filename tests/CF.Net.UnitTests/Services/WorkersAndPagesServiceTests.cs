@@ -2260,3 +2260,129 @@ public class WorkerVersionUploadTests
             reconciliation.Value.GetProperty("warnings")[0].GetProperty("scenario").GetString());
     }
 }
+
+/// <summary>
+/// <c>GET</c> and <c>PUT /accounts/{account_id}/workers/scripts/{script_name}/schedules</c> - a script's cron
+/// triggers, where the update replaces the whole set and its body is a bare JSON array.
+/// </summary>
+public class WorkerScheduleTests
+{
+    [Fact]
+    public async Task ListSchedulesAsync_reads_the_schedules_object_the_result_nests()
+    {
+        using var harness = CloudflareHarness.Create();
+        harness.RespondWithResult("""
+            {"schedules":[
+              {"cron":"*/30 * * * *","created_on":"2026-10-15T07:00:00Z","modified_on":"2026-10-15T07:05:00Z"},
+              {"cron":"0 3 * * *"}
+            ]}
+            """);
+
+        var schedules = await harness.Client.Workers.ListSchedulesAsync("hello");
+
+        Assert.EndsWith(
+            "/workers/scripts/hello/schedules",
+            harness.LastRequest.Path,
+            StringComparison.Ordinal);
+        Assert.Equal(string.Empty, harness.LastRequest.Query);
+        Assert.NotNull(schedules);
+        Assert.Equal(2, schedules!.Count);
+        Assert.Equal(new[] { "*/30 * * * *", "0 3 * * *" }, schedules.Expressions);
+        Assert.Equal(
+            new DateTimeOffset(2026, 10, 15, 7, 0, 0, TimeSpan.Zero),
+            schedules.Schedules![0].CreatedOn);
+        Assert.Equal(
+            new DateTimeOffset(2026, 10, 15, 7, 5, 0, TimeSpan.Zero),
+            schedules.Schedules![0].ModifiedOn);
+        Assert.Null(schedules.Schedules![1].CreatedOn);
+        Assert.Equal("*/30 * * * *, 0 3 * * *", schedules.ToString());
+    }
+
+    [Fact]
+    public async Task A_script_with_no_cron_triggers_answers_an_empty_set_rather_than_an_error()
+    {
+        using var harness = CloudflareHarness.Create();
+        harness.RespondWithResult("""{"schedules":[]}""");
+
+        var schedules = await harness.Client.Workers.ListSchedulesAsync("hello");
+
+        Assert.NotNull(schedules);
+        Assert.Equal(0, schedules!.Count);
+        Assert.Empty(schedules.Expressions);
+        Assert.Equal("no cron triggers", schedules.ToString());
+    }
+
+    [Fact]
+    public async Task UpdateSchedulesAsync_puts_a_bare_array_of_expressions()
+    {
+        using var harness = CloudflareHarness.Create();
+        harness.RespondWithResult("""{"schedules":[{"cron":"*/30 * * * *"},{"cron":"0 3 * * *"}]}""");
+
+        var updated = await harness.Client.Workers.UpdateSchedulesAsync(
+            "hello",
+            new[] { "*/30 * * * *", "0 3 * * *" });
+
+        Assert.Equal(HttpMethod.Put, harness.LastRequest.Method);
+        Assert.EndsWith("/workers/scripts/hello/schedules", harness.LastRequest.Path, StringComparison.Ordinal);
+
+        var body = harness.LastRequest.Body!;
+
+        // The body is the array itself, not an object holding one, and the timestamps Cloudflare writes are
+        // not echoed back to it.
+        Assert.StartsWith("[{", body, StringComparison.Ordinal);
+        Assert.Contains("\"cron\":\"*/30 * * * *\"", body, StringComparison.Ordinal);
+        Assert.Contains("\"cron\":\"0 3 * * *\"", body, StringComparison.Ordinal);
+        Assert.DoesNotContain("created_on", body, StringComparison.Ordinal);
+
+        Assert.Equal(2, updated!.Count);
+    }
+
+    [Fact]
+    public async Task UpdateSchedulesAsync_with_no_expressions_clears_every_trigger()
+    {
+        using var harness = CloudflareHarness.Create();
+        harness.RespondWithResult("""{"schedules":[]}""");
+
+        var cleared = await harness.Client.Workers.UpdateSchedulesAsync("hello", Array.Empty<string>());
+
+        Assert.Equal("[]", harness.LastRequest.Body);
+        Assert.Equal(0, cleared!.Count);
+    }
+
+    [Fact]
+    public async Task UpdateSchedulesAsync_rejects_blank_and_duplicate_expressions_before_sending()
+    {
+        using var harness = CloudflareHarness.Create();
+
+        var blank = await Assert.ThrowsAsync<CloudflareConfigurationException>(() =>
+            harness.Client.Workers.UpdateSchedulesAsync("hello", new[] { "*/30 * * * *", "   " }));
+        Assert.Contains("non-empty", blank.Message, StringComparison.Ordinal);
+
+        var duplicate = await Assert.ThrowsAsync<CloudflareConfigurationException>(() =>
+            harness.Client.Workers.UpdateSchedulesAsync("hello", new[] { "0 3 * * *", "0 3 * * *" }));
+        Assert.Contains("Duplicate cron expression", duplicate.Message, StringComparison.Ordinal);
+
+        Assert.Equal(0, harness.RequestCount);
+    }
+
+    [Fact]
+    public async Task Schedules_capture_fields_the_model_does_not_declare()
+    {
+        using var harness = CloudflareHarness.Create();
+        harness.RespondWithResult("""
+            {"schedules":[{"cron":"* * * * *","timezone":"UTC"}],"scheduler":"v2"}
+            """);
+
+        var schedules = await harness.Client.Workers.ListSchedulesAsync("hello");
+
+        Assert.Contains("timezone", schedules!.Schedules![0].AdditionalData!.Keys, StringComparer.Ordinal);
+        Assert.Contains("scheduler", schedules.AdditionalData!.Keys, StringComparer.Ordinal);
+    }
+
+    [Fact]
+    public void A_schedule_prints_its_expression()
+    {
+        Assert.Equal("*/30 * * * *", new WorkerSchedule("*/30 * * * *").ToString());
+        Assert.Equal(string.Empty, new WorkerSchedule().ToString());
+    }
+}

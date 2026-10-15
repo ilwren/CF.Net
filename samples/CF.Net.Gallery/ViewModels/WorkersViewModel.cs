@@ -29,6 +29,7 @@ public sealed class WorkersViewModel : ModuleViewModelBase
     private string _bindingsJson = string.Empty;
     private string _versionId = string.Empty;
     private string _versionMessage = string.Empty;
+    private string _cronExpressions = "*/30 * * * *";
     private string _percentage = "100";
     private string _subdomain = string.Empty;
     private bool _subdomainEnabled = true;
@@ -56,6 +57,9 @@ public sealed class WorkersViewModel : ModuleViewModelBase
         GetVersionCommand = new RelayCommand(GetVersionAsync);
         CreateVersionCommand = new RelayCommand(CreateVersionAsync);
         ListDeploymentsCommand = new RelayCommand(ListDeploymentsAsync);
+        ListSchedulesCommand = new RelayCommand(ListSchedulesAsync);
+        UpdateSchedulesCommand = new RelayCommand(UpdateSchedulesAsync);
+        ClearSchedulesCommand = new RelayCommand(ClearSchedulesAsync);
         CreateDeploymentCommand = new RelayCommand(CreateDeploymentAsync);
         GetSubdomainCommand = new RelayCommand(GetSubdomainAsync);
         UpdateSubdomainCommand = new RelayCommand(UpdateSubdomainAsync);
@@ -108,6 +112,9 @@ public sealed class WorkersViewModel : ModuleViewModelBase
 
     /// <summary>Version id to read or deploy.</summary>
     public string VersionId { get => _versionId; set => SetProperty(ref _versionId, value); }
+
+    /// <summary>Cron expressions to set, separated by commas or new lines.</summary>
+    public string CronExpressions { get => _cronExpressions; set => SetProperty(ref _cronExpressions, value); }
 
     /// <summary>Sent as the workers/message annotation on a version upload.</summary>
     public string VersionMessage { get => _versionMessage; set => SetProperty(ref _versionMessage, value); }
@@ -189,6 +196,15 @@ public sealed class WorkersViewModel : ModuleViewModelBase
 
     /// <summary>Uploads a version without deploying it.</summary>
     public RelayCommand CreateVersionCommand { get; }
+
+    /// <summary>Reads the script's cron triggers.</summary>
+    public RelayCommand ListSchedulesCommand { get; }
+
+    /// <summary>Replaces the script's cron triggers.</summary>
+    public RelayCommand UpdateSchedulesCommand { get; }
+
+    /// <summary>Removes every cron trigger from the script.</summary>
+    public RelayCommand ClearSchedulesCommand { get; }
 
     /// <summary>Lists deployments.</summary>
     public RelayCommand ListDeploymentsCommand { get; }
@@ -291,6 +307,20 @@ public sealed class WorkersViewModel : ModuleViewModelBase
 
         return Client.Workers.CreateVersionAsync(Script(), request);
     });
+
+    private IEnumerable<string> ParseCronExpressions() =>
+        (CronExpressions ?? string.Empty)
+            .Split(new[] { ',', ';', '\n', '\r' }, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .ToList();
+
+    private Task ListSchedulesAsync() => RunAsync("Get worker cron triggers", async () =>
+        await Client.Workers.ListSchedulesAsync(Script()));
+
+    private Task UpdateSchedulesAsync() => RunAsync("Set worker cron triggers", () =>
+        Client.Workers.UpdateSchedulesAsync(Script(), ParseCronExpressions()));
+
+    private Task ClearSchedulesAsync() => RunAsync("Clear worker cron triggers", () =>
+        Client.Workers.UpdateSchedulesAsync(Script(), Array.Empty<string>()));
 
     private Task ListDeploymentsAsync() => RunAsync("List worker deployments", async () =>
         await Client.Workers.ListDeploymentsAsync(Script(), new WorkerDeploymentListParameters

@@ -145,6 +145,44 @@ public interface IWorkersScriptsService
         string? accountId = null,
         CancellationToken cancellationToken = default);
 
+    /// <summary>Reads a script's cron triggers.</summary>
+    /// <param name="scriptName">The Worker name.</param>
+    /// <param name="accountId">Account id; falls back to the configured default when null.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <remarks>
+    /// <c>GET …/workers/scripts/{script_name}/schedules</c> takes no query parameters and answers with
+    /// <c>{"schedules":[…]}</c> - the array nested inside <c>result</c> and no <c>result_info</c>, so this is
+    /// a <see cref="WorkerScheduleListResult"/> rather than a <see cref="CloudflarePage{T}"/>. A script with
+    /// no triggers answers with an empty array, not an error.
+    /// </remarks>
+    Task<WorkerScheduleListResult?> ListSchedulesAsync(
+        string scriptName,
+        string? accountId = null,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>Replaces a script's cron triggers with the given expressions.</summary>
+    /// <param name="scriptName">The Worker name.</param>
+    /// <param name="cronExpressions">
+    /// The complete new set of expressions. Empty clears every trigger on the script.
+    /// </param>
+    /// <param name="accountId">Account id; falls back to the configured default when null.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>The triggers as Cloudflare recorded them, with their timestamps.</returns>
+    /// <remarks>
+    /// <c>PUT …/workers/scripts/{script_name}/schedules</c> is a whole-set replacement: a trigger not in the
+    /// list is removed, so sending one expression to a script that has three leaves it with one. That is
+    /// worth reading twice before calling. The body is a bare JSON array of <c>{"cron": …}</c> objects - not
+    /// an object holding one - which is unusual for this API and is why the parameter is the expressions
+    /// rather than a request model. Cloudflare validates each expression against its own scheduler; this
+    /// library rejects only blanks and duplicates, because guessing at the grammar would refuse expressions
+    /// the API accepts. Needs Workers Scripts Write, where the read needs only Read.
+    /// </remarks>
+    Task<WorkerScheduleListResult?> UpdateSchedulesAsync(
+        string scriptName,
+        IEnumerable<string> cronExpressions,
+        string? accountId = null,
+        CancellationToken cancellationToken = default);
+
     /// <summary>Lists a script's deployments, newest first.</summary>
     /// <param name="scriptName">The Worker name.</param>
     /// <param name="parameters">Paging and a creation-time range; <c>null</c> for Cloudflare's defaults.</param>
@@ -519,6 +557,71 @@ public sealed class WorkersScriptsService : CloudflareService, IWorkersScriptsSe
         }
 
         var response = await Transport.SendAsync<WorkerVersionDetail>(httpRequest, cancellationToken).ConfigureAwait(false);
+        return response.Result;
+    }
+
+    /// <inheritdoc />
+    public async Task<WorkerScheduleListResult?> ListSchedulesAsync(
+        string scriptName,
+        string? accountId = null,
+        CancellationToken cancellationToken = default)
+    {
+        var account = ResolveAccountId(accountId);
+        var name = Require(scriptName, nameof(scriptName));
+
+        var request = CloudflareRequest.Get(
+            $"{AccountPath(account)}/workers/scripts/{CloudflareUrl.EncodeSegment(name)}/schedules");
+        request.OperationName = "Get Worker Cron Triggers";
+
+        var response = await Transport.SendAsync<WorkerScheduleListResult>(request, cancellationToken).ConfigureAwait(false);
+        return response.Result;
+    }
+
+    /// <inheritdoc />
+    public async Task<WorkerScheduleListResult?> UpdateSchedulesAsync(
+        string scriptName,
+        IEnumerable<string> cronExpressions,
+        string? accountId = null,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(cronExpressions);
+
+        var account = ResolveAccountId(accountId);
+        var name = Require(scriptName, nameof(scriptName));
+
+        var expressions = cronExpressions
+            .Select(expression => expression?.Trim() ?? string.Empty)
+            .ToList();
+
+        var problems = new List<string>();
+        if (expressions.Any(string.IsNullOrEmpty))
+        {
+            problems.Add("Every cron expression must be non-empty; an empty list clears the triggers.");
+        }
+
+        var duplicates = expressions
+            .GroupBy(expression => expression, StringComparer.Ordinal)
+            .Where(group => group.Count() > 1)
+            .Select(group => group.Key)
+            .ToList();
+        if (duplicates.Count > 0)
+        {
+            // The PUT replaces the whole set, so the same expression twice is a mistake rather than a
+            // request Cloudflare could honour.
+            problems.Add($"Duplicate cron expression(s): {string.Join(", ", duplicates)}.");
+        }
+
+        if (problems.Count > 0)
+        {
+            throw new Exceptions.CloudflareConfigurationException(problems);
+        }
+
+        var request = CloudflareRequest.Put(
+            $"{AccountPath(account)}/workers/scripts/{CloudflareUrl.EncodeSegment(name)}/schedules",
+            expressions.Select(expression => new WorkerSchedule(expression)).ToList());
+        request.OperationName = "Update Worker Cron Triggers";
+
+        var response = await Transport.SendAsync<WorkerScheduleListResult>(request, cancellationToken).ConfigureAwait(false);
         return response.Result;
     }
 

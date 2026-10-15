@@ -1,0 +1,339 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  # Needed by the "Report failures" step, which posts the compiler output to the pull request:
+  # log downloads are awkward to reach from restricted environments, a PR comment is not.
+  pull-requests: write
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  DOTNET_NOLOGO: true
+  DOTNET_CLI_TELEMETRY_OPTOUT: true
+  DOTNET_SKIP_FIRST_TIME_EXPERIENCE: true
+  CONFIGURATION: Release
+  # Force the culture so compiler messages are greppable in English.
+  DOTNET_CLI_UI_LANGUAGE: en-US
+
+jobs:
+  build:
+    name: Build & test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v6
+        with:
+          # net8.0 is the floor the library supports, net10.0 the current LTS line.
+          # global.json rolls forward to the highest installed SDK, so both must be here.
+          dotnet-version: |
+            8.0.x
+            10.0.x
+
+      - name: Show SDKs
+        shell: bash
+        run: |
+          dotnet --info || true
+          echo "logs=$RUNNER_TEMP/ci-logs" >> "$GITHUB_ENV"
+
+      - name: Restore
+        shell: bash
+        run: |
+          mkdir -p "$RUNNER_TEMP/ci-logs"
+          set -o pipefail
+          dotnet restore CF.Net.sln 2>&1 | tee "$RUNNER_TEMP/ci-logs/10-restore.log"
+
+      - name: Build
+        shell: bash
+        run: |
+          set -o pipefail
+          dotnet build CF.Net.sln --configuration "$CONFIGURATION" --no-restore 2>&1 \
+            | tee "$RUNNER_TEMP/ci-logs/20-build.log"
+
+      - name: Unit tests (net8.0)
+        shell: bash
+        run: |
+          set -o pipefail
+          dotnet test tests/CF.Net.UnitTests/CF.Net.UnitTests.csproj \
+            --configuration "$CONFIGURATION" --no-build --framework net8.0 \
+            --filter "Category!=Integration" \
+            --logger "trx;LogFileName=unit-net8.0.trx" \
+            --logger "console;verbosity=detailed" --results-directory TestResults 2>&1 \
+            | tee "$RUNNER_TEMP/ci-logs/30-test-net8.log"
+
+      - name: Unit tests (net10.0)
+        shell: bash
+        run: |
+          set -o pipefail
+          dotnet test tests/CF.Net.UnitTests/CF.Net.UnitTests.csproj \
+            --configuration "$CONFIGURATION" --no-build --framework net10.0 \
+            --filter "Category!=Integration" \
+            --logger "trx;LogFileName=unit-net10.0.trx" \
+            --logger "console;verbosity=detailed" --results-directory TestResults 2>&1 \
+            | tee "$RUNNER_TEMP/ci-logs/40-test-net10.log"
+
+      # The integration project talks to the real API, so CI only proves that it compiles.
+      # .github/workflows/integration.yml is what actually runs it.
+      - name: Build integration tests (compile only)
+        shell: bash
+        run: |
+          set -o pipefail
+          dotnet build tests/CF.Net.IntegrationTests/CF.Net.IntegrationTests.csproj \
+            --configuration "$CONFIGURATION" 2>&1 | tee "$RUNNER_TEMP/ci-logs/50-build-integration.log"
+
+      # A committed cassette is genuine Cloudflare traffic. Replaying it runs the real integration
+      # suite - URL building, headers, envelope parsing, error mapping - with no credentials and no
+      # network, so a payload that stops matching the typed models fails here instead of in somebody's
+      # production code. Write lifecycles are excluded on purpose: their assertions compare the names
+      # this run generated with the names the recording used, which cannot line up.
+      - name: Replay committed cassettes (offline)
+        if: matrix.os == 'ubuntu-latest'
+        shell: bash
+        run: |
+          set -o pipefail
+          shopt -s nullglob
+          cassettes=(tests/cassettes/*.json)
+          if [ ${#cassettes[@]} -eq 0 ]; then
+            echo "No cassettes committed yet, so there is nothing to replay."
+            echo "Record one with the Integration workflow's cassette input - see docs/integration-testing.md."
+            exit 0
+          fi
+
+          for cassette in "${cassettes[@]}"; do
+            name="$(basename "$cassette" .json)"
+            echo "::group::Replaying $name"
+            CLOUDFLARE_IT_CASSETTE="$name" CLOUDFLARE_IT_RECORD=replay \
+              dotnet test tests/CF.Net.IntegrationTests/CF.Net.IntegrationTests.csproj \
+              --configuration "$CONFIGURATION" --no-build --no-restore \
+              --filter "Category=Integration&ClassName~ReadOnly" \
+              --logger "trx;LogFileName=replay-$name.trx" \
+              --logger "console;verbosity=detailed" \
+              --results-directory TestResults 2>&1 | tee "$RUNNER_TEMP/ci-logs/55-replay-$name.log"
+            echo "::endgroup::"
+          done
+
+      # Proves the replay plumbing itself on every pull request, while tests/cassettes is still
+      # empty: a synthetic recording is written, two credential-only integration tests are replayed
+      # against it, and the file is deleted again. Nothing synthetic is ever committed - a real
+      # cassette is recorded by the Integration workflow, against a real account.
+      - name: Replay plumbing smoke test (synthetic, not committed)
+        if: matrix.os == 'ubuntu-latest'
+        shell: bash
+        run: |
+          set -o pipefail
+          PY=$(command -v python3 || command -v python || true)
+          if [ -z "$PY" ]; then echo "no python; skipping the replay smoke test"; exit 0; fi
+
+          cassette=tests/cassettes/_replay-smoke.json
+          # The report exercises the same plumbing the Integration workflow depends on: one line per
+          # Cloudflare call, plus any test that ended early. Print it on the way out either way.
+          export CLOUDFLARE_IT_REPORT="$RUNNER_TEMP/replay-smoke-report.tsv"
+          trap 'rm -f "$cassette"; echo "--- run report ---"; cat "$CLOUDFLARE_IT_REPORT" 2>/dev/null || echo "(nothing was reported)"' EXIT
+
+          "$PY" - "$cassette" <<'PY'
+          import json, sys
+
+          def envelope(result):
+              return json.dumps({'success': True, 'errors': [], 'messages': [], 'result': result})
+
+          def exchange(name, path, result, ray):
+              return {
+                  'name': name,
+                  'method': 'GET',
+                  'pathAndQuery': path,
+                  'requestHeaders': {'Authorization': '<redacted>'},
+                  'statusCode': 200,
+                  'responseHeaders': {'CF-RAY': ray},
+                  'responseContentType': 'application/json',
+                  'responseBody': envelope(result),
+                  'recordedAt': '2026-01-01T00:00:00Z',
+              }
+
+          cassette = {
+              'name': '_replay-smoke',
+              'baseUrl': 'https://api.cloudflare.com/client/v4/',
+              'recordedAt': '2026-01-01T00:00:00Z',
+              'libraryVersion': '0.1.0',
+              'exchanges': [
+                  exchange('A_token_can_be_verified_directly', '/client/v4/user/tokens/verify',
+                           {'id': 'f0e1d2c3b4a5968778695a4b3c2d1e0f', 'status': 'active'},
+                           '0000000000000000-SMOKE'),
+                  exchange('The_authenticated_user_can_be_read', '/client/v4/user',
+                           {'id': 'a1b2c3d4e5f60718293a4b5c6d7e8f90', 'email': 'smoke@example.com',
+                            'username': 'smoke'},
+                           '0000000000000001-SMOKE'),
+              ],
+          }
+
+          with open(sys.argv[1], 'w', encoding='utf-8') as handle:
+              json.dump(cassette, handle, indent=2)
+          print('wrote a synthetic cassette with', len(cassette['exchanges']), 'exchanges')
+          PY
+
+          # Both tests only need credentials to exist, which is exactly what a replay invents. The
+          # account and zone ids are absent here, so nothing account-scoped can be attempted.
+          CLOUDFLARE_IT_CASSETTE=_replay-smoke CLOUDFLARE_IT_RECORD=replay \
+            dotnet test tests/CF.Net.IntegrationTests/CF.Net.IntegrationTests.csproj \
+            --configuration "$CONFIGURATION" --no-build --no-restore \
+            --filter "Category=Integration&FullyQualifiedName~A_token_can_be_verified_directly|FullyQualifiedName~The_authenticated_user_can_be_read" \
+            --logger "trx;LogFileName=replay-smoke.trx" \
+            --logger "console;verbosity=detailed" \
+            --results-directory TestResults 2>&1 | tee "$RUNNER_TEMP/ci-logs/56-replay-smoke.log"
+
+      - name: Pack
+        if: matrix.os == 'ubuntu-latest'
+        shell: bash
+        run: |
+          set -o pipefail
+          dotnet pack src/CF.Net/CF.Net.csproj --configuration "$CONFIGURATION" --no-build --output artifacts 2>&1 \
+            | tee "$RUNNER_TEMP/ci-logs/60-pack.log"
+
+      # Annotations are readable through the GitHub API, which the job log and the uploaded artifact are
+      # not from every environment, so the failing tests are published here as well as written to the file
+      # the pull-request comment step reads. A reporting step must never be what turns a job red - the
+      # tests already did that - hence continue-on-error and the console-log fallback.
+      - name: Extract failing tests from the trx
+        if: failure()
+        continue-on-error: true
+        shell: bash
+        env:
+          PYTHONIOENCODING: utf-8
+        run: |
+          PY=$(command -v python3 || command -v python || true)
+          if [ -n "$PY" ]; then
+            "$PY" .github/scripts/report_test_failures.py || echo "::warning::the trx report exited $?"
+          else
+            echo "::warning::no python interpreter on this runner, falling back to the console logs"
+          fi
+
+          if [ -s "$RUNNER_TEMP/failures.txt" ]; then
+            exit 0
+          fi
+
+          # Nothing was written, so read the logs xunit leaves on every platform instead: one annotation
+          # per log, four at most, with the newlines folded into %0A the way workflow commands need.
+          count=0
+          for log in "$RUNNER_TEMP"/ci-logs/*.log; do
+            [ -f "$log" ] || continue
+            grep -q '^  Failed ' "$log" || continue
+            body=$(grep -A 4 '^  Failed ' "$log" | head -c 1500 | tr -d '\r' \
+                   | sed -e 's/%/%25/g' -e 's/$/%0A/' | tr -d '\n')
+            echo "::error title=FAILED $(basename "$log")::${body}"
+            count=$((count + 1))
+            [ "$count" -ge 4 ] && break
+          done
+
+          exit 0
+
+      - name: Report failures
+        if: failure() && github.event_name == 'pull_request'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          {
+            echo '### CI failure on `${{ matrix.os }}`'
+            echo
+            if [ -s "$RUNNER_TEMP/failures.txt" ]; then
+              echo '<details open><summary>Failing tests</summary>'
+              echo
+              echo '```'
+              head -c 20000 "$RUNNER_TEMP/failures.txt"
+              echo '```'
+              echo
+              echo '</details>'
+              echo
+            fi
+            echo '<details><summary>Compiler / restore / test output</summary>'
+            echo
+            echo '```'
+            cat "$RUNNER_TEMP"/ci-logs/*.log 2>/dev/null \
+              | grep -aE 'error|Error|warning NU|Failed |Failed!|Assert|Expected|Actual|\bNU[0-9]{4}\b|\bCS[0-9]{4}\b|\bAVLN[0-9]+\b|\bXDG[0-9]+\b|\bMSB[0-9]{4}\b|\bNETSDK[0-9]{4}\b' \
+              | grep -avE '^\s*$|AVLN5001|CS0618|CS1574|CS1712|CS0419|CS8603' | sed 's/\x1b\[[0-9;]*m//g' | sort -u | head -80
+            echo '```'
+            echo
+            echo '</details>'
+          } > "$RUNNER_TEMP/comment.md"
+
+          gh pr comment "${{ github.event.pull_request.number }}" --body-file "$RUNNER_TEMP/comment.md"
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: test-results-${{ matrix.os }}
+          path: TestResults/**/*.trx
+          if-no-files-found: ignore
+          retention-days: 14
+
+      - name: Upload package
+        if: matrix.os == 'ubuntu-latest'
+        uses: actions/upload-artifact@v7
+        with:
+          name: nupkg
+          path: artifacts/*.nupkg
+          if-no-files-found: error
+          retention-days: 30
+
+  gallery:
+    name: Gallery sample (headless build)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v6
+        with:
+          dotnet-version: |
+            8.0.x
+            10.0.x
+
+      # The gallery is a desktop app: CI proves the XAML compiles and the compiled bindings resolve,
+      # it does not try to open a window.
+      - name: Build gallery
+        shell: bash
+        run: |
+          mkdir -p "$RUNNER_TEMP/ci-logs"
+          set -o pipefail
+          dotnet build samples/CF.Net.Gallery/CF.Net.Gallery.csproj --configuration "$CONFIGURATION" 2>&1 \
+            | tee "$RUNNER_TEMP/ci-logs/70-gallery.log"
+
+      - name: Report failures
+        if: failure() && github.event_name == 'pull_request'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          {
+            echo '### CI failure in the gallery build'
+            echo
+            echo '<details><summary>Compiler output</summary>'
+            echo
+            echo '```'
+            cat "$RUNNER_TEMP"/ci-logs/*.log 2>/dev/null \
+              | grep -aE 'error|Error|\bCS[0-9]{4}\b|\bAVLN[0-9]+\b|\bMSB[0-9]{4}\b|\bNU[0-9]{4}\b|\bNETSDK[0-9]{4}\b' \
+              | sed 's/\x1b\[[0-9;]*m//g' | sort -u | head -80
+            echo '```'
+            echo
+            echo '</details>'
+          } > "$RUNNER_TEMP/comment.md"
+
+          gh pr comment "${{ github.event.pull_request.number }}" --body-file "$RUNNER_TEMP/comment.md"

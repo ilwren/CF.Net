@@ -1,0 +1,732 @@
+using System.Runtime.CompilerServices;
+using System.Text.Json;
+using CFNet.Configuration;
+using CFNet.Exceptions;
+using CFNet.DependencyInjection;
+using CFNet.Models.Zones;
+using CFNet.TestKit;
+using Microsoft.Extensions.DependencyInjection;
+using Xunit.Abstractions;
+
+namespace CFNet.IntegrationTests;
+
+/// <summary>
+/// Everything an integration test needs: the credentials from the environment or a local file, a
+/// ready made client, and a way to opt out of a test without failing it when the credentials are
+/// absent.
+/// </summary>
+/// <remarks>
+/// <para><b>Where credentials come from</b>, in precedence order:</para>
+/// <list type="number">
+///   <item><description>
+///     Environment variables - exactly the ones the GitHub Actions workflow injects, so a CI run and
+///     a local run are configured the same way:
+///     <c>CLOUDFLARE_API_TOKEN</c>, or the legacy pair <c>CLOUDFLARE_GLOBAL_API_KEY</c> +
+///     <c>CLOUDFLARE_API_EMAIL</c>, plus <c>CLOUDFLARE_ACCOUNT_ID</c> and <c>CLOUDFLARE_ZONE_ID</c>.
+///   </description></item>
+///   <item><description>
+///     <c>tests/CF.Net.IntegrationTests/credentials.local.json</c>, which is git-ignored, for
+///     developers who would rather not export variables in every shell. Environment variables still
+///     win, so a CI secret can never be shadowed by a stray local file.
+///   </description></item>
+/// </list>
+/// <para><b>Behaviour switches</b>:</para>
+/// <list type="bullet">
+///   <item><description><c>CLOUDFLARE_IT_ENABLE_WRITES=true</c> - allow create/delete tests.</description></item>
+///   <item><description>
+///     <c>CLOUDFLARE_IT_REPORT=&lt;file&gt;</c> - append one line per skipped test to that file, which
+///     is how the workflow builds its summary. Unset means nothing is written anywhere.
+///   </description></item>
+///   <item><description>
+///     <c>CLOUDFLARE_IT_CASSETTE=&lt;name&gt;</c> with <c>CLOUDFLARE_IT_RECORD=true</c> - record every
+///     call into <c>tests/cassettes/&lt;name&gt;.json</c>, so the offline unit tests can later replay
+///     genuine Cloudflare payloads. Credentials are redacted on the way in.
+///   </description></item>
+/// </list>
+/// </remarks>
+public abstract class CloudflareIntegrationTest : IDisposable
+{
+    private CloudflareClient? _client;
+    private ServiceProvider? _provider;
+    private readonly Dictionary<string, string?> _localFile;
+    private readonly Func<string, string?> _environment;
+
+    protected CloudflareIntegrationTest(ITestOutputHelper output)
+    {
+        Output = output;
+        _localFile = LocalCredentials.Load();
+        _environment = Lookup;
+
+        var apiToken = Lookup(CloudflareDefaults.EnvironmentVariables.ApiToken);
+        var globalApiKey = Lookup(CloudflareDefaults.EnvironmentVariables.GlobalApiKey);
+        var apiEmail = Lookup(CloudflareDefaults.EnvironmentVariables.ApiEmail);
+        var accountId = Lookup(CloudflareDefaults.EnvironmentVariables.AccountId);
+        var zoneId = Lookup(CloudflareDefaults.EnvironmentVariables.ZoneId);
+        var writes = IsTrue(Lookup("CLOUDFLARE_IT_ENABLE_WRITES"));
+        var source = _localFile.Count > 0 && Environment.GetEnvironmentVariable(CloudflareDefaults.EnvironmentVariables.ApiToken) is null
+            ? "credentials.local.json"
+            : "environment";
+
+        if (IsReplay)
+        {
+            // A replay authenticates against nothing, so the secret half of the credentials can be
+            // invented - which is exactly what lets the suite run with no credentials configured at
+            // all. The account and zone ids cannot be invented: they are part of the recorded URLs
+            // the match key is built from, so when they were not exported they are recovered from the
+            // recording itself.
+            var cassette = IntegrationCassette.ReplayCassette;
+            apiToken ??= ReplayApiToken;
+            accountId = FirstSet(accountId, CassetteContext.DeriveAccountId(cassette));
+            zoneId = FirstSet(zoneId, CassetteContext.DeriveZoneId(cassette));
+
+            // A create/delete lifecycle cannot be replayed faithfully: the recorded response belongs
+            // to the names the recording happened to use, not to the ones this run would generate.
+            writes = false;
+            source = $"cassette replay ({cassette?.Name ?? "unnamed"})";
+        }
+
+        ApiToken = apiToken;
+        GlobalApiKey = globalApiKey;
+        ApiEmail = apiEmail;
+        AccountId = accountId;
+        ZoneId = zoneId;
+        WritesEnabled = writes;
+        CredentialSource = source;
+
+        WarnAboutCredentialShapes();
+    }
+
+    /// <summary>xunit output sink.</summary>
+    protected ITestOutputHelper Output { get; }
+
+    /// <summary>Value of <c>CLOUDFLARE_API_TOKEN</c>.</summary>
+    protected string? ApiToken { get; }
+
+    /// <summary>Value of <c>CLOUDFLARE_GLOBAL_API_KEY</c>.</summary>
+    protected string? GlobalApiKey { get; }
+
+    /// <summary>Value of <c>CLOUDFLARE_API_EMAIL</c>.</summary>
+    protected string? ApiEmail { get; }
+
+    /// <summary>Value of <c>CLOUDFLARE_ACCOUNT_ID</c>.</summary>
+    protected string? AccountId { get; }
+
+    /// <summary>Value of <c>CLOUDFLARE_ZONE_ID</c>.</summary>
+    protected string? ZoneId { get; }
+
+    /// <summary>Whether destructive tests may run.</summary>
+    protected bool WritesEnabled { get; }
+
+    /// <summary>Where the credentials in this run came from; printed by the tests that use them.</summary>
+    protected string CredentialSource { get; }
+
+    /// <summary>True when some usable credential scheme is present.</summary>
+    protected bool HasCredentials =>
+        !string.IsNullOrWhiteSpace(ApiToken) ||
+        (!string.IsNullOrWhiteSpace(GlobalApiKey) && !string.IsNullOrWhiteSpace(ApiEmail));
+
+    /// <summary>
+    /// A client built the same way an application would build it through dependency injection.
+    /// </summary>
+    protected CloudflareClient Client => _client ??= BuildClient();
+
+    /// <summary>
+    /// The cassette recorder, when this run is recording; <see langword="null"/> otherwise. Tests set
+    /// <see cref="CassetteHandler.Label"/> so the recording reads like a transcript.
+    /// </summary>
+    protected CassetteHandler? Recorder => IntegrationCassette.Handler;
+
+    /// <summary>
+    /// Ends the test early when the credentials needed for it are absent. xunit v2 has no dynamic
+    /// skip, so an unconfigured run reports these as passing no-ops and prints why.
+    /// </summary>
+    /// <param name="condition">Whether the test can run.</param>
+    /// <param name="reason">Shown in the test output when it cannot.</param>
+    /// <param name="test">Filled in by the compiler; used to label the run report.</param>
+    /// <returns>True when the test should continue.</returns>
+    protected bool SkipUnless(bool condition, string reason, [CallerMemberName] string? test = null)
+    {
+        if (condition)
+        {
+            return true;
+        }
+
+        Output.WriteLine($"SKIPPED: {reason}");
+
+        // Also hand the reason to the run report, so the CI summary can say what did not happen
+        // instead of only that everything passed.
+        RunReport.Record(RunReportOutcome.Skipped, $"{GetType().Name}.{test ?? "unknown"}", reason);
+        return false;
+    }
+
+    /// <summary>Ends the test early unless credentials are configured.</summary>
+    /// <param name="test">Filled in by the compiler; used to label the run report.</param>
+    protected bool SkipWithoutCredentials([CallerMemberName] string? test = null) =>
+        SkipUnless(
+            HasCredentials,
+            "no Cloudflare credentials found (set CLOUDFLARE_API_TOKEN, or CLOUDFLARE_GLOBAL_API_KEY and CLOUDFLARE_API_EMAIL, or put them in tests/CF.Net.IntegrationTests/credentials.local.json).",
+            test);
+
+    /// <summary>Ends the test early unless an account id is configured.</summary>
+    /// <param name="test">Filled in by the compiler; used to label the run report.</param>
+    protected bool SkipWithoutAccount([CallerMemberName] string? test = null) =>
+        SkipWithoutCredentials(test) &&
+        SkipUnless(!string.IsNullOrWhiteSpace(AccountId), "CLOUDFLARE_ACCOUNT_ID is not set.", test);
+
+    /// <summary>Ends the test early unless a zone id is configured.</summary>
+    /// <param name="test">Filled in by the compiler; used to label the run report.</param>
+    protected bool SkipWithoutZone([CallerMemberName] string? test = null) =>
+        SkipWithoutCredentials(test) &&
+        SkipUnless(!string.IsNullOrWhiteSpace(ZoneId), "CLOUDFLARE_ZONE_ID is not set.", test);
+
+    /// <summary>Ends the test early unless destructive operations were explicitly allowed.</summary>
+    /// <param name="test">Filled in by the compiler; used to label the run report.</param>
+    protected bool SkipWithoutWritePermission([CallerMemberName] string? test = null) =>
+        SkipUnless(
+            WritesEnabled,
+            IsReplay
+                ? "this run replays a cassette, and a create/delete lifecycle cannot be replayed faithfully: the recorded responses belong to the names the recording used."
+                : "CLOUDFLARE_IT_ENABLE_WRITES is not 'true'.",
+            test);
+
+    /// <summary>A unique suffix so parallel or repeated runs never collide.</summary>
+    protected static string UniqueSuffix(string prefix) =>
+        $"{prefix}-{DateTime.UtcNow:yyyyMMddHHmmss}-{Guid.NewGuid().ToString("N")[..8]}";
+
+    /// <summary>Logs a Cloudflare call and its outcome, so a failing run shows the CF-RAY to quote.</summary>
+    protected void Log(string message) => Output.WriteLine(message);
+
+    /// <summary>
+    /// True when the configured token is account-owned (<c>cfat_...</c>). Cloudflare verifies those at
+    /// <c>GET /accounts/{account_id}/tokens/verify</c> and rejects them at the user-scoped endpoints -
+    /// <c>GET /user</c> and <c>GET /user/tokens/verify</c> - with <c>1000 Invalid API Token</c>, so a
+    /// test that has to use one of those opts out instead of failing.
+    /// </summary>
+    protected bool IsAccountOwnedToken =>
+        ApiToken is not null &&
+        ApiToken.StartsWith(CloudflareDefaults.TokenPrefixes.AccountApiToken, StringComparison.Ordinal);
+
+    /// <summary>
+    /// Runs a zone-scoped call, turning a refusal into a skip that says what to change.
+    /// </summary>
+    /// <typeparam name="T">What the call returns.</typeparam>
+    /// <param name="call">The zone-scoped call to make.</param>
+    /// <param name="test">Test name, supplied by the compiler.</param>
+    /// <returns>The result, or <c>null</c> when Cloudflare refused and the test skipped.</returns>
+    /// <remarks>
+    /// A token whose Zone Resources do not include the configured zone is answered with 403, and no
+    /// assertion can turn that into a useful result. Saying what to fix beats failing: the suite runs
+    /// against whatever account it is pointed at, and most refusals are configuration rather than code.
+    /// </remarks>
+    protected async Task<T?> RunZoneScopedAsync<T>(Func<Task<T>> call, [CallerMemberName] string? test = null)
+        where T : class
+    {
+        try
+        {
+            return await call().ConfigureAwait(false);
+        }
+        catch (CloudflareApiException exception) when (exception.IsAuthenticationFailure)
+        {
+            SkipUnless(false, ZoneRefusalReason(exception), test);
+            return null;
+        }
+        catch (CloudflareApiException exception) when (exception.InnerException is JsonException)
+        {
+            // Cloudflare answered and CF.Net could not read the answer as the shape it models. That is a
+            // defect in this library, not a credential problem, but every zone-scoped test would fail on it
+            // with the same message, so it is reported once here and the rest of the suite carries on.
+            SkipUnless(false, ModelMismatchReason(exception), test);
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// Reads the configured zone as a precondition, skipping the test when Cloudflare refuses it or when
+    /// CF.Net cannot make sense of the answer.
+    /// </summary>
+    /// <param name="test">Test name, supplied by the compiler.</param>
+    /// <returns>The zone, or <c>null</c> when the test has been skipped.</returns>
+    /// <remarks>
+    /// Tests that need the zone's name to build something inside it use this rather than asserting the zone
+    /// is not null: an unreadable zone is a configuration or library problem to report, and an
+    /// <c>Assert.NotNull</c> on it produces a failure that says nothing about either.
+    /// </remarks>
+    protected async Task<Zone?> ReadableZoneAsync([CallerMemberName] string? test = null)
+    {
+        try
+        {
+            var zone = await Client.Zones.GetAsync(ZoneId).ConfigureAwait(false);
+            if (zone is null)
+            {
+                SkipUnless(false, UnreadableZoneReason(), test);
+            }
+
+            return zone;
+        }
+        catch (CloudflareApiException exception) when (exception.IsAuthenticationFailure)
+        {
+            SkipUnless(false, ZoneRefusalReason(exception), test);
+            return null;
+        }
+        catch (CloudflareApiException exception) when (exception.InnerException is JsonException)
+        {
+            SkipUnless(false, ModelMismatchReason(exception), test);
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// The three reasons <c>Zones.GetAsync</c> answers <c>null</c>, which it does not distinguish.
+    /// </summary>
+    /// <returns>A reason for the run report.</returns>
+    protected string UnreadableZoneReason() =>
+        $"CLOUDFLARE_ZONE_ID ({ZoneId}) came back unreadable. GetAsync reports null for all three of: " +
+        "Cloudflare answered 403 (the zone is outside the token's Zone Resources, or belongs to a different " +
+        "account than CLOUDFLARE_ACCOUNT_ID), answered 404 (the id is not a zone), or answered 200 with no " +
+        "result. The 'Check what the credentials can actually reach' step of this workflow says which, " +
+        "because it fetches the same zone over plain HTTP and reports the result it got.";
+
+    /// <summary>Puts a response CF.Net could not read into words, keeping the parser's own diagnosis.</summary>
+    /// <param name="exception">The exception the transport threw.</param>
+    /// <returns>A reason for the run report.</returns>
+    protected static string ModelMismatchReason(CloudflareApiException exception) =>
+        "CF.Net could not read Cloudflare's response as the shape it models, which is a bug in this library " +
+        "rather than a problem with the credentials: " + exception.Message;
+
+    /// <summary>Puts a zone-scoped 403 into words a reader can act on.</summary>
+    /// <param name="exception">The refusal Cloudflare returned.</param>
+    /// <returns>A reason for the run report.</returns>
+    protected static string ZoneRefusalReason(CloudflareApiException exception) =>
+        "Cloudflare refused the zone-scoped call: " + exception.Message +
+        " Add the zone to the token's Zone Resources, and check that CLOUDFLARE_ZONE_ID is a zone in the account named by CLOUDFLARE_ACCOUNT_ID.";
+
+    /// <summary>Problems already reported, so 25 tests do not print the same warning 25 times.</summary>
+    private static readonly HashSet<string> ReportedProblems = new(StringComparer.Ordinal);
+
+    /// <summary>Guards <see cref="ReportedProblems"/>, which xunit's parallel collections share.</summary>
+    private static readonly object ReportedGate = new();
+
+    /// <summary>
+    /// Says so when a configured credential has the wrong shape. A malformed value would otherwise
+    /// surface as an authentication failure in every test, which sends you hunting through the token's
+    /// permissions instead of looking at the copy/paste that actually caused it.
+    /// </summary>
+    /// <remarks>
+    /// Shape only - whether a credential works is Cloudflare's call, and
+    /// <c>The_configured_credentials_are_accepted</c> asks it. Absent values are not reported here
+    /// either; the skip messages already name those.
+    /// </remarks>
+    private void WarnAboutCredentialShapes()
+    {
+        Warn(CredentialFormat.ExplainId(
+            AccountId,
+            "CLOUDFLARE_ACCOUNT_ID",
+            "Find it in the dashboard on any domain's Overview page, in the API section, or press Ctrl/Cmd+K and choose 'Copy account ID'."));
+        Warn(CredentialFormat.ExplainId(
+            ZoneId,
+            "CLOUDFLARE_ZONE_ID",
+            "Find it in the dashboard on that domain's Overview page, in the API section near the bottom."));
+        Warn(CredentialFormat.ExplainApiToken(ApiToken));
+        Warn(CredentialFormat.ExplainGlobalApiKey(GlobalApiKey));
+        Warn(CredentialFormat.ExplainEmail(ApiEmail));
+    }
+
+    /// <summary>Reports a problem once per process, to the test output and to the run report.</summary>
+    /// <param name="problem">The message, or <see langword="null"/> when there is nothing to say.</param>
+    protected void Warn(string? problem)
+    {
+        if (problem is null)
+        {
+            return;
+        }
+
+        lock (ReportedGate)
+        {
+            if (!ReportedProblems.Add(problem))
+            {
+                return;
+            }
+        }
+
+        Output.WriteLine($"WARNING: {problem}");
+        RunReport.Record(RunReportOutcome.Info, "configuration", problem);
+    }
+
+    /// <summary>True when this run answers from a recorded cassette instead of calling Cloudflare.</summary>
+    protected bool IsReplay => IntegrationCassette.Mode == CassetteMode.Replay;
+
+    /// <summary>
+    /// The stand-in token used while replaying. Nothing ever validates it: the cassette handler
+    /// answers every call before a socket could be opened.
+    /// </summary>
+    private const string ReplayApiToken = "replay-only-not-a-credential";
+
+    /// <summary>Prefers a value that was configured over one recovered from a cassette.</summary>
+    /// <param name="preferred">What the environment or the local file supplied.</param>
+    /// <param name="fallback">What the recording implies.</param>
+    private static string? FirstSet(string? preferred, string? fallback) =>
+        string.IsNullOrWhiteSpace(preferred) ? fallback : preferred;
+
+    /// <summary>Looks one setting up: environment variable first, then the local credentials file.</summary>
+    /// <param name="name">The environment variable name, e.g. <c>CLOUDFLARE_API_TOKEN</c>.</param>
+    /// <returns>The trimmed value, or <see langword="null"/> when it is not set anywhere.</returns>
+    private string? Lookup(string name)
+    {
+        var fromEnvironment = Environment.GetEnvironmentVariable(name);
+        if (!string.IsNullOrWhiteSpace(fromEnvironment))
+        {
+            return fromEnvironment.Trim();
+        }
+
+        return _localFile.TryGetValue(name, out var fromFile) && !string.IsNullOrWhiteSpace(fromFile)
+            ? fromFile.Trim()
+            : null;
+    }
+
+    private static bool IsTrue(string? value) =>
+        string.Equals(value?.Trim(), "true", StringComparison.OrdinalIgnoreCase) || value?.Trim() == "1";
+
+    private CloudflareClient BuildClient()
+    {
+        // Going through the container proves the DI registration works against the real API too.
+        var services = new ServiceCollection().AddLogging();
+
+        Action<CloudflareClientOptions> configure = options =>
+        {
+            // The lookup merges the environment with credentials.local.json, which the library's own
+            // FromEnvironment() cannot know about, so the merge happens here and the result is pushed
+            // into the options instance the container hands out.
+            CloudflareClientOptions.FromEnvironment(_environment).CopyMissingInto(options);
+
+            // Then fill any remaining hole from the values this fixture resolved, because those are
+            // not always what the environment says: a replay invents a token and recovers the account
+            // and zone ids from the recording. Anything a test set deliberately still wins.
+            options.ApiToken ??= ApiToken;
+            options.GlobalApiKey ??= GlobalApiKey;
+            options.ApiEmail ??= ApiEmail;
+            options.AccountId ??= AccountId;
+            options.ZoneId ??= ZoneId;
+
+            // Keep retries modest: the integration run should fail fast, not wait out an outage.
+            options.MaxRetries = 1;
+            options.RetryBaseDelay = TimeSpan.FromMilliseconds(250);
+            options.Timeout = TimeSpan.FromSeconds(30);
+
+            // Every response also lands in the run report, which makes the CI summary an audit trail
+            // of what this run did to the account - and of what a cassette captured. Only the method,
+            // path, query and status are written; credentials live in headers, never here.
+            options.InspectResponse += response =>
+                RunReport.Record(
+                    RunReportOutcome.Info,
+                    $"{response.RequestMessage?.Method} {response.RequestMessage?.RequestUri?.PathAndQuery}",
+                    $"{(int)response.StatusCode} {response.ReasonPhrase}");
+        };
+
+        var recorder = IntegrationCassette.Handler;
+        if (recorder is not null)
+        {
+            // One recorder is shared by every client this process builds, because one run should
+            // produce one cassette. A DelegatingHandler cannot be chained into two pipelines - its
+            // InnerHandler may only be assigned once - so each pipeline gets a forwarder instead.
+            services.AddCloudflareHttpClient(
+                configureOptions: configure,
+                configureClient: builder => builder.AddHttpMessageHandler(() => new CassetteForwarder(recorder)));
+        }
+        else
+        {
+            services.AddCloudflare(configure);
+        }
+
+        _provider = services.BuildServiceProvider();
+        return _provider.GetRequiredService<CloudflareClient>();
+    }
+
+    /// <inheritdoc />
+    public void Dispose()
+    {
+        Dispose(true);
+        GC.SuppressFinalize(this);
+    }
+
+    /// <summary>Disposes the client.</summary>
+    /// <param name="disposing">True when called from <see cref="Dispose()"/>.</param>
+    protected virtual void Dispose(bool disposing)
+    {
+        if (disposing)
+        {
+            _client?.Dispose();
+            _client = null;
+            _provider?.Dispose();
+            _provider = null;
+
+            // xunit builds one fixture instance per test, so every instance flushes; the flush is
+            // idempotent and merges rather than truncates.
+            IntegrationCassette.Flush();
+        }
+    }
+}
+
+/// <summary>
+/// Reads the optional, git-ignored <c>tests/CF.Net.IntegrationTests/credentials.local.json</c>.
+/// </summary>
+/// <remarks>
+/// Both key spellings are accepted, because people reach for whichever they last saw:
+/// <code>
+/// {
+///   "apiToken":  "v1.0-abc...",          // or "CLOUDFLARE_API_TOKEN"
+///   "accountId": "023e105f4ecef8ad...",   // or "CLOUDFLARE_ACCOUNT_ID"
+///   "zoneId":    "8d0c8239f88f98a8...",   // or "CLOUDFLARE_ZONE_ID"
+///   "enableWrites": false                  // or "CLOUDFLARE_IT_ENABLE_WRITES"
+/// }
+/// </code>
+/// </remarks>
+internal static class LocalCredentials
+{
+    private static readonly Dictionary<string, string> FileKeyToVariable = new(StringComparer.OrdinalIgnoreCase)
+    {
+        ["apiToken"] = "CLOUDFLARE_API_TOKEN",
+        ["globalApiKey"] = "CLOUDFLARE_GLOBAL_API_KEY",
+        ["apiEmail"] = "CLOUDFLARE_API_EMAIL",
+        ["accountId"] = "CLOUDFLARE_ACCOUNT_ID",
+        ["zoneId"] = "CLOUDFLARE_ZONE_ID",
+        ["baseAddress"] = "CLOUDFLARE_BASE_ADDRESS",
+        ["enableWrites"] = "CLOUDFLARE_IT_ENABLE_WRITES",
+        ["cassette"] = "CLOUDFLARE_IT_CASSETTE",
+        ["record"] = "CLOUDFLARE_IT_RECORD",
+    };
+
+    /// <summary>Loads the file, keyed by environment variable name.</summary>
+    /// <returns>An empty dictionary when the file is absent or unreadable.</returns>
+    public static Dictionary<string, string?> Load()
+    {
+        var values = new Dictionary<string, string?>(StringComparer.Ordinal);
+
+        string path;
+        try
+        {
+            path = RepoPaths.LocalCredentialsFile;
+        }
+        catch (DirectoryNotFoundException)
+        {
+            return values;
+        }
+
+        if (!File.Exists(path))
+        {
+            return values;
+        }
+
+        try
+        {
+            using var document = JsonDocument.Parse(File.ReadAllText(path));
+
+            foreach (var property in document.RootElement.EnumerateObject())
+            {
+                // Keys starting with an underscore are comments; the template uses one to explain
+                // itself, and JSON has no comment syntax.
+                if (property.Name.Length > 0 && property.Name[0] == '_')
+                {
+                    continue;
+                }
+
+                if (!FileKeyToVariable.TryGetValue(property.Name, out var variable))
+                {
+                    // Already an environment-style key, for example "CLOUDFLARE_API_TOKEN".
+                    variable = property.Name;
+                }
+
+                values[variable] = property.Value.ValueKind switch
+                {
+                    JsonValueKind.String => property.Value.GetString(),
+                    JsonValueKind.True => "true",
+                    JsonValueKind.False => "false",
+                    JsonValueKind.Number => property.Value.GetRawText(),
+                    _ => null,
+                };
+            }
+        }
+        catch (JsonException)
+        {
+            // A malformed local file must not turn every integration test into a crash: the tests
+            // will skip and say the credentials are missing.
+            return new Dictionary<string, string?>(StringComparer.Ordinal);
+        }
+        catch (IOException)
+        {
+            return new Dictionary<string, string?>(StringComparer.Ordinal);
+        }
+        catch (UnauthorizedAccessException)
+        {
+            return new Dictionary<string, string?>(StringComparer.Ordinal);
+        }
+
+        return values;
+    }
+}
+
+/// <summary>
+/// Owns the one cassette a recording run writes to. Static on purpose: xunit creates a fresh test
+/// instance per test, and a cassette is only useful if the whole run lands in one file.
+/// </summary>
+internal static class IntegrationCassette
+{
+    private static readonly object Gate = new();
+    private static CassetteHandler? _handler;
+    private static Cassette? _cassette;
+    private static string? _name;
+    private static bool _flushHooked;
+    private static CassetteMode _mode = CassetteMode.Passthrough;
+
+    /// <summary>
+    /// The shared handler: a recorder when this run is recording, a replayer when it is answering from
+    /// a committed cassette, and <see langword="null"/> when it should talk to Cloudflare directly.
+    /// </summary>
+    public static CassetteHandler? Handler
+    {
+        get
+        {
+            lock (Gate)
+            {
+                return _handler ??= TryCreate();
+            }
+        }
+    }
+
+    /// <summary>
+    /// What this run is doing with a cassette. Reading it initialises the shared handler, so the
+    /// fixture can ask before it has built a client.
+    /// </summary>
+    public static CassetteMode Mode
+    {
+        get
+        {
+            lock (Gate)
+            {
+                _ = _handler ??= TryCreate();
+                return _mode;
+            }
+        }
+    }
+
+    /// <summary>The cassette being replayed, or <see langword="null"/> when this run is not replaying.</summary>
+    public static Cassette? ReplayCassette => Mode == CassetteMode.Replay ? _cassette : null;
+
+    private static CassetteHandler? TryCreate()
+    {
+        var name = Read("CLOUDFLARE_IT_CASSETTE");
+        if (string.IsNullOrWhiteSpace(name))
+        {
+            return null;
+        }
+
+        var mode = CassetteHandler.ParseMode(Read("CLOUDFLARE_IT_RECORD"));
+        if (mode == CassetteMode.Passthrough)
+        {
+            // Naming a cassette is the intent; make it record rather than silently doing nothing.
+            mode = CassetteMode.Record;
+        }
+
+        _name = name.Trim();
+
+        if (mode == CassetteMode.Replay)
+        {
+            // Answer from the recording and never open a socket. A cassette that is missing or empty
+            // still installs the handler, so every call fails with CassetteMissException rather than
+            // quietly falling back to the live API.
+            _cassette = LoadOrEmpty(_name);
+            _mode = CassetteMode.Replay;
+            return CassetteHandler.Replaying(_cassette);
+        }
+
+        _cassette = new Cassette(_name, CloudflareDefaults.BaseAddress);
+        _cassette.LibraryVersion = typeof(CloudflareClient).Assembly.GetName().Version?.ToString();
+
+        if (!_flushHooked)
+        {
+            _flushHooked = true;
+            AppDomain.CurrentDomain.ProcessExit += (_, _) => FlushCore();
+        }
+
+        _mode = CassetteMode.Record;
+        return new CassetteHandler(_cassette, CassetteMode.Record);
+    }
+
+    /// <summary>
+    /// Loads the cassette to replay, falling back to an empty one. An empty cassette answers nothing,
+    /// so a wrong name surfaces as <see cref="CassetteMissException"/> on the first call.
+    /// </summary>
+    private static Cassette LoadOrEmpty(string name)
+    {
+        var path = RepoPaths.CassettePath(name);
+        return File.Exists(path) ? Cassette.Load(path) : new Cassette(name, CloudflareDefaults.BaseAddress);
+    }
+
+    /// <summary>Merges what has been recorded so far into the cassette file.</summary>
+    public static void Flush()
+    {
+        lock (Gate)
+        {
+            FlushCore();
+        }
+    }
+
+    private static void FlushCore()
+    {
+        if (_cassette is null || _handler is null || _name is null || _handler.RecordedCount == 0)
+        {
+            return;
+        }
+
+        try
+        {
+            var path = RepoPaths.CassettePath(_name);
+            var recorded = _cassette.Exchanges;
+
+            // Merge instead of truncate: a filtered run should add to a cassette, not replace it.
+            if (File.Exists(path))
+            {
+                var existing = Cassette.Load(path);
+                var seen = new HashSet<string>(StringComparer.Ordinal);
+                foreach (var exchange in existing.Exchanges)
+                {
+                    seen.Add(Signature(exchange));
+                }
+
+                foreach (var exchange in recorded)
+                {
+                    if (seen.Add(Signature(exchange)))
+                    {
+                        existing.Exchanges.Add(exchange);
+                    }
+                }
+
+                existing.RecordedAt = _cassette.RecordedAt;
+                existing.BaseUrl = _cassette.BaseUrl;
+                existing.Save(path);
+            }
+            else
+            {
+                _cassette.Save(path);
+            }
+        }
+        catch (IOException)
+        {
+            // Losing a cassette must never fail a test run that was talking to the real API.
+        }
+        catch (UnauthorizedAccessException)
+        {
+        }
+        catch (InvalidDataException)
+        {
+        }
+    }
+
+    private static string Signature(RecordedExchange exchange) =>
+        string.Join("|", exchange.MatchKey, exchange.StatusCode, exchange.ResponseBodyBase64 ?? exchange.ResponseBody ?? string.Empty);
+
+    private static string? Read(string name)
+    {
+        var value = Environment.GetEnvironmentVariable(name);
+        return string.IsNullOrWhiteSpace(value) ? null : value.Trim();
+    }
+}

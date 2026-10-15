@@ -1,0 +1,87 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:vm="using:CFNet.Gallery.ViewModels"
+             x:Class="CFNet.Gallery.Views.R2View"
+             x:DataType="vm:R2ViewModel">
+
+  <DockPanel>
+
+    <StackPanel DockPanel.Dock="Top" Orientation="Vertical" Margin="16,14,16,6">
+      <TextBlock Classes="h1" Text="{Binding Title}" />
+      <TextBlock Classes="hint" Text="{Binding Description}" Margin="0,4,0,2" />
+      <TextBlock Text="{Binding Status}" FontSize="12" Opacity="0.8" Margin="0,4,0,0" TextWrapping="Wrap" />
+    </StackPanel>
+
+    <ScrollViewer VerticalScrollBarVisibility="Auto" Padding="16,4,16,16">
+      <StackPanel Orientation="Vertical" MaxWidth="900" HorizontalAlignment="Left">
+
+        <Border Classes="card">
+          <StackPanel Orientation="Vertical" Spacing="10">
+            <TextBlock Classes="h2" Text="Jurisdiction used by every call below" />
+            <ComboBox ItemsSource="{Binding Jurisdictions}" SelectedItem="{Binding Jurisdiction, Mode=TwoWay}" MinWidth="220" HorizontalAlignment="Left" />
+            <TextBlock Classes="hint" Text="Jurisdiction-restricted buckets are only visible through the cf-r2-jurisdiction request header. 'Unknown' sends no header, which is what a default (non-restricted) bucket needs." />
+          </StackPanel>
+        </Border>
+
+        <Border Classes="card">
+          <StackPanel Orientation="Vertical" Spacing="10">
+            <TextBlock Classes="h2" Text="List buckets  -  GET /accounts/{account_id}/r2/buckets" />
+            <WrapPanel Orientation="Horizontal">
+              <StackPanel Orientation="Vertical" Spacing="3" Margin="0,0,16,8">
+                <TextBlock Classes="hint" Text="Per page (1-1000)" />
+                <TextBox Text="{Binding ListPerPage, Mode=TwoWay}" Width="140" />
+              </StackPanel>
+              <StackPanel Orientation="Vertical" Spacing="3" Margin="0,0,16,8">
+                <TextBlock Classes="hint" Text="Name contains" />
+                <TextBox Text="{Binding ListNameContains, Mode=TwoWay}" Width="220" />
+              </StackPanel>
+              <StackPanel Orientation="Vertical" Spacing="3" Margin="0,0,16,8">
+                <TextBlock Classes="hint" Text="Start after" />
+                <TextBox Text="{Binding ListStartAfter, Mode=TwoWay}" Width="200" />
+              </StackPanel>
+              <StackPanel Orientation="Vertical" Spacing="3" Margin="0,0,16,8">
+                <TextBlock Classes="hint" Text="Cursor" />
+                <TextBox Text="{Binding ListCursor, Mode=TwoWay}" Width="240" />
+              </StackPanel>
+            </WrapPanel>
+            <WrapPanel Orientation="Horizontal">
+              <Button Classes="run" Content="List" Command="{Binding ListCommand}" Margin="0,0,8,0" />
+              <Button Content="Walk every page" Command="{Binding ListAllCommand}" />
+            </WrapPanel>
+            <TextBlock Classes="hint" Text="The result field is an object wrapping a 'buckets' array, unlike every other listing in the API - the library unwraps it before handing you a page." />
+          </StackPanel>
+        </Border>
+
+        <Border Classes="card">
+          <StackPanel Orientation="Vertical" Spacing="10">
+            <TextBlock Classes="h2" Text="Create a bucket  -  POST /accounts/{account_id}/r2/buckets" />
+            <StackPanel Orientation="Horizontal" Spacing="10">
+              <TextBlock Text="Bucket name" Width="140" VerticalAlignment="Center" />
+              <TextBox Text="{Binding BucketName, Mode=TwoWay}" MinWidth="380" PlaceholderText="3-63 chars, lowercase letters, digits and single hyphens" />
+            </StackPanel>
+            <WrapPanel Orientation="Horizontal">
+              <StackPanel Orientation="Vertical" Spacing="3" Margin="0,0,16,8">
+                <TextBlock Classes="hint" Text="Location hint" />
+                <ComboBox ItemsSource="{Binding LocationHints}" SelectedItem="{Binding LocationHint, Mode=TwoWay}" Width="180" />
+              </StackPanel>
+              <StackPanel Orientation="Vertical" Spacing="3" Margin="0,0,16,8">
+                <TextBlock Classes="hint" Text="Storage class" />
+                <ComboBox ItemsSource="{Binding StorageClasses}" SelectedItem="{Binding StorageClass, Mode=TwoWay}" Width="200" />
+              </StackPanel>
+            </WrapPanel>
+            <WrapPanel Orientation="Horizontal">
+              <Button Classes="run" Content="Create" Command="{Binding CreateCommand}" Margin="0,0,8,0" />
+              <Button Content="Get" Command="{Binding GetCommand}" Margin="0,0,8,0" />
+              <Button Content="Update storage class" Command="{Binding UpdateCommand}" Margin="0,0,8,0" />
+              <Button Content="Delete" Command="{Binding DeleteCommand}" />
+            </WrapPanel>
+            <TextBlock Classes="hint" Text="Note the mixed casing on the wire: locationHint is 'weur' while storageClass is 'Standard'. The library models each with its own CloudflareValue so both survive a round trip." />
+          </StackPanel>
+        </Border>
+
+      </StackPanel>
+    </ScrollViewer>
+
+  </DockPanel>
+
+</UserControl>

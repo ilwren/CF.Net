@@ -1,0 +1,911 @@
+name: Integration
+
+# Runs the tests that talk to the real Cloudflare API.
+#
+# It is NOT triggered by push or pull_request on purpose: those runs have no credentials, and a
+# schedule/dispatch-only workflow keeps untrusted forks from being able to spend your API quota or
+# touch your account.
+#
+# The cadence that follows from it: new endpoints are proven by the offline unit tests on every push
+# (ci.yml), and the live suite is run once per phase - dispatch it by hand when a batch of endpoints is
+# finished, or let the Monday schedule do it.
+#
+# TEMPORARY EXCEPTION to that, and the cause is a GitHub rule rather than anything in this file:
+# workflow_dispatch and schedule only fire for a workflow that exists on the DEFAULT branch, and this one
+# lives on arena/5d11f1dd-cf-net until PR #1 is merged. So the Actions page shows no "Run workflow" button
+# and the Monday cron has never fired. Until the merge, a push trigger scoped to that one branch is how a
+# live run gets made. And because a push event carries no dispatch inputs, the writes switch in the env
+# block below also has a TEMPORARY 'github.event_name == push' clause in it, so a push run exercises write
+# operations as well as reads - which is what the first live run was asked to do. Both temporary parts, the
+# trigger and that clause, get deleted together in one commit once the branch is merged; neither belongs in
+# the schedule/dispatch-only design this workflow is meant to end up with.
+#
+# To make it do anything, add these repository secrets
+# (Settings -> Secrets and variables -> Actions -> New repository secret):
+#
+#   CLOUDFLARE_API_TOKEN      required  - API token scoped to the resources you want to exercise
+#   CLOUDFLARE_ACCOUNT_ID     required  - for Workers, Pages, D1, KV and R2
+#   CLOUDFLARE_ZONE_ID        required  - for the DNS record and cache purge tests
+#   CLOUDFLARE_API_EMAIL      optional  - only for the legacy global-key path
+#   CLOUDFLARE_GLOBAL_API_KEY optional  - only for the legacy global-key path
+#
+# Without them the job reports a warning and the tests skip themselves instead of failing.
+# See docs/integration-testing.md for how to create a correctly scoped token.
+
+on:
+  workflow_dispatch:
+    inputs:
+      enable_writes:
+        description: 'Allow tests that create and delete resources (KV namespace, R2 bucket, D1 database, Worker, Pages project, DNS record, cache purge)'
+        type: boolean
+        default: false
+      cassette:
+        description: 'Record every call into tests/cassettes/<name>.json, for the offline unit tests to replay (leave empty to disable recording)'
+        type: string
+        default: ''
+      commit_cassette:
+        description: 'Commit the recorded cassette back to this branch'
+        type: boolean
+        default: false
+      filter:
+        description: "Narrow the run, e.g. FullyQualifiedName~R2 (always combined with Category=Integration)"
+        type: string
+        default: ''
+  schedule:
+    # Mondays at 04:00 UTC - read-only, so it can run unattended.
+    - cron: '0 4 * * 1'
+  # TEMPORARY - see the header. Remove once this workflow is on the default branch.
+  push:
+    branches:
+      - arena/5d11f1dd-cf-net
+
+permissions:
+  contents: read
+
+concurrency:
+  group: integration-${{ github.workflow }}
+  cancel-in-progress: false
+
+env:
+  DOTNET_NOLOGO: true
+  DOTNET_CLI_TELEMETRY_OPTOUT: true
+  CONFIGURATION: Release
+  # Injected from repository secrets. GitHub masks secret values in every log line automatically.
+  CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+  CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+  CLOUDFLARE_ZONE_ID: ${{ secrets.CLOUDFLARE_ZONE_ID }}
+  CLOUDFLARE_API_EMAIL: ${{ secrets.CLOUDFLARE_API_EMAIL }}
+  CLOUDFLARE_GLOBAL_API_KEY: ${{ secrets.CLOUDFLARE_GLOBAL_API_KEY }}
+  # TEMPORARY, together with the push trigger below: '|| github.event_name == \'push\'' makes a push run
+  # do write operations, because a push event carries no dispatch inputs and the person who asked for a
+  # first live run asked for it to include writes. Delete that clause and the push trigger in one commit.
+  CLOUDFLARE_IT_ENABLE_WRITES: ${{ (github.event_name == 'push' || github.event.inputs.enable_writes == true || github.event.inputs.enable_writes == 'true') && 'true' || 'false' }}
+  # Recording is off unless a cassette name is given. CLOUDFLARE_IT_RECORD only means something
+  # together with CLOUDFLARE_IT_CASSETTE.
+  CLOUDFLARE_IT_CASSETTE: ${{ github.event.inputs.cassette || '' }}
+  CLOUDFLARE_IT_RECORD: ${{ github.event.inputs.cassette && 'true' || 'false' }}
+
+jobs:
+  integration:
+    name: Cloudflare API integration tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: write   # only used by the opt-in "commit the cassette" step
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v6
+        with:
+          dotnet-version: 8.0.x
+
+      - name: Report which credential scheme is available
+        id: credentials
+        shell: bash
+        run: |
+          if [ -n "${CLOUDFLARE_API_TOKEN:-}" ]; then
+            echo "scheme=API token" >> "$GITHUB_OUTPUT"
+            echo "available=true" >> "$GITHUB_OUTPUT"
+            echo "::notice::Using CLOUDFLARE_API_TOKEN."
+          elif [ -n "${CLOUDFLARE_GLOBAL_API_KEY:-}" ] && [ -n "${CLOUDFLARE_API_EMAIL:-}" ]; then
+            echo "scheme=Global API key" >> "$GITHUB_OUTPUT"
+            echo "available=true" >> "$GITHUB_OUTPUT"
+            echo "::notice::Using CLOUDFLARE_GLOBAL_API_KEY with CLOUDFLARE_API_EMAIL."
+          else
+            echo "scheme=none" >> "$GITHUB_OUTPUT"
+            echo "available=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::No Cloudflare credentials are configured. Add CLOUDFLARE_API_TOKEN (and CLOUDFLARE_ACCOUNT_ID / CLOUDFLARE_ZONE_ID) as repository secrets - see docs/integration-testing.md."
+          fi
+
+          if [ -z "${CLOUDFLARE_ACCOUNT_ID:-}" ]; then
+            echo "::warning::CLOUDFLARE_ACCOUNT_ID is not set; Workers, Pages, D1, KV and R2 tests will skip. It is 32 hexadecimal characters - any domain's Overview page in the API section, or Ctrl/Cmd+K then 'Copy account ID'. Not the account name, not a dashboard URL."
+          fi
+          if [ -z "${CLOUDFLARE_ZONE_ID:-}" ]; then
+            echo "::warning::CLOUDFLARE_ZONE_ID is not set; DNS and cache purge tests will skip. It is 32 hexadecimal characters - that domain's Overview page, in the API section next to Zone ID. The token also needs the zone in its Zone Resources."
+          fi
+          if [ "${CLOUDFLARE_ACCOUNT_ID:-}" != "" ] || [ "${CLOUDFLARE_ZONE_ID:-}" != "" ]; then
+            # Shape checking lives in the fixture (CFNet.TestKit.CredentialFormat), which reports a
+            # malformed value by name to the test output and to the run report this job summarises.
+            echo "Credential shapes are checked by the tests themselves; a wrong one is named in the summary."
+          fi
+
+          echo "Write operations: ${CLOUDFLARE_IT_ENABLE_WRITES}"
+
+          if [ -n "${CLOUDFLARE_IT_CASSETTE:-}" ]; then
+            echo "::notice::Recording this run into tests/cassettes/${CLOUDFLARE_IT_CASSETTE}.json. Credentials are redacted on the way in."
+          fi
+
+      - name: Verify the credentials against the live API
+        id: verify
+        if: steps.credentials.outputs.available == 'true'
+        shell: bash
+        run: |
+          set -o pipefail
+          PY=$(command -v python3 || command -v python || true)
+          if [ -z "$PY" ]; then echo "no python"; exit 0; fi
+
+          base="${CLOUDFLARE_BASE_ADDRESS:-https://api.cloudflare.com/client/v4}"
+          base="${base%/}"
+
+          # Describe the shapes first. Cloudflare answers both "this was pasted wrong" and "this token
+          # was revoked" with the same 1000 Invalid API Token, and shape is the half of that question a
+          # log can answer - without printing any part of a secret beyond its length and its kind.
+          "$PY" - <<'PY'
+          import os
+
+          known = (
+              ('cfut_', 'a user API token'),
+              ('cfat_', 'an account-owned API token'),
+              ('cfk_', 'a Global API Key'),
+          )
+
+          def describe(name, value):
+              if not value:
+                  print(f'::notice::{name} is not set.')
+                  return
+              trimmed = value.strip()
+              problems = []
+              if value != trimmed:
+                  problems.append('surrounding whitespace')
+              if len(trimmed) > 1 and trimmed[0] == trimmed[-1] and trimmed[0] in ('"', chr(39)):
+                  problems.append('surrounding quotes')
+              kind = next((label for prefix, label in known if trimmed.startswith(prefix)),
+                          'no recognised cfut_/cfat_/cfk_ prefix (a pre-2026 credential, or the wrong value)')
+              note = ' - PROBLEM: ' + ' and '.join(problems) if problems else ''
+              print(f'::notice::{name}: {len(trimmed)} characters, {kind}{note}.')
+
+          describe('CLOUDFLARE_API_TOKEN', os.environ.get('CLOUDFLARE_API_TOKEN'))
+          describe('CLOUDFLARE_GLOBAL_API_KEY', os.environ.get('CLOUDFLARE_GLOBAL_API_KEY'))
+
+          for name in ('CLOUDFLARE_ACCOUNT_ID', 'CLOUDFLARE_ZONE_ID'):
+              value = (os.environ.get(name) or '').strip()
+              hexish = len(value) == 32 and all(c in '0123456789abcdefABCDEF' for c in value)
+              verdict = 'a 32-character hexadecimal id' if hexish else \
+                  f'{len(value)} characters, which is NOT a 32-character hexadecimal id'
+              print(f'::notice::{name}: {verdict}.')
+          PY
+
+          # Then ask Cloudflare. An account-owned token (cfat_) is verified under the account, so both
+          # endpoints are tried and the answer says which accepted it - which also tells the suite
+          # whether the user-scoped verify endpoint can work with this token at all.
+          if [ -n "${CLOUDFLARE_API_TOKEN:-}" ]; then
+            auth=(-H "Authorization: Bearer ${CLOUDFLARE_API_TOKEN}")
+            user_url="$base/user/tokens/verify"
+          else
+            auth=(-H "X-Auth-Key: ${CLOUDFLARE_GLOBAL_API_KEY}" -H "X-Auth-Email: ${CLOUDFLARE_API_EMAIL}")
+            user_url="$base/user"
+          fi
+
+          curl --silent --show-error --max-time 30 --output "$RUNNER_TEMP/verify-user.json" \
+            "$user_url" "${auth[@]}" || true
+          if [ -n "${CLOUDFLARE_ACCOUNT_ID:-}" ]; then
+            curl --silent --show-error --max-time 30 --output "$RUNNER_TEMP/verify-account.json" \
+              "$base/accounts/${CLOUDFLARE_ACCOUNT_ID}/tokens/verify" "${auth[@]}" || true
+          fi
+
+          "$PY" - "$RUNNER_TEMP/verify-user.json" "$RUNNER_TEMP/verify-account.json" "$user_url" <<'PY'
+          import json, os, sys
+
+          user_body, account_body, user_url = sys.argv[1], sys.argv[2], sys.argv[3]
+
+          def read(path):
+              try:
+                  with open(path, encoding='utf-8') as handle:
+                      return json.load(handle)
+              except Exception:
+                  return None
+
+          def rendered(payload):
+              if payload is None:
+                  return 'no parsable response (was the endpoint reachable?)'
+              errors = payload.get('errors') or []
+              return ', '.join(f"{e.get('code')}: {e.get('message')}" for e in errors) or 'no error detail was returned'
+
+          user_payload = read(user_body)
+          account_payload = read(account_body) if os.path.exists(account_body) else None
+
+          if user_payload and user_payload.get('success'):
+              status = (user_payload.get('result') or {}).get('status')
+              suffix = f' (token status: {status})' if status else ''
+              print(f'::notice::Cloudflare accepted these credentials at {user_url}{suffix}.')
+              sys.exit(0)
+
+          if account_payload and account_payload.get('success'):
+              status = (account_payload.get('result') or {}).get('status')
+              suffix = f' (token status: {status})' if status else ''
+              print(f'::notice::Cloudflare accepted these credentials at the account-scoped verify endpoint{suffix}.')
+              print('::warning::This is an account-owned token, so GET /user/tokens/verify rejects it. The A_token_can_be_verified_directly test uses that endpoint and will fail; every other call in the suite is unaffected.')
+              sys.exit(0)
+
+          print('::error::Cloudflare rejected these credentials.')
+          print(f'::error::  {user_url} -> {rendered(user_payload)}')
+          if account_payload is not None:
+              print(f'::error::  accounts/{{account_id}}/tokens/verify -> {rendered(account_payload)}')
+          print('::error::Usual causes, most common first: the secret was saved with quotes or a trailing newline; the value is a token id, an account id or a dashboard URL rather than the secret; the token was rolled or revoked after it was saved; or it is account-owned (cfat_) and only the account-scoped endpoint accepts it.')
+          sys.exit(1)
+          PY
+
+      - name: Check what the credentials can actually reach
+        if: steps.credentials.outputs.available == 'true'
+        # A diagnostic must never be the reason the suite reports failure: if this step's own curl or
+        # python misbehaves, the tests still have to run and still have to be believed.
+        continue-on-error: true
+        shell: bash
+        run: |
+          set -o pipefail
+          base="${CLOUDFLARE_BASE_ADDRESS:-https://api.cloudflare.com/client/v4}"
+          base="${base%/}"
+
+          if [ -n "${CLOUDFLARE_API_TOKEN:-}" ]; then
+            auth=(-H "Authorization: Bearer ${CLOUDFLARE_API_TOKEN}")
+          else
+            auth=(-H "X-Auth-Key: ${CLOUDFLARE_GLOBAL_API_KEY}" -H "X-Auth-Email: ${CLOUDFLARE_API_EMAIL}")
+          fi
+
+          # One read-only call per product area. A token can be perfectly valid and still see nothing -
+          # that is the failure mode that produced a green run in which every zone-scoped test skipped -
+          # so each area is asked directly and named here, rather than the gap being inferred from the
+          # test summary afterwards.
+          probe() {
+            label="$1"
+            url="$2"
+            method="${3:-GET}"
+            body="${4:-}"
+            args=(--silent --show-error --max-time 30 --request "$method"
+                  --output "$RUNNER_TEMP/reach-$label.json" --write-out '%{http_code}' "$url" "${auth[@]}")
+            if [ -n "$body" ]; then
+              args+=(-H "Content-Type: application/json" --data "$body")
+            fi
+            code=$(curl "${args[@]}" || echo 000)
+            echo "$code" > "$RUNNER_TEMP/reach-$label.status"
+          }
+
+          probe zones "$base/zones?per_page=1"
+
+          if [ -n "${CLOUDFLARE_ZONE_ID:-}" ]; then
+            zone="$base/zones/${CLOUDFLARE_ZONE_ID}"
+            probe zone "$zone"
+            probe dns "$zone/dns_records?per_page=1"
+            probe dnssec "$zone/dnssec"
+            probe dnssec_zsk "$zone/dnssec/zsk"
+            probe settings "$zone/settings"
+            probe ssl "$zone/ssl/certificate_packs?per_page=1"
+            probe custom_hostnames "$zone/custom_hostnames?per_page=1"
+            probe origin_tls "$zone/origin_tls_client_auth/settings"
+            # An empty body is refused before anything is purged, so this reads the permission without
+            # touching the cache: 403 means Cache Purge is missing, a validation error means it is there.
+            probe cache_purge "$zone/purge_cache" POST '{}'
+            # The endpoints below are wrapped in the library but their response shapes are not published
+            # anywhere this workflow can read, so the probe records what Cloudflare actually sends. That is
+            # what stops the next model from being a guess.
+            probe dns_export "$zone/dns_records/export"
+            probe dns_scan_list "$zone/dns_records/scan/review?per_page=1"
+            # Same empty-body trick as cache purge: an empty batch changes nothing, and 400 rather than 403
+            # is what proves DNS Write is there. The import endpoint is deliberately NOT probed - a POST
+            # there carries a zone file and a flag that can delete existing records first, and no empty body
+            # is worth that risk. Import needs DNS Write too, so this probe already covers it.
+            probe dns_batch "$zone/dns_records/batch" POST '{}'
+          fi
+
+          if [ -n "${CLOUDFLARE_ACCOUNT_ID:-}" ]; then
+            account="$base/accounts/${CLOUDFLARE_ACCOUNT_ID}"
+            probe account "$account"
+            # Every permission group this token could be given, with the key the token-creation URL wants.
+            # Guessing those keys has already produced two wrong URLs (Pages is 'page', R2 is 'workers_r2'),
+            # so the list comes from the API instead.
+            probe permission_groups "$account/tokens/permission_groups"
+            probe workers_scripts "$account/workers/scripts?per_page=1"
+            probe workers_domains "$account/workers/domains"
+            probe pages "$account/pages/projects"
+            probe d1 "$account/d1/database?per_page=1"
+            probe kv "$account/storage/kv/namespaces?per_page=1"
+            probe r2 "$account/r2/buckets?per_page=1"
+          fi
+
+          PY=$(command -v python3 || command -v python || true)
+          if [ -z "$PY" ]; then echo "no python"; exit 0; fi
+          "$PY" - <<'PY'
+          import json, os, urllib.parse
+
+          temp = os.environ.get('RUNNER_TEMP', '.')
+
+          # label -> (endpoint, dashboard permission, template key, template type, entitlement note).
+          # The keys are Cloudflare's own, and two do not match their dashboard labels: Pages is 'page'
+          # and R2 is 'workers_r2'. The note carries the reasons a 403 here is not the token's fault.
+          AREAS = [
+              ('zones', 'GET /zones', 'Zone - Read', 'zone', 'read', ''),
+              ('zone', 'GET /zones/{zone_id}', 'Zone - Read', 'zone', 'read', ''),
+              ('dns', 'GET /zones/{zone_id}/dns_records', 'DNS - Read', 'dns', 'read', ''),
+              ('dnssec', 'GET /zones/{zone_id}/dnssec', 'DNS - Read', 'dns', 'read',
+               'an unsigned zone still answers 200 here, with status disabled'),
+              ('dnssec_zsk', 'GET /zones/{zone_id}/dnssec/zsk', 'DNS - Read', 'dns', 'read',
+               'an unsigned zone answers 200 with an empty list, so empty is not a failure'),
+              ('settings', 'GET /zones/{zone_id}/settings', 'Zone Settings - Read', 'zone_settings', 'read',
+               'which settings appear depends on the plan, so a short list is normal'),
+              ('ssl', 'GET /zones/{zone_id}/ssl/certificate_packs', 'SSL and Certificates - Read',
+               'ssl_and_certificates', 'read', ''),
+              ('custom_hostnames', 'GET /zones/{zone_id}/custom_hostnames', 'SSL and Certificates - Read',
+               'ssl_and_certificates', 'read',
+               'SSL for SaaS is a paid feature that has to be enabled on the zone; a 403 here while the rest '
+               'of this permission group reads fine is that, not the token'),
+              ('origin_tls', 'GET /zones/{zone_id}/origin_tls_client_auth/settings',
+               'SSL and Certificates - Read', 'ssl_and_certificates', 'read', ''),
+              ('cache_purge', 'POST /zones/{zone_id}/purge_cache', 'Cache Purge - Purge', 'cache', 'purge',
+               'probed with an empty body that Cloudflare refuses, so nothing is purged either way'),
+              ('dns_export', 'GET /zones/{zone_id}/dns_records/export', 'DNS - Read', 'dns', 'read',
+               'the BIND zone file; the shape recorded here is the one the library has to match'),
+              ('dns_scan_list', 'GET /zones/{zone_id}/dns_records/scan/review', 'DNS - Read', 'dns', 'read',
+               'a zone that has never been scanned answers with an empty list rather than an error'),
+              ('dns_batch', 'POST /zones/{zone_id}/dns_records/batch', 'DNS - Write', 'dns', 'edit',
+               'probed with an empty batch, which changes no records either way'),
+              ('account', 'GET /accounts/{account_id}', 'Account Settings - Read', 'account_settings', 'read', ''),
+              ('permission_groups', 'GET /accounts/{account_id}/tokens/permission_groups',
+               'Account API Tokens - Read', 'account_api_tokens', 'read',
+               'an account-owned token (cfat_) is refused here even with Account API Tokens read, the way '
+               'it is refused at GET /user; enumerating permission groups needs a user token (cfut_)'),
+              ('workers_scripts', 'GET /accounts/{account_id}/workers/scripts', 'Workers Scripts - Read',
+               'workers_scripts', 'read', ''),
+              ('workers_domains', 'GET /accounts/{account_id}/workers/domains', 'Workers Scripts - Read',
+               'workers_scripts', 'read',
+               'workers domains only exist once the account has a workers.dev subdomain or a custom domain, '
+               'so a refusal here while scripts read fine is usually that rather than the token'),
+              ('pages', 'GET /accounts/{account_id}/pages/projects', 'Pages - Read', 'page', 'read',
+               'this endpoint refuses page and per_page with 8000024 on some accounts, which the library '
+               'retries without'),
+              ('d1', 'GET /accounts/{account_id}/d1/database', 'D1 - Read', 'd1', 'read', ''),
+              ('kv', 'GET /accounts/{account_id}/storage/kv/namespaces', 'Workers KV Storage - Read',
+               'workers_kv_storage', 'read', ''),
+              ('r2', 'GET /accounts/{account_id}/r2/buckets', 'Workers R2 Storage - Read', 'workers_r2', 'read',
+               'R2 also has to be enabled on the account, under Storage and Databases, separately from the token'),
+          ]
+
+          WRITE_LEVELS = {
+              'zone': 'edit', 'dns': 'edit', 'zone_settings': 'edit', 'ssl_and_certificates': 'edit',
+              'workers_scripts': 'edit', 'page': 'edit', 'd1': 'edit', 'workers_kv_storage': 'edit',
+              'workers_r2': 'edit', 'cache': 'purge',
+          }
+
+          # Probes that send a body Cloudflare is expected to refuse, so a validation error proves the
+          # permission is there without changing anything.
+          EMPTY_BODY_PROBES = {'cache_purge', 'dns_batch'}
+
+          def read(label):
+              status_file = os.path.join(temp, f'reach-{label}.status')
+              if not os.path.exists(status_file):
+                  return None, None
+              with open(status_file, encoding='utf-8') as handle:
+                  status = handle.read().strip()
+              try:
+                  with open(os.path.join(temp, f'reach-{label}.json'), encoding='utf-8') as handle:
+                      return status, json.load(handle)
+              except Exception:
+                  return status, None
+
+          def shape(payload):
+              # A 200 is not the same as an answer: this is what distinguishes "readable" from "readable
+              # and empty", which is the difference that a status code alone cannot show.
+              if payload is None:
+                  return 'unparsable body'
+              if payload.get('success') is False:
+                  errors = payload.get('errors') or []
+                  return 'success=false ' + '; '.join(
+                      f"{e.get('code')}: {e.get('message')}" for e in errors)[:120]
+              if 'result' not in payload:
+                  return 'no result field'
+              result = payload['result']
+              if result is None:
+                  return 'result is NULL'
+              if isinstance(result, list):
+                  return f'{len(result)} item(s)' + ('' if result else ' - EMPTY')
+              if isinstance(result, dict):
+                  return f'object, {len(result)} field(s)'
+              if isinstance(result, str):
+                  return f'string, {len(result)} char(s)'
+              return type(result).__name__
+
+          def detail(payload):
+              if not payload:
+                  return ''
+              return '; '.join(f"{e.get('code')}: {e.get('message')}"
+                               for e in (payload.get('errors') or []))[:160]
+
+          answers = {label: read(label) for label, *_ in AREAS}
+
+          def answered(status):
+              # Anything 2xx counts: GET /zones/{zone_id}/origin_tls_client_auth/settings answers 202
+              # Accepted on a live zone, and treating that as anything other than "readable" would report
+              # a permission that is there as one that is not.
+              return bool(status) and status.startswith('2')
+
+          # Granted as (key, type) pairs, not keys alone: DNS Read being there says nothing about DNS
+          # Write, and treating a 403 on the batch probe as "the group reads fine elsewhere" would send
+          # somebody hunting for a paid feature instead of adding a permission.
+          granted = {(key, ptype) for label, _, _, key, ptype, _ in AREAS
+                     if answered(answers[label][0])}
+
+          rows = []
+          missing = []
+          entitlement = []
+          scope = []
+          compact = []
+
+          for label, endpoint, group, key, ptype, note in AREAS:
+              status, payload = answers[label]
+              if status is None:
+                  continue
+              form = shape(payload)
+              compact.append(f'{label}={status}[{form}]')
+
+              if label in EMPTY_BODY_PROBES and not answered(status) and status not in ('403', '404'):
+                  verdict = 'permission present - the empty body was refused, nothing was purged'
+              elif answered(status):
+                  verdict = f'readable ({form})'
+              elif status == '403':
+                  refused = detail(payload) or 'no error detail'
+                  if label == 'zone':
+                      # The list probe can answer 200 with nothing in it while this one is refused, and
+                      # calling that a feature limit would send somebody hunting through paid add-ons
+                      # instead of the token's Zone Resources.
+                      verdict = ("FORBIDDEN - this zone is outside the token's Zone Resources, or "
+                                 f'CLOUDFLARE_ZONE_ID is not a zone in this account ({refused})')
+                      scope.append(endpoint)
+                  elif (key, ptype) in granted:
+                      verdict = 'FORBIDDEN, but the same permission group read fine elsewhere - ' + (
+                          note or 'a feature or entitlement limit rather than a missing permission')
+                      entitlement.append((endpoint, group, note))
+                  elif label == 'r2':
+                      # R2 has to be enabled on the account before any token can read it, so a 403 here is
+                      # reported separately rather than as a permission to add.
+                      verdict = f'FORBIDDEN - {refused}. ' + note
+                  else:
+                      verdict = f'FORBIDDEN - needs {group} ({refused})' + (f'. {note}' if note else '')
+                      missing.append((group, key, ptype))
+              elif status == '404':
+                  verdict = ('not found - a wrong id or an absent resource, not a permission' +
+                             (f'. {note}' if note else ''))
+                  if label == 'zone':
+                      scope.append(endpoint)
+              else:
+                  verdict = f'HTTP {status} ' + (detail(payload) or form)
+              rows.append((endpoint, group, status, verdict, note))
+
+          lines = ['### What these credentials can reach', '',
+                   '| Endpoint | Permission it needs | HTTP | Verdict |', '| --- | --- | ---: | --- |']
+          for endpoint, group, status, verdict, note in rows:
+              lines.append(f'| `{endpoint}` | {group} | {status} | {verdict} |')
+          lines.append('')
+
+          zones_status, zones_payload = answers['zones']
+          empty_zone_list = answered(zones_status) and not ((zones_payload or {}).get('result') or [])
+          if empty_zone_list:
+              lines += [
+                  '**`GET /zones` succeeded but returned no zones.** The token authenticates and can see '
+                  'nothing zone-scoped, so DNS records, DNSSEC, zone settings, SSL, custom hostnames, origin '
+                  'TLS client auth and cache purge will all skip. Edit the token and, under **Zone '
+                  'Resources**, include the zone in `CLOUDFLARE_ZONE_ID` (or *All zones*) - permissions alone '
+                  'are not enough, the zone has to be in scope.', '']
+
+          zone_status, zone_payload = answers['zone']
+          null_zone_result = answered(zone_status) and (zone_payload or {}).get('result') is None
+          if null_zone_result:
+              lines += [
+                  '**`GET /zones/{zone_id}` answered 200 with a null result**, which the library reports as '
+                  '`null` exactly as it does a 403 or a 404. Cloudflare does this for a zone outside the '
+                  'token\'s Zone Resources as well as for one that does not exist, so check the id and the '
+                  'token scope rather than the client.', '']
+
+          if scope:
+              lines += ['**The configured zone was refused.** `CLOUDFLARE_ZONE_ID` is either outside the '
+                        "token's **Zone Resources** or is not a zone in the account named by "
+                        '`CLOUDFLARE_ACCOUNT_ID`. Cloudflare answers 403 for both and does not distinguish '
+                        'them, and it also answers 200 with a null result for some out-of-scope zones, which '
+                        'the library reports as `null` the same way it reports a 404.', '']
+
+          if missing:
+              wanted = []
+              for entry in missing:
+                  if entry not in wanted:
+                      wanted.append(entry)
+              lines += ['**Missing permissions:** ' +
+                        ', '.join(f'{group} (`{{"key":"{key}","type":"{ptype}"}}`)'
+                                  for group, key, ptype in wanted), '']
+          if entitlement:
+              lines += ['**Refused but not a permission problem:**']
+              lines += [f'- `{endpoint}` ({group}) - {note}' for endpoint, group, note in entitlement]
+              lines.append('')
+
+          groups = []
+          pg_status, pg_payload = answers['permission_groups']
+          if answered(pg_status) and isinstance((pg_payload or {}).get('result'), list):
+              groups = pg_payload['result']
+
+          if groups:
+              wanted = ('ruleset', 'redirect', 'list', 'filter', 'firewall', 'waf', 'rate limit')
+              interesting = [g for g in groups
+                             if any(word in json.dumps(g).lower() for word in wanted)]
+              lines += ['#### Permission groups this account can grant', '',
+                        f'{len(groups)} groups in total. These are the ones that matter for the endpoints '
+                        'still to be wrapped - Bulk Redirects, the Rulesets API, firewall and WAF rules - and '
+                        'the `id` or key shown here is what a `permissionGroupKeys` URL has to carry:', '',
+                        '```json', json.dumps(interesting, indent=1)[:7000], '```', '',
+                        '<details><summary>All ' + str(len(groups)) + ' groups</summary>', '',
+                        '```json', json.dumps(groups)[:60000], '```', '', '</details>', '']
+              print('::notice::Permission groups for the next batch: ' +
+                    json.dumps(interesting, separators=(',', ':'))[:1500])
+
+          def encode(permissions):
+              return urllib.parse.quote(
+                  json.dumps([{'key': key, 'type': ptype} for key, ptype in permissions],
+                             separators=(',', ':')), safe='')
+
+          seen = []
+          for _, _, _, key, ptype, _ in AREAS:
+              if (key, ptype) not in seen:
+                  seen.append((key, ptype))
+          # The verify step before this one calls accounts/{account_id}/tokens/verify, which has no probe
+          # of its own here - a token built from the URLs below still has to be able to answer it.
+          seen.append(('account_api_tokens', 'read'))
+          full = [(key, WRITE_LEVELS.get(key, ptype)) for key, ptype in seen]
+          name = urllib.parse.quote('CF.Net integration')
+
+          account_full = ('https://dash.cloudflare.com/?to=/:account/api-tokens'
+                          f'&permissionGroupKeys={encode(full)}&name={name}')
+          account_read = ('https://dash.cloudflare.com/?to=/:account/api-tokens'
+                          f'&permissionGroupKeys={encode(seen)}&name={name}')
+          # The account-token base already carries a '?', the profile one does not - forgetting it here
+          # produces a URL that opens a 404 instead of the token form.
+          user_full = ('https://dash.cloudflare.com/profile/api-tokens?'
+                       f'permissionGroupKeys={encode(full)}&accountId=%2A&zoneId=all&name={name}')
+
+          lines += [
+              '#### Create the token without ticking boxes',
+              '',
+              'Cloudflare pre-fills the token form from a URL. Each of these carries the whole permission '
+              'set; you still choose the account and, for an account-owned token, the **Zone Resources** in '
+              'the form itself.',
+              '',
+              f'- Account-owned (`cfat_`), **full suite including writes**: {account_full}',
+              f'- Account-owned (`cfat_`), **read-only** (all the Monday schedule needs): {account_read}',
+              f'- User-owned (`cfut_`), full suite - also the only kind that can answer '
+              f'`GET /user/tokens/verify`: {user_full}',
+              '',
+              "Keys are Cloudflare's own and two of them do not match their dashboard labels: Pages is "
+              '`page`, R2 is `workers_r2`. The read-only URL still carries `cache: purge`, because the probe '
+              'above reads that permission with a body Cloudflare refuses; only the write tests purge '
+              'anything, so drop it if you want the strict minimum.',
+              '']
+
+          body = '\n'.join(lines)
+          summary = os.environ.get('GITHUB_STEP_SUMMARY')
+          if summary:
+              with open(summary, 'a', encoding='utf-8') as handle:
+                  handle.write(body + '\n')
+          print(body)
+
+          # Annotations are the only part of a run that is readable through the API without downloading
+          # the job log, and GitHub keeps at most ten per level per step - so the whole matrix goes out as
+          # one dense notice and the verdicts stay in the summary above.
+          print('::notice::Reach matrix: ' + ' '.join(compact)[:1500])
+          if missing:
+              names = ', '.join(sorted({group for group, _, _ in missing}))
+              groups = len({group for group, _, _ in missing})
+              print(f'::error::{len(missing)} probe(s) were refused, covering {groups} missing '
+                    f'permission(s): {names}. '
+                    'The step summary has a token-creation URL that pre-fills every permission this suite '
+                    'needs.')
+          if entitlement:
+              names = ', '.join(endpoint for endpoint, _, _ in entitlement)
+              print(f'::notice::{len(entitlement)} probe(s) refused while their permission group read fine '
+                    f'elsewhere: {names}. That is a feature or entitlement limit, not the token - the step '
+                    'summary says which feature each one is.')
+          if scope:
+              print("::error::CLOUDFLARE_ZONE_ID was refused (or not found): the zone is outside the token's "
+                    'Zone Resources, or it is not a zone in the account named by CLOUDFLARE_ACCOUNT_ID. '
+                    'Every zone-scoped test will skip until that is fixed.')
+          if not missing and not entitlement and not scope:
+              refused = sum(1 for row in rows if row[2] == '403')
+              if refused:
+                  print(f'::notice::{len(rows)} probes answered, {refused} refused for reasons that are not '
+                        'permissions (R2 not enabled, or a paid feature not switched on for the zone). '
+                        'Everything the suite needs from the token is in scope.')
+              else:
+                  print(f'::notice::{len(rows)} of {len(rows)} probes answered and nothing was refused: every '
+                        'product area this suite reads is in scope.')
+          if empty_zone_list:
+              print("::error::GET /zones returned no zones: add the zone to the token's Zone Resources, or "
+                    'the zone belongs to a different account than CLOUDFLARE_ACCOUNT_ID and an '
+                    'account-owned token will never see it.')
+          if null_zone_result:
+              print('::error::GET /zones/{zone_id} answered 200 with a null result, which reads as "no such '
+                    'zone" to the library and usually means the zone is outside the token\'s Zone Resources.')
+          r2_status, _ = answers['r2']
+          if r2_status == '403':
+              print('::notice::R2 answered 403 and is not counted as missing: either the token lacks Workers '
+                    'R2 Storage - Read, or R2 is not enabled on this account, which is a one-time dashboard '
+                    'step. The R2 tests skip with a reason either way.')
+          PY
+
+      - name: Restore
+        run: dotnet restore tests/CF.Net.IntegrationTests/CF.Net.IntegrationTests.csproj
+
+      - name: Run integration tests
+        if: steps.credentials.outputs.available == 'true'
+        shell: bash
+        env:
+          # Passed through the environment rather than interpolated into the script, so a dispatch
+          # input can never become shell.
+          EXTRA_FILTER: ${{ github.event.inputs.filter || '' }}
+        run: |
+          set -o pipefail
+
+          # Every test that ends early appends one line here and every Cloudflare call another, and
+          # the "Summarise the run" step turns the file into tables. xunit v2 has no dynamic skip, so
+          # without it a credential-less run would look exactly like one that talked to Cloudflare 25
+          # times. It is set from the shell variable here rather than from the runner context in a
+          # job-level env:, which GitHub does not allow - the whole file is rejected if you try.
+          export CLOUDFLARE_IT_REPORT="${CLOUDFLARE_IT_REPORT:-$RUNNER_TEMP/integration-report.tsv}"
+
+          filter="Category=Integration"
+          if [ -n "${EXTRA_FILTER:-}" ]; then
+            filter="Category=Integration&${EXTRA_FILTER}"
+          fi
+          echo "Filter: $filter"
+
+          dotnet test tests/CF.Net.IntegrationTests/CF.Net.IntegrationTests.csproj \
+            --configuration "$CONFIGURATION" \
+            --no-restore \
+            --filter "$filter" \
+            --logger "trx;LogFileName=integration.trx" \
+            --logger "console;verbosity=detailed" \
+            --results-directory TestResults
+
+      - name: Skipped
+        if: steps.credentials.outputs.available != 'true'
+        run: echo "Integration tests skipped - no credentials. The job is green because there is nothing to verify."
+
+      - name: Summarise the run
+        if: always()
+        shell: bash
+        run: |
+          set -o pipefail
+          export CLOUDFLARE_IT_REPORT="${CLOUDFLARE_IT_REPORT:-$RUNNER_TEMP/integration-report.tsv}"
+          PY=$(command -v python3 || command -v python || true)
+          if [ -z "$PY" ]; then echo "no python"; exit 0; fi
+          "$PY" - <<'PY'
+          import glob, os, xml.etree.ElementTree as ET
+
+          ns = {'t': 'http://microsoft.com/schemas/VisualStudio/TeamTest/2010'}
+
+          def cell(text):
+              return (text or '').replace('|', r'\|').replace('\n', ' ')
+
+          counts = {}
+          failures = []
+          total = 0
+          for trx in sorted(glob.glob('TestResults/**/*.trx', recursive=True)):
+              try:
+                  root = ET.parse(trx).getroot()
+              except Exception:
+                  continue
+              for result in root.findall('.//t:UnitTestResult', ns):
+                  total += 1
+                  outcome = result.get('outcome') or 'Unknown'
+                  counts[outcome] = counts.get(outcome, 0) + 1
+                  if outcome == 'Failed':
+                      info = result.find('.//t:ErrorInfo', ns)
+                      message = (info.findtext('t:Message', '', ns) or '').strip() if info is not None else ''
+                      failures.append((result.get('testName') or '?', message))
+
+          skipped = []
+          calls = []
+          report = os.environ.get('CLOUDFLARE_IT_REPORT')
+          if report and os.path.exists(report):
+              with open(report, encoding='utf-8') as handle:
+                  for line in handle.read().splitlines():
+                      fields = line.split(chr(9))
+                      if len(fields) < 3:
+                          continue
+                      if fields[0].upper() == 'SKIPPED':
+                          skipped.append((fields[1], fields[2]))
+                      elif fields[0].upper() == 'INFO':
+                          calls.append((fields[1], fields[2]))
+
+          lines = ['### Cloudflare integration run', '']
+          if total == 0:
+              lines += ['No test results were produced. The suite never ran, which normally means no credentials were configured.', '']
+          else:
+              lines += ['| Outcome | Tests |', '| --- | ---: |']
+              for outcome in sorted(counts):
+                  lines.append(f'| {outcome} | {counts[outcome]} |')
+              lines += [f'| **Total** | **{total}** |', '']
+
+          if skipped:
+              lines += [
+                  f'<details open><summary>{len(skipped)} test(s) ended early without calling Cloudflare</summary>',
+                  '', '| Test | Why |', '| --- | --- |']
+              for test, reason in skipped:
+                  lines.append(f'| `{cell(test)}` | {cell(reason)} |')
+              lines += [
+                  '', '</details>', '',
+                  'These are reported as passing, which is why the job can be green without having verified anything.',
+                  'Add the matching secret - or set the switch named in the reason - to make them run for real.', '']
+
+          if calls:
+              shown = calls[:200]
+              lines += [
+                  f'<details><summary>{len(calls)} Cloudflare call(s) this run made</summary>',
+                  '', '| Call | Result |', '| --- | --- |']
+              for call, result in shown:
+                  lines.append(f'| `{cell(call)}` | {cell(result)} |')
+              if len(calls) > len(shown):
+                  lines.append(f'| ... and {len(calls) - len(shown)} more | |')
+              lines += ['', '</details>', '']
+
+          if failures:
+              lines += [f'<details open><summary>{len(failures)} failing test(s)</summary>', '']
+              for test, message in failures:
+                  lines += [f'**{cell(test)}**', '', '```', (message or '(no message)')[:1200], '```', '']
+              lines.append('</details>')
+
+          # Annotations are the only per-test detail this run publishes that is readable through the
+          # GitHub API without downloading the job log, so they repeat what the summary says. GitHub
+          # keeps at most 10 of each level per step, so the remainder collapses into one extra line
+          # rather than vanishing. A percent sign or a newline in a message would otherwise end the
+          # annotation early, hence the escaping.
+          def annotation(level, message):
+              safe = message.replace('%', '%25').replace(chr(13), '%0D').replace(chr(10), '%0A')
+              print('::' + level + '::' + safe)
+
+          if total:
+              tally = ', '.join(outcome + '=' + str(counts[outcome]) for outcome in sorted(counts))
+              annotation('notice', 'Integration suite: ' + tally + ' (total ' + str(total) + ')')
+          for test, message in failures[:9]:
+              annotation('error', str(test) + ': ' + (message or '(no message)')[:400])
+          if len(failures) > 9:
+              annotation('error', 'and ' + str(len(failures) - 9) + ' more failing test(s), listed in the job summary')
+          for test, reason in skipped[:5]:
+              annotation('notice', 'SKIPPED ' + str(test) + ': ' + str(reason)[:280])
+          if len(skipped) > 5:
+              annotation('notice', 'and ' + str(len(skipped) - 5) + ' more skipped test(s), listed in the job summary')
+
+          # The transcript is the only place that shows which endpoint answered what, so it goes out too -
+          # chunked, because one annotation long enough to hold every call gets truncated anyway. The
+          # caps above and here keep the whole step inside GitHub's 10-notices-per-step limit.
+          for start in range(0, min(len(calls), 64), 16):
+              chunk = calls[start:start + 16]
+              joined = ' | '.join(str(call) + ' -> ' + str(result) for call, result in chunk)
+              annotation('notice', 'Cloudflare calls ' + str(start + 1) + '-' + str(start + len(chunk)) + ': ' + joined[:1600])
+          text = '\n'.join(lines)
+          print(text)
+          summary = os.environ.get('GITHUB_STEP_SUMMARY')
+          if summary:
+              with open(summary, 'a', encoding='utf-8') as handle:
+                  handle.write(text + '\n')
+          PY
+
+      # The observations a run makes - a quirk Cloudflare has, a response shape it does not publish, a
+      # setting this zone does not report - used to travel inside the call transcript, where the ten
+      # annotations per step that GitHub keeps were already spoken for by the outcome tally, the skip
+      # table and the transcript chunks. That is how the batch response this suite exists to record went
+      # missing once. They get their own step, and therefore their own budget.
+      - name: Report what the run learned
+        if: always()
+        shell: bash
+        run: |
+          set -o pipefail
+          export CLOUDFLARE_IT_REPORT="${CLOUDFLARE_IT_REPORT:-$RUNNER_TEMP/integration-report.tsv}"
+          if [ ! -f "$CLOUDFLARE_IT_REPORT" ]; then
+            echo "No run report was written."
+            exit 0
+          fi
+
+          PY=$(command -v python3 || command -v python || true)
+          if [ -z "$PY" ]; then echo "no python"; exit 0; fi
+          "$PY" - <<'PY'
+          import os
+
+          report = os.environ.get('CLOUDFLARE_IT_REPORT')
+          observations = []
+          if report and os.path.exists(report):
+              with open(report, encoding='utf-8') as handle:
+                  for line in handle.read().splitlines():
+                      fields = line.split('\t')
+                      # INFO lines whose subject is 'configuration' are what Warn() writes; every other
+                      # INFO line is one row of the call transcript.
+                      if len(fields) >= 3 and fields[0].upper() == 'INFO' and fields[1] == 'configuration':
+                          observations.append(fields[2])
+
+          if not observations:
+              print('Nothing to report beyond the call transcript.')
+              raise SystemExit(0)
+
+          body = '\n'.join(['### What this run learned', ''] +
+                            ['- ' + observation for observation in observations])
+          summary = os.environ.get('GITHUB_STEP_SUMMARY')
+          if summary:
+              with open(summary, 'a', encoding='utf-8') as handle:
+                  handle.write(body + '\n')
+          print(body)
+
+          for observation in observations[:9]:
+              safe = observation.replace('%', '%25').replace('\r', '%0D').replace('\n', '%0A')
+              print('::notice::Learned: ' + safe[:1600])
+          if len(observations) > 9:
+              print('::notice::Learned: and ' + str(len(observations) - 9) +
+                    ' more observation(s), listed in the job summary')
+          PY
+
+      - name: Show what was recorded
+        if: always() && github.event_name == 'workflow_dispatch' && github.event.inputs.cassette != ''
+        run: |
+          echo "### Cassette" >> "$GITHUB_STEP_SUMMARY"
+          if ls tests/cassettes/*.json >/dev/null 2>&1; then
+            echo '```json' >> "$GITHUB_STEP_SUMMARY"
+            head -c 4000 tests/cassettes/"${CLOUDFLARE_IT_CASSETTE}".json >> "$GITHUB_STEP_SUMMARY" || true
+            echo '```' >> "$GITHUB_STEP_SUMMARY"
+            echo >> "$GITHUB_STEP_SUMMARY"
+            echo "Exchanges recorded: $(grep -c '"pathAndQuery"' tests/cassettes/"${CLOUDFLARE_IT_CASSETTE}".json || echo 0)" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "Nothing was recorded - the tests probably all skipped." >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      # Either download the artifact below and commit it yourself, or let the workflow do it.
+      - name: Commit the cassette back to the branch
+        if: always() && github.event_name == 'workflow_dispatch' && github.event.inputs.cassette != '' && (github.event.inputs.commit_cassette == true || github.event.inputs.commit_cassette == 'true')
+        run: |
+          if ! ls tests/cassettes/*.json >/dev/null 2>&1; then
+            echo "No cassette file to commit."
+            exit 0
+          fi
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git checkout -B "$GITHUB_REF_NAME"
+          git add tests/cassettes
+          if git diff --cached --quiet; then
+            echo "The cassette is unchanged."
+          else
+            git commit -m "Record Cloudflare cassette '${{ github.event.inputs.cassette }}'"
+            git push origin "HEAD:$GITHUB_REF_NAME"
+          fi
+
+      - name: Upload recorded cassette
+        if: always() && github.event_name == 'workflow_dispatch' && github.event.inputs.cassette != ''
+        uses: actions/upload-artifact@v7
+        with:
+          name: cassette-${{ github.event.inputs.cassette }}
+          path: tests/cassettes/**/*.json
+          if-no-files-found: ignore
+          retention-days: 30
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: integration-results
+          path: TestResults/**/*.trx
+          if-no-files-found: ignore
+          retention-days: 30

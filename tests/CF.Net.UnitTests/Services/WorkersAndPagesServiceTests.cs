@@ -1,0 +1,2388 @@
+using System.Net;
+using CFNet.Exceptions;
+using CFNet.Models.Common;
+using CFNet.Models.Pages;
+using CFNet.Models.Workers;
+using CFNet.UnitTests.Testing;
+using Xunit;
+
+namespace CFNet.UnitTests.Services;
+
+public class WorkersScriptsServiceTests
+{
+    [Fact]
+    public async Task ListAsync_scopes_the_call_to_the_account()
+    {
+        using var harness = CloudflareHarness.Create();
+        harness.RespondWithPage(
+            "[{\"id\":\"hello\",\"etag\":\"e-1\",\"handlers\":[\"fetch\"]},{\"id\":\"world\"}]",
+            page: 1, totalPages: 1, count: 2, totalCount: 2);
+
+        var page = await harness.Client.Workers.ListAsync();
+
+        Assert.Equal($"/client/v4/accounts/{CloudflareHarness.TestAccountId}/workers/scripts", harness.LastRequest.Path);
+        Assert.Equal(2, page.Count);
+        // The scripts list reports the name as "id"; Name covers whichever field Cloudflare used.
+        Assert.Equal("hello", page.Items[0].Name);
+        Assert.Equal("hello", page.Items[0].Id);
+    }
+
+    [Fact]
+    public async Task ListAsync_applies_cursor_pagination_parameters()
+    {
+        using var harness = CloudflareHarness.Create();
+        harness.RespondWithResult("[]");
+
+        await harness.Client.Workers.ListAsync(new WorkerScriptListParameters
+        {
+            PerPage = 50,
+            Cursor = "cursor-1",
+            Name = "hello",
+            Order = "script_name",
+            Direction = SortDirection.Descending,
+        });
+
+        Assert.Equal(
+            "cursor=cursor-1&per_page=50&name=hello&order=script_name&direction=desc",
+            harness.LastRequest.Query.TrimStart('?'));
+    }
+
+    [Fact]
+    public async Task ListAllAsync_follows_the_cursor_until_it_repeats()
+    {
+        using var harness = CloudflareHarness.Create();
+        harness.Respond("""
+        {"success":true,"errors":[],"messages":[],
+         "result":[{"id":"a"}],
+         "result_info":{"cursors":{"before":"","after":"c-2"}}}
+        """);
+        harness.Respond("""
+        {"success":true,"errors":[],"messages":[],
+         "result":[{"id":"b"}],
+         "result_info":{"cursors":{"before":"c-1","after":"c-2"}}}
+        """);
+
+        var scripts = await harness.Client.Workers.ListAllAsync().CollectAsync();
+
+        Assert.Equal(new[] { "a", "b" }, scripts.Select(script => script.Name));
+        Assert.Equal(2, harness.RequestCount);
+        Assert.Equal(string.Empty, harness.Requests[0].Query.TrimStart('?'));
+        Assert.Equal("cursor=c-2", harness.Requests[1].Query.TrimStart('?'));
+    }
+
+    [Fact]
+    public async Task ListAllAsync_stops_when_the_cursor_disappears()
+    {
+        using var harness = CloudflareHarness.Create();
+        harness.Respond("""
+        {"success":true,"errors":[],"messages":[],
+         "result":[{"id":"a"}],
+         "result_info":{"cursors":{"before":"c-1","after":""}}}
+        """);
+
+        var scripts = await harness.Client.Workers.ListAllAsync().CollectAsync();
+
+        Assert.Single(scripts);
+        Assert.Equal(1, harness.RequestCount);
+    }
+
+    [Fact]
+    public async Task GetAsync_returns_null_when_the_script_does_not_exist()
+    {
+        using var harness = CloudflareHarness.Create();
+        harness.RespondWithError(HttpStatusCode.NotFound, 10007, "Route not found");
+
+        var script = await harness.Client.Workers.GetAsync("missing");
+
+        Assert.Null(script);
+        Assert.Equal($"/client/v4/accounts/{CloudflareHarness.TestAccountId}/workers/scripts/missing", harness.LastRequest.Path);
+    }
+
+    [Fact]
+    public async Task GetAsync_returns_the_script_source_rather_than_metadata()
+    {
+        using var harness = CloudflareHarness.Create();
+        // Cloudflare documents this endpoint as "fetch raw content for a Worker script; note this is the
+        // original script content, not JSON encoded", so the stub answers the way the API does.
+        harness.Respond("export default { async fetch() { return new Response('cf-net'); } }");
+
+        var content = await harness.Client.Workers.GetAsync("hello");
+
+        Assert.Equal($"/client/v4/accounts/{CloudflareHarness.TestAccountId}/workers/scripts/hello", harness.LastRequest.Path);
+        Assert.Equal("export default { async fetch() { return new Response('cf-net'); } }", content);
+    }
+
+    [Fact]
+    public async Task GetContentAsync_uses_the_versioned_content_sub_resource()
+    {
+        using var harness = CloudflareHarness.Create();
+        harness.Respond("export default {}");
+
+        var content = await harness.Client.Workers.GetContentAsync("hello");
+
+        // content/v2 is the documented GET; the unversioned path is the PUT that replaces content.
+        Assert.Equal(
+            $"/client/v4/accounts/{CloudflareHarness.TestAccountId}/workers/scripts/hello/content/v2",
+            harness.LastRequest.Path);
+        Assert.Equal("export default {}", content);
+    }
+
+    [Fact]
+    public async Task GetSettingsAsync_uses_script_settings_not_settings()
+    {
+        using var harness = CloudflareHarness.Create();
+        harness.RespondWithResult("{\"logpush\":true,\"tags\":[\"t1\"],\"tail_consumers\":[],\"observability\":{\"enabled\":false}}");
+
+        var settings = await harness.Client.Workers.GetSettingsAsync("hello");
+
+        // The endpoint is /script-settings; /settings does not exist and 404s.
+        Assert.EndsWith("/workers/scripts/hello/script-settings", harness.LastRequest.Path, StringComparison.Ordinal);
+        Assert.True(settings!.Logpush);
+        Assert.Equal("t1", Assert.Single(settings.Tags!));
+    }
+
+    [Fact]
+    public async Task UploadAsync_sends_multipart_with_a_metadata_part_and_one_file_part_per_module()
+    {
+        using var harness = CloudflareHarness.Create();
+        harness.RespondWithResult("{\"id\":\"hello\",\"etag\":\"s-1\"}");
+
+        var script = await harness.Client.Workers.UploadAsync(new UploadWorkerScriptRequest(
+            "hello",
+            "export default { async fetch(request, env) { return new Response('hi'); } }",
+            "2025-01-01"));
+
+        Assert.Equal("hello", script.Name);
+        Assert.Equal(HttpMethod.Put, harness.LastRequest.Method);
+        Assert.Equal($"/client/v4/accounts/{CloudflareHarness.TestAccountId}/workers/scripts/hello", harness.LastRequest.Path);
+        Assert.StartsWith("multipart/form-data", harness.LastRequest.ContentType, StringComparison.Ordinal);
+
+        var body = harness.LastRequest.Body!;
+
+        // The metadata part carries the Cloudflare fields and nothing else.
+        Assert.Contains("name=metadata", body, StringComparison.Ordinal);
+        Assert.Contains("\"main_module\":\"worker.mjs\"", body, StringComparison.Ordinal);
+        Assert.Contains("\"compatibility_date\":\"2025-01-01\"", body, StringComparison.Ordinal);
+        Assert.DoesNotContain("\"script_name\"", body, StringComparison.Ordinal);
+        Assert.DoesNotContain("\"modules\"", body, StringComparison.Ordinal);
+
+        // The module travels as a file part named after the module, with the ES module media type.
+        Assert.Contains("name=worker.mjs", body, StringComparison.Ordinal);
+        Assert.Contains("filename", body, StringComparison.Ordinal);
+        Assert.Contains("application/javascript+module", body, StringComparison.Ordinal);
+        Assert.Contains("return new Response('hi')", body, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task UploadAsync_includes_bindings_and_keep_bindings_in_the_metadata()
+    {
+        using var harness = CloudflareHarness.Create();
+        harness.RespondWithResult("{\"id\":\"hello\"}");
+
+        await harness.Client.Workers.UploadAsync(new UploadWorkerScriptRequest("hello", "export default{}", "2025-01-01")
+        {
+            Bindings = new List<WorkerBinding>
+            {
+                WorkerBinding.KvNamespace("MY_KV", "ns-id"),
+                WorkerBinding.D1Database("DB", "db-id"),
+                WorkerBinding.R2Bucket("BUCKET", "bucket-name"),
+                WorkerBinding.PlainText("ENV", "production"),
+                WorkerBinding.SecretText("SECRET", "s3cret"),
+                WorkerBinding.ToService("UPSTREAM", "other-worker"),
+            },
+            KeepBindings = new List<string> { WorkerBindingTypes.KvNamespace },
+            Tags = new List<string> { "team:core" },
+        });
+
+        var body = harness.LastRequest.Body!;
+
+        Assert.Contains("\"bindings\":[", body, StringComparison.Ordinal);
+        Assert.Contains("\"type\":\"kv_namespace\"", body, StringComparison.Ordinal);
+        Assert.Contains("\"namespace_id\":\"ns-id\"", body, StringComparison.Ordinal);
+        Assert.Contains("\"type\":\"d1_database_binding\"", body, StringComparison.Ordinal);
+        Assert.Contains("\"database_id\":\"db-id\"", body, StringComparison.Ordinal);
+        Assert.Contains("\"type\":\"r2_bucket\"", body, StringComparison.Ordinal);
+        Assert.Contains("\"bucket_name\":\"bucket-name\"", body, StringComparison.Ordinal);
+        Assert.Contains("\"type\":\"plain_text\"", body, StringComparison.Ordinal);
+        Assert.Contains("\"type\":\"secret_text\"", body, StringComparison.Ordinal);
+        Assert.Contains("\"type\":\"service\"", body, StringComparison.Ordinal);
+        Assert.Contains("\"service\":\"other-worker\"", body, StringComparison.Ordinal);
+        Assert.Contains("\"keep_bindings\":[\"kv_namespace\"]", body, StringComparison.Ordinal);
+        Assert.Contains("\"tags\":[\"team:core\"]", body, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task UploadAsync_decodes_a_module_supplied_as_base64()
+    {
+        using var harness = CloudflareHarness.Create();
+        harness.RespondWithResult("{\"id\":\"hello\"}");
+
+        await harness.Client.Workers.UploadAsync(new UploadWorkerScriptRequest
+        {
+            ScriptName = "hello",
+            MainModule = "worker.mjs",
+            CompatibilityDate = "2025-01-01",
+            Modules = new List<WorkerModule>
+            {
+                new()
+                {
+                    Name = "worker.mjs",
+                    ContentType = WorkerModuleContentTypes.JavaScriptModule,
+                    ContentBase64 = Convert.ToBase64String("export default{}"u8.ToArray()),
+                },
+            },
+        });
+
+        Assert.Contains("export default{}", harness.LastRequest.Body, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task UploadAsync_supports_multiple_modules_including_python()
+    {
+        using var harness = CloudflareHarness.Create();
+        harness.RespondWithResult("{\"id\":\"py\"}");
+
+        var request = new UploadWorkerScriptRequest
+        {
+            ScriptName = "py",
+            MainModule = "entry.py",
+            CompatibilityDate = "2025-01-01",
+            CompatibilityFlags = new List<string> { "python_workers" },
+            Modules = new List<WorkerModule>
+            {
+                new("entry.py", "from js import Response\n\ndef on_fetch(request):\n    return Response('hi')\n", WorkerModuleContentTypes.Python),
+                new("helper.py", "VALUE = 1\n", WorkerModuleContentTypes.Python),
+            },
+        };
+
+        request.Validate();
+        await harness.Client.Workers.UploadAsync(request);
+
+        var body = harness.LastRequest.Body!;
+
+        Assert.Contains("name=entry.py", body, StringComparison.Ordinal);
+        Assert.Contains("name=helper.py", body, StringComparison.Ordinal);
+        Assert.Contains("text/x-python", body, StringComparison.Ordinal);
+        Assert.Contains("\"python_workers\"", body, StringComparison.Ordinal);
+        Assert.Contains("\"main_module\":\"entry.py\"", body, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task UploadAsync_falls_back_to_the_known_name_when_cloudflare_returns_no_result()
+    {
+        using var harness = CloudflareHarness.Create();
+        harness.RespondWithResult("null");
+
+        var script = await harness.Client.Workers.UploadAsync("hello", "export default{}", "2025-01-01");
+
+        Assert.Equal("hello", script.Name);
+        Assert.Equal("hello", script.Id);
+    }
+
+    [Fact]
+    public async Task UploadAsync_uses_todays_date_when_no_compatibility_date_is_supplied()
+    {
+        using var harness = CloudflareHarness.Create();
+        harness.RespondWithResult("{\"id\":\"hello\"}");
+
+        await harness.Client.Workers.UploadAsync("hello", "export default{}");
+
+        Assert.Contains($"\"compatibility_date\":\"{DateTime.UtcNow:yyyy-MM-dd}\"", harness.LastRequest.Body, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Upload_request_validation_catches_the_mistakes_that_produce_error_10021()
+    {
+        // Main module not present in the bundle.
+        var mismatched = new UploadWorkerScriptRequest
+        {
+            ScriptName = "hello",
+            MainModule = "worker.mjs",
+            Modules = new List<WorkerModule> { new("other.mjs", "export default{}") },
+        };
+        var exception = Assert.Throws<CloudflareConfigurationException>(mismatched.Validate);
+        Assert.Contains(exception.Problems, problem => problem.Contains("10021", StringComparison.Ordinal));
+
+        // Neither module nor service-worker syntax.
+        Assert.Throws<CloudflareConfigurationException>(
+            () => new UploadWorkerScriptRequest { ScriptName = "hello", Modules = new List<WorkerModule> { new("w.mjs", "x") } }.Validate());
+
+        // Both at once.
+        Assert.Throws<CloudflareConfigurationException>(
+            () => new UploadWorkerScriptRequest
+            {
+                ScriptName = "hello",
+                MainModule = "w.mjs",
+                BodyPart = "script",
+                Modules = new List<WorkerModule> { new("w.mjs", "x") },
+            }.Validate());
+
+        // No modules at all.
+        Assert.Throws<CloudflareConfigurationException>(
+            () => new UploadWorkerScriptRequest { ScriptName = "hello", MainModule = "w.mjs" }.Validate());
+
+        // No script name.
+        Assert.Throws<CloudflareConfigurationException>(
+            () => new UploadWorkerScriptRequest { MainModule = "w.mjs", Modules = new List<WorkerModule> { new("w.mjs", "x") } }.Validate());
+
+        // Duplicate module names.
+        Assert.Throws<CloudflareConfigurationException>(
+            () => new UploadWorkerScriptRequest
+            {
+                ScriptName = "hello",
+                MainModule = "w.mjs",
+                Modules = new List<WorkerModule> { new("w.mjs", "x"), new("w.mjs", "y") },
+            }.Validate());
+
+        // A module with no content.
+        Assert.Throws<CloudflareConfigurationException>(
+            () => new UploadWorkerScriptRequest
+            {
+                ScriptName = "hello",
+                MainModule = "w.mjs",
+                Modules = new List<WorkerModule> { new() { Name = "w.mjs", ContentType = WorkerModuleContentTypes.JavaScriptModule } },
+            }.Validate());
+
+        // A module with no content type - the classic "unexpected token" upload failure.
+        Assert.Throws<CloudflareConfigurationException>(
+            () => new UploadWorkerScriptRequest
+            {
+                ScriptName = "hello",
+                MainModule = "w.mjs",
+                Modules = new List<WorkerModule> { new() { Name = "w.mjs", Bytes = "x"u8.ToArray() } },
+            }.Validate());
+
+        // A well formed request validates cleanly.
+        new UploadWorkerScriptRequest("hello", "export default{}", "2025-01-01").Validate();
+    }
+
+    [Fact]
+    public void A_module_exposes_its_text_and_describes_itself()
+    {
+        var module = new WorkerModule("worker.mjs", "export default{}", WorkerModuleContentTypes.JavaScriptModule);
+
+        Assert.Equal("export default{}", module.Text);
+        Assert.Equal("worker.mjs (application/javascript+module)", module.ToString());
+        Assert.Null(new WorkerModule().Text);
+    }
+
+    [Fact]
+    public async Task DeleteAsync_removes_the_script()
+    {
+        using var harness = CloudflareHarness.Create();
+        harness.RespondWithResult("{\"id\":\"hello\"}");
+
+        await harness.Client.Workers.DeleteAsync("hello");
+
+        Assert.Equal(HttpMethod.Delete, harness.LastRequest.Method);
+        Assert.Equal($"/client/v4/accounts/{CloudflareHarness.TestAccountId}/workers/scripts/hello", harness.LastRequest.Path);
+    }
+
+    [Fact]
+    public async Task CreateDeploymentAsync_defaults_the_strategy_and_validates_the_split()
+    {
+        using var harness = CloudflareHarness.Create();
+        harness.RespondWithResult("{\"id\":\"d-1\"}");
+
+        var deployment = await harness.Client.Workers.CreateDeploymentAsync("hello", new CreateWorkerDeploymentRequest
+        {
+            Versions = new List<WorkerDeploymentVersion>
+            {
+                new() { VersionId = "v-1", Percentage = 75 },
+                new() { VersionId = "v-2", Percentage = 25 },
+            },
+        });
+
+        Assert.Equal("d-1", deployment.Id);
+        Assert.Contains("\"strategy\":\"percentage\"", harness.LastRequest.Body, StringComparison.Ordinal);
+        Assert.Contains("\"version_id\":\"v-1\"", harness.LastRequest.Body, StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [InlineData(50, 40)]
+    [InlineData(100, 1)]
+    [InlineData(0, 0)]
+    public async Task CreateDeploymentAsync_rejects_a_split_that_is_not_exactly_one_hundred(double first, double second)
+    {
+        using var harness = CloudflareHarness.Create();
+
+        var exception = await Assert.ThrowsAsync<CloudflareConfigurationException>(
+            () => harness.Client.Workers.CreateDeploymentAsync("hello", new CreateWorkerDeploymentRequest
+            {
+                Versions = new List<WorkerDeploymentVersion>
+                {
+                    new() { VersionId = "v-1", Percentage = (decimal)first },
+                    new() { VersionId = "v-2", Percentage = (decimal)second },
+                },
+            }));
+
+        Assert.Contains("100", exception.Message, StringComparison.Ordinal);
+        Assert.Equal(0, harness.RequestCount);
+    }
+
+    [Fact]
+    public async Task CreateDeploymentAsync_needs_at_least_one_version()
+    {
+        using var harness = CloudflareHarness.Create();
+
+        await Assert.ThrowsAsync<CloudflareConfigurationException>(
+            () => harness.Client.Workers.CreateDeploymentAsync("hello", new CreateWorkerDeploymentRequest()));
+        Assert.Equal(0, harness.RequestCount);
+    }
+
+    [Fact]
+    public async Task Subdomain_endpoints_are_addressed_per_account_and_per_script()
+    {
+        using var harness = CloudflareHarness.Create();
+        harness.RespondWithResult("{\"subdomain\":\"myteam\",\"enabled\":true,\"previews_enabled\":false}");
+
+        var subdomain = await harness.Client.Workers.GetSubdomainAsync();
+
+        Assert.Equal($"/client/v4/accounts/{CloudflareHarness.TestAccountId}/workers/subdomain", harness.LastRequest.Path);
+        Assert.Equal("myteam", subdomain!.Subdomain);
+        Assert.True(subdomain.Enabled);
+        Assert.False(subdomain.PreviewsEnabled);
+
+        harness.RespondWithResult("{\"enabled\":true}");
+        await harness.Client.Workers.UpdateSubdomainAsync(new UpdateWorkerSubdomainRequest { Enabled = true });
+
+        Assert.Equal(HttpMethod.Patch, harness.LastRequest.Method);
+        Assert.Equal("{\"enabled\":true}", harness.LastRequest.Body);
+
+        harness.RespondWithResult("{\"enabled\":true}");
+        await harness.Client.Workers.UpdateScriptSubdomainAsync("hello", new UpdateWorkerScriptSubdomainRequest { Enabled = false });
+
+        Assert.Equal(HttpMethod.Post, harness.LastRequest.Method);
+        Assert.EndsWith("/workers/scripts/hello/subdomain", harness.LastRequest.Path, StringComparison.Ordinal);
+        Assert.Equal("{\"enabled\":false}", harness.LastRequest.Body);
+
+        harness.RespondWithResult("{\"enabled\":true,\"previews_enabled\":true}");
+        var scriptSubdomain = await harness.Client.Workers.GetScriptSubdomainAsync("hello");
+
+        Assert.Equal(HttpMethod.Get, harness.LastRequest.Method);
+        Assert.True(scriptSubdomain!.Enabled);
+    }
+
+    [Fact]
+    public void Worker_binding_factories_produce_the_documented_shapes()
+    {
+        Assert.Equal(WorkerBindingTypes.KvNamespace, WorkerBinding.KvNamespace("K", "ns").Type);
+        Assert.Equal("ns", WorkerBinding.KvNamespace("K", "ns").NamespaceId);
+        Assert.Equal(WorkerBindingTypes.D1DatabaseBinding, WorkerBinding.D1Database("D", "db").Type);
+        Assert.Equal("db", WorkerBinding.D1Database("D", "db").DatabaseId);
+        Assert.Equal(WorkerBindingTypes.R2Bucket, WorkerBinding.R2Bucket("B", "bk").Type);
+        Assert.Equal("bk", WorkerBinding.R2Bucket("B", "bk").BucketName);
+        Assert.Equal(WorkerBindingTypes.PlainText, WorkerBinding.PlainText("T", "v").Type);
+        Assert.Equal(WorkerBindingTypes.SecretText, WorkerBinding.SecretText("S", "v").Type);
+        Assert.Equal(WorkerBindingTypes.Service, WorkerBinding.ToService("U", "svc").Type);
+        Assert.Equal("svc", WorkerBinding.ToService("U", "svc").Service);
+        Assert.Equal(WorkerBindingTypes.DoNamespace, WorkerBinding.DurableObject("O", "Class").Type);
+        Assert.Equal("Class", WorkerBinding.DurableObject("O", "Class").ClassName);
+        Assert.Equal(WorkerBindingTypes.Queue, WorkerBinding.Queue("Q", "queue").Type);
+        Assert.Equal("queue", WorkerBinding.Queue("Q", "queue").QueueName);
+        Assert.Equal(WorkerBindingTypes.AnalyticsEngine, WorkerBinding.AnalyticsEngine("AE", "ds").Type);
+        Assert.Equal("ASSETS", WorkerBinding.Assets().Name);
+        Assert.Equal("AI", WorkerBinding.Ai().Name);
+    }
+
+    [Fact]
+    public void Worker_binding_type_constants_match_the_api_literals()
+    {
+        Assert.Equal("kv_namespace", WorkerBindingTypes.KvNamespace);
+        Assert.Equal("r2_bucket", WorkerBindingTypes.R2Bucket);
+        Assert.Equal("plain_text", WorkerBindingTypes.PlainText);
+        Assert.Equal("secret_text", WorkerBindingTypes.SecretText);
+        Assert.Equal("service", WorkerBindingTypes.Service);
+        Assert.Equal("do_namespace", WorkerBindingTypes.DoNamespace);
+        Assert.Equal("d1_database_binding", WorkerBindingTypes.D1DatabaseBinding);
+        Assert.Equal("queue", WorkerBindingTypes.Queue);
+        Assert.Equal("analytics_engine", WorkerBindingTypes.AnalyticsEngine);
+        Assert.Equal("assets", WorkerBindingTypes.Assets);
+    }
+
+    [Fact]
+    public void Module_content_type_constants_match_the_api_literals()
+    {
+        Assert.Equal("application/javascript+module", WorkerModuleContentTypes.JavaScriptModule);
+        Assert.Equal("text/x-python", WorkerModuleContentTypes.Python);
+        Assert.Equal("application/wasm", WorkerModuleContentTypes.Wasm);
+        Assert.Equal("buffer", WorkerModuleContentTypes.Buffer);
+        Assert.Equal("base64", WorkerModuleContentTypes.Base64);
+        Assert.Equal("text", WorkerModuleContentTypes.Text);
+    }
+
+    [Fact]
+    public async Task Worker_calls_need_an_account_id()
+    {
+        using var harness = CloudflareHarness.Create(options => options.AccountId = null);
+
+        var exception = await Assert.ThrowsAsync<CloudflareConfigurationException>(() => harness.Client.Workers.GetAsync("hello"));
+
+        Assert.Contains("CLOUDFLARE_ACCOUNT_ID", exception.Message, StringComparison.Ordinal);
+        Assert.Equal(0, harness.RequestCount);
+    }
+}
+
+public class PagesProjectsServiceTests
+{
+    [Fact]
+    public async Task ListAsync_scopes_the_call_to_the_account()
+    {
+        using var harness = CloudflareHarness.Create();
+        harness.RespondWithPage("[{\"id\":\"p-1\",\"name\":\"site\"}]", page: 1, totalPages: 1, count: 1, totalCount: 1);
+
+        var page = await harness.Client.Pages.ListAsync(new PagesProjectListParameters { Page = 1, PerPage = 10, Search = "site" });
+
+        Assert.Equal($"/client/v4/accounts/{CloudflareHarness.TestAccountId}/pages/projects", harness.LastRequest.Path);
+        Assert.Equal("page=1&per_page=10&search=site", harness.LastRequest.Query.TrimStart('?'));
+        Assert.Equal("site", Assert.Single(page.Items).Name);
+    }
+
+    [Fact]
+    public async Task ListAsync_pairs_a_page_size_with_a_page_number()
+    {
+        using var harness = CloudflareHarness.Create();
+        harness.RespondWithPage("[]", page: 1, totalPages: 1, count: 0, totalCount: 0);
+
+        await harness.Client.Pages.ListAsync(new PagesProjectListParameters { PerPage = 20 });
+
+        // Pages answers a page size sent on its own with 8000024 "Invalid list options provided. Review
+        // the page or per_page parameter", so the two always travel together.
+        Assert.Equal("page=1&per_page=20", harness.LastRequest.Query.TrimStart('?'));
+    }
+
+    [Fact]
+    public async Task ListAsync_keeps_an_explicit_page_number()
+    {
+        using var harness = CloudflareHarness.Create();
+        harness.RespondWithPage("[]", page: 3, totalPages: 5, count: 0, totalCount: 0);
+
+        await harness.Client.Pages.ListAsync(new PagesProjectListParameters { Page = 3, PerPage = 20 });
+
+        Assert.Equal("page=3&per_page=20", harness.LastRequest.Query.TrimStart('?'));
+    }
+
+    [Fact]
+    public async Task ListAsync_retries_without_paging_when_pages_rejects_the_list_options()
+    {
+        using var harness = CloudflareHarness.Create();
+        harness.RespondWithError(
+            HttpStatusCode.BadRequest,
+            8000024,
+            "Invalid list options provided. Review the `page` or `per_page` parameter.");
+        harness.RespondWithPage("[{\"id\":\"p-1\",\"name\":\"site\"}]", page: 1, totalPages: 1, count: 1, totalCount: 1);
+
+        var page = await harness.Client.Pages.ListAsync(new PagesProjectListParameters { PerPage = 20 });
+
+        Assert.Equal(2, harness.RequestCount);
+        Assert.Equal("?page=1&per_page=20", harness.Requests[0].Query);
+        Assert.Equal(string.Empty, harness.Requests[1].Query);
+        Assert.Equal("site", Assert.Single(page.Items).Name);
+    }
+
+    [Fact]
+    public async Task ListAsync_does_not_retry_a_refusal_that_is_not_about_list_options()
+    {
+        using var harness = CloudflareHarness.Create();
+        harness.RespondWithError(HttpStatusCode.Forbidden, 10000, "Authentication error");
+
+        await Assert.ThrowsAsync<CloudflareApiException>(
+            () => harness.Client.Pages.ListAsync(new PagesProjectListParameters { PerPage = 20 }));
+
+        Assert.Equal(1, harness.RequestCount);
+    }
+
+    [Fact]
+    public async Task ListAsync_sends_no_query_at_all_when_nothing_was_asked_for()
+    {
+        using var harness = CloudflareHarness.Create();
+        harness.RespondWithPage("[]", page: 1, totalPages: 1, count: 0, totalCount: 0);
+
+        await harness.Client.Pages.ListAsync();
+
+        Assert.Equal(string.Empty, harness.LastRequest.Query);
+    }
+
+    [Fact]
+    public async Task GetAsync_returns_null_for_an_unknown_project()
+    {
+        using var harness = CloudflareHarness.Create();
+        harness.RespondWithError(HttpStatusCode.NotFound, 10007, "Route not found");
+
+        var project = await harness.Client.Pages.GetAsync("missing");
+
+        Assert.Null(project);
+        Assert.Equal($"/client/v4/accounts/{CloudflareHarness.TestAccountId}/pages/projects/missing", harness.LastRequest.Path);
+    }
+
+    [Fact]
+    public async Task GetAsync_parses_a_project_with_its_bindings()
+    {
+        using var harness = CloudflareHarness.Create();
+        harness.RespondWithResult("""
+        {
+          "id": "p-1",
+          "name": "site",
+          "account_id": "acct",
+          "subdomain": "site.pages.dev",
+          "domains": [ "site.pages.dev", "www.a.test" ],
+          "production_branch": "main",
+          "source": {
+            "type": "github",
+            "url": "https://github.com/example/site",
+            "config": {
+              "owner": "example",
+              "repo_name": "site",
+              "production_branch": "main",
+              "pr_comments_enabled": true,
+              "deployments_enabled": true,
+              "preview_branch_excludes": [ "main" ],
+              "preview_branch_includes": [ "*" ],
+              "preview_deployment_setting": "all",
+              "production_deployment_setting": "all"
+            }
+          },
+          "build_config": {
+            "build_command": "npm run build",
+            "destination_dir": "dist",
+            "root_dir": "/",
+            "build_caching": true
+          },
+          "deployment_configs": {
+            "preview": {
+              "env_vars": { "NODE_VERSION": { "type": "plain_text", "value": "20" } },
+              "compatibility_date": "2025-01-01",
+              "kv_namespaces": { "CACHE": { "namespace_id": "ns-1" } },
+              "d1_databases": { "DB": { "database_id": "db-1", "migrations_dir": "migrations" } },
+              "r2_buckets": { "MEDIA": { "bucket_name": "media", "jurisdiction": "default" } },
+              "services": { "API": { "service": "api-worker", "environment": "production" } },
+              "durable_object_namespaces": { "SESSIONS": { "class_name": "Session", "script_name": "site" } },
+              "queue_producers": { "JOBS": { "queue_name": "jobs" } },
+              "queue_consumers": { "EVENTS": { "queue_name": "events", "max_batch_size": 10, "max_retries": 3, "dead_letter_queue": "dlq" } }
+            },
+            "production": { "env_vars": { "NODE_VERSION": { "type": "plain_text", "value": "20" } } }
+          },
+          "created_on": "2024-01-01T00:00:00Z",
+          "modified_on": "2024-02-01T00:00:00Z",
+          "latest_deployment": { "id": "d-1", "environment": "preview", "latest_stage": { "name": "deploy", "status": "success" } }
+        }
+        """);
+
+        var project = await harness.Client.Pages.GetAsync("site");
+
+        Assert.NotNull(project);
+        Assert.Equal("p-1", project!.Id);
+        Assert.Equal("site", project.Name);
+        Assert.Equal("site.pages.dev", project.Subdomain);
+        Assert.Equal(2, project.Domains!.Count);
+        Assert.Equal("main", project.ProductionBranch);
+        Assert.Equal("github", project.Source!.Type);
+        Assert.Equal("example", project.Source.Config!.Owner);
+        Assert.Equal("npm run build", project.BuildConfig!.BuildCommand);
+        Assert.Equal("dist", project.BuildConfig.DestinationDir);
+        Assert.True(project.BuildConfig.BuildCaching);
+
+        var preview = project.DeploymentConfigs!.Preview!;
+        Assert.Equal("2025-01-01", preview.CompatibilityDate);
+        Assert.Equal("plain_text", preview.EnvVars!["NODE_VERSION"].Type);
+        Assert.Equal("20", preview.EnvVars["NODE_VERSION"].ValueAsString);
+
+        // Pages bindings are dictionaries keyed by binding name, unlike Workers' array.
+        Assert.Equal("ns-1", preview.KvNamespaces!["CACHE"].NamespaceId);
+        Assert.Equal("db-1", preview.D1Databases!["DB"].DatabaseId);
+        Assert.Equal("migrations", preview.D1Databases["DB"].MigrationsDir);
+        Assert.Equal("media", preview.R2Buckets!["MEDIA"].BucketName);
+        Assert.Equal("api-worker", preview.Services!["API"].Service);
+        Assert.Equal("Session", preview.DurableObjectNamespaces!["SESSIONS"].ClassName);
+        Assert.Equal("jobs", preview.QueueProducers!["JOBS"].QueueName);
+        Assert.Equal(10, preview.QueueConsumers!["EVENTS"].MaxBatchSize);
+        Assert.Equal("dlq", preview.QueueConsumers["EVENTS"].DeadLetterQueue);
+
+        Assert.NotNull(project.LatestDeployment);
+        Assert.Equal(PagesDeploymentStatusValues.Success, project.LatestDeployment!.Status);
+    }
+
+    [Fact]
+    public async Task CreateAsync_validates_the_project_name_locally()
+    {
+        using var harness = CloudflareHarness.Create();
+
+        var exception = await Assert.ThrowsAsync<CloudflareConfigurationException>(
+            () => harness.Client.Pages.CreateAsync(new CreatePagesProjectRequest("Not Valid")));
+
+        Assert.Contains(exception.Problems, problem => problem.Contains("not a valid Pages project name", StringComparison.Ordinal));
+        Assert.Equal(0, harness.RequestCount);
+    }
+
+    [Fact]
+    public async Task CreateAsync_requires_a_production_branch()
+    {
+        using var harness = CloudflareHarness.Create();
+
+        var exception = await Assert.ThrowsAsync<CloudflareConfigurationException>(
+            () => harness.Client.Pages.CreateAsync(new CreatePagesProjectRequest { Name = "site" }));
+
+        Assert.Contains(exception.Problems, problem => problem.Contains("ProductionBranch", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task CreateAsync_sends_the_name_branch_and_build_config()
+    {
+        using var harness = CloudflareHarness.Create();
+        harness.RespondWithResult("{\"id\":\"p-1\",\"name\":\"site\"}");
+
+        var project = await harness.Client.Pages.CreateAsync(new CreatePagesProjectRequest("site", "main")
+        {
+            BuildConfig = new PagesBuildConfig { BuildCommand = "npm run build", DestinationDir = "dist" },
+        });
+
+        Assert.Equal("p-1", project.Id);
+        Assert.Equal(HttpMethod.Post, harness.LastRequest.Method);
+        Assert.Contains("\"name\":\"site\"", harness.LastRequest.Body, StringComparison.Ordinal);
+        Assert.Contains("\"production_branch\":\"main\"", harness.LastRequest.Body, StringComparison.Ordinal);
+        Assert.Contains("\"build_command\":\"npm run build\"", harness.LastRequest.Body, StringComparison.Ordinal);
+        Assert.Contains("\"destination_dir\":\"dist\"", harness.LastRequest.Body, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task CreateAsync_defaults_the_production_branch_to_main()
+    {
+        using var harness = CloudflareHarness.Create();
+        harness.RespondWithResult("{\"id\":\"p-1\"}");
+
+        await harness.Client.Pages.CreateAsync("site");
+
+        Assert.Contains("\"production_branch\":\"main\"", harness.LastRequest.Body, StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [InlineData("site", true)]
+    [InlineData("my-site-2", true)]
+    [InlineData("9lives", true)]
+    [InlineData("Site", false)]
+    [InlineData("-site", false)]
+    [InlineData("my_site", false)]
+    [InlineData("my.site", false)]
+    [InlineData("", false)]
+    [InlineData("   ", false)]
+    public void Project_names_follow_the_documented_rules(string name, bool valid)
+    {
+        Assert.Equal(valid, CreatePagesProjectRequest.IsValidProjectName(name));
+    }
+
+    [Fact]
+    public void A_project_name_longer_than_58_characters_is_rejected()
+    {
+        Assert.True(CreatePagesProjectRequest.IsValidProjectName(new string('a', 58)));
+        Assert.False(CreatePagesProjectRequest.IsValidProjectName(new string('a', 59)));
+    }
+
+    [Fact]
+    public async Task UpdateAsync_patches_the_project()
+    {
+        using var harness = CloudflareHarness.Create();
+        harness.RespondWithResult("{\"id\":\"p-1\",\"name\":\"site\",\"production_branch\":\"develop\"}");
+
+        var project = await harness.Client.Pages.UpdateAsync("site", new UpdatePagesProjectRequest { ProductionBranch = "develop" });
+
+        Assert.Equal("develop", project.ProductionBranch);
+        Assert.Equal(HttpMethod.Patch, harness.LastRequest.Method);
+        Assert.EndsWith("/pages/projects/site", harness.LastRequest.Path, StringComparison.Ordinal);
+        Assert.Equal("{\"production_branch\":\"develop\"}", harness.LastRequest.Body);
+    }
+
+    [Fact]
+    public async Task DeleteAsync_removes_the_project()
+    {
+        using var harness = CloudflareHarness.Create();
+        harness.RespondWithResult("null");
+
+        await harness.Client.Pages.DeleteAsync("site");
+
+        Assert.Equal(HttpMethod.Delete, harness.LastRequest.Method);
+        Assert.EndsWith("/pages/projects/site", harness.LastRequest.Path, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task ListDeploymentsAsync_filters_by_branch()
+    {
+        using var harness = CloudflareHarness.Create();
+        harness.RespondWithPage("[{\"id\":\"d-1\"}]", page: 1, totalPages: 1, count: 1, totalCount: 1);
+
+        await harness.Client.Pages.ListDeploymentsAsync("site", new PagesDeploymentListParameters
+        {
+            Branch = "main",
+            Order = "created_on",
+            Direction = SortDirection.Descending,
+            Page = 2,
+            PerPage = 25,
+        });
+
+        Assert.EndsWith("/pages/projects/site/deployments", harness.LastRequest.Path, StringComparison.Ordinal);
+        Assert.Equal("page=2&per_page=25&branch=main&order=created_on&direction=desc", harness.LastRequest.Query.TrimStart('?'));
+    }
+
+    [Fact]
+    public async Task GetDeploymentAsync_returns_null_when_it_is_gone()
+    {
+        using var harness = CloudflareHarness.Create();
+        harness.RespondWithError(HttpStatusCode.NotFound, 10007, "Route not found");
+
+        var deployment = await harness.Client.Pages.GetDeploymentAsync("site", "d-missing");
+
+        Assert.Null(deployment);
+        Assert.EndsWith("/pages/projects/site/deployments/d-missing", harness.LastRequest.Path, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task CreateDeploymentAsync_posts_a_request_even_without_a_body()
+    {
+        using var harness = CloudflareHarness.Create();
+        harness.RespondWithResult("{\"id\":\"d-1\",\"environment\":\"preview\"}");
+
+        var deployment = await harness.Client.Pages.CreateDeploymentAsync("site");
+
+        Assert.Equal("d-1", deployment.Id);
+        Assert.Equal(HttpMethod.Post, harness.LastRequest.Method);
+        Assert.Equal("{}", harness.LastRequest.Body);
+    }
+
+    [Fact]
+    public async Task CreateDeploymentAsync_sends_the_branch_when_supplied()
+    {
+        using var harness = CloudflareHarness.Create();
+        harness.RespondWithResult("{\"id\":\"d-1\"}");
+
+        await harness.Client.Pages.CreateDeploymentAsync("site", new CreatePagesDeploymentRequest { Branch = "feature" });
+
+        Assert.Contains("\"branch\":\"feature\"", harness.LastRequest.Body, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task DeleteDeploymentAsync_targets_the_deployment()
+    {
+        using var harness = CloudflareHarness.Create();
+        harness.RespondWithResult("null");
+
+        await harness.Client.Pages.DeleteDeploymentAsync("site", "d-1");
+
+        Assert.Equal(HttpMethod.Delete, harness.LastRequest.Method);
+        Assert.EndsWith("/pages/projects/site/deployments/d-1", harness.LastRequest.Path, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Domains_are_managed_under_the_project()
+    {
+        using var harness = CloudflareHarness.Create();
+
+        harness.RespondWithPage("[{\"name\":\"www.a.test\",\"status\":\"active\"}]", page: 1, totalPages: 1, count: 1, totalCount: 1);
+        var domains = await harness.Client.Pages.ListDomainsAsync("site");
+        Assert.EndsWith("/pages/projects/site/domains", harness.LastRequest.Path, StringComparison.Ordinal);
+        Assert.Equal("active", Assert.Single(domains.Items).Status);
+
+        harness.RespondWithResult("{\"name\":\"www.a.test\",\"status\":\"verification_required\"}");
+        var added = await harness.Client.Pages.AddDomainAsync("site", "www.a.test");
+        Assert.Equal(HttpMethod.Post, harness.LastRequest.Method);
+        Assert.Equal("{\"name\":\"www.a.test\"}", harness.LastRequest.Body);
+        Assert.Equal("verification_required", added.Status);
+
+        harness.RespondWithResult("{\"name\":\"www.a.test\",\"status\":\"active\"}");
+        await harness.Client.Pages.UpdateDomainAsync("site", "www.a.test", new UpdatePagesDomainRequest { Verified = true });
+        Assert.Equal(HttpMethod.Patch, harness.LastRequest.Method);
+        Assert.EndsWith("/pages/projects/site/domains/www.a.test", harness.LastRequest.Path, StringComparison.Ordinal);
+        Assert.Equal("{\"verified\":true}", harness.LastRequest.Body);
+
+        harness.RespondWithResult("null");
+        await harness.Client.Pages.DeleteDomainAsync("site", "www.a.test");
+        Assert.Equal(HttpMethod.Delete, harness.LastRequest.Method);
+    }
+
+    [Fact]
+    public async Task AddDomainAsync_rejects_a_blank_domain()
+    {
+        using var harness = CloudflareHarness.Create();
+
+        await Assert.ThrowsAsync<CloudflareConfigurationException>(() => harness.Client.Pages.AddDomainAsync("site", "  "));
+        Assert.Equal(0, harness.RequestCount);
+    }
+
+    [Fact]
+    public void Pages_environment_variable_factories_set_the_right_type()
+    {
+        Assert.Equal("plain_text", PagesEnvVar.PlainText("v").Type);
+        Assert.Equal("v", PagesEnvVar.PlainText("v").Value);
+        Assert.Equal("secret_text", PagesEnvVar.SecretText("v").Type);
+    }
+
+    [Fact]
+    public void A_deployment_status_is_derived_from_its_latest_stage()
+    {
+        Assert.Equal(
+            PagesDeploymentStatusValues.InProgress,
+            new PagesDeployment { LatestStage = new PagesDeploymentStage { Status = "in_progress" } }.Status);
+
+        Assert.Equal(
+            PagesDeploymentStatusValues.Unknown,
+            new PagesDeployment().Status);
+
+        Assert.Equal(
+            "d-1 [preview] success",
+            new PagesDeployment
+            {
+                Id = "d-1",
+                Environment = "preview",
+                LatestStage = new PagesDeploymentStage { Status = PagesDeploymentStatusValues.Success },
+            }.ToString());
+    }
+
+    [Fact]
+    public void Pages_deployment_status_literals_match_the_api()
+    {
+        Assert.Equal("queued", PagesDeploymentStatusValues.Queued);
+        Assert.Equal("in_progress", PagesDeploymentStatusValues.InProgress);
+        Assert.Equal("success", PagesDeploymentStatusValues.Success);
+        Assert.Equal("failure", PagesDeploymentStatusValues.Failure);
+        Assert.Equal("canceled", PagesDeploymentStatusValues.Canceled);
+        Assert.Equal("skipped", PagesDeploymentStatusValues.Skipped);
+        Assert.Equal("pending", PagesDeploymentStatusValues.Pending);
+        Assert.Equal("none", PagesDeploymentStatusValues.None);
+        Assert.Equal("unknown", PagesDeploymentStatusValues.Unknown);
+    }
+}
+
+
+public class WorkerDomainsTests
+{
+    [Fact]
+    public async Task ListDomainsAsync_reads_the_account_level_collection()
+    {
+        using var harness = CloudflareHarness.Create();
+        harness.RespondWithResult("""
+        [
+          {
+            "id": "d-1",
+            "cert_id": "c-1",
+            "enabled": true,
+            "previews_enabled": false,
+            "hostname": "app.example.com",
+            "service": "my-worker",
+            "zone_id": "zone-1",
+            "zone_name": "example.com",
+            "environment": "production"
+          }
+        ]
+        """);
+
+        var domains = await harness.Client.Workers.ListDomainsAsync();
+
+        Assert.Equal($"/client/v4/accounts/{CloudflareHarness.TestAccountId}/workers/domains", harness.LastRequest.Path);
+        // The published schema documents no query parameters for this endpoint, so none are sent.
+        Assert.Equal(string.Empty, harness.LastRequest.Query);
+
+        var domain = Assert.Single(domains);
+        Assert.Equal("d-1", domain.Id);
+        Assert.Equal("app.example.com", domain.Hostname);
+        Assert.Equal("my-worker", domain.Service);
+        Assert.Equal("zone-1", domain.ZoneId);
+        Assert.Equal("example.com", domain.ZoneName);
+        Assert.Equal("c-1", domain.CertId);
+        Assert.True(domain.Enabled);
+        Assert.False(domain.PreviewsEnabled);
+        Assert.Equal("production", domain.Environment);
+    }
+
+    [Fact]
+    public async Task GetDomainAsync_scopes_the_call_to_one_domain_and_tolerates_404()
+    {
+        using var harness = CloudflareHarness.Create();
+        harness.RespondWithResult("""{"id":"d-1","hostname":"app.example.com","service":"my-worker"}""");
+
+        var domain = await harness.Client.Workers.GetDomainAsync("d-1");
+
+        Assert.Equal($"/client/v4/accounts/{CloudflareHarness.TestAccountId}/workers/domains/d-1", harness.LastRequest.Path);
+        Assert.Equal("app.example.com", domain!.Hostname);
+
+        harness.RespondWithError(HttpStatusCode.NotFound, 10007, "Domain not found");
+        Assert.Null(await harness.Client.Workers.GetDomainAsync("d-missing"));
+    }
+
+    [Fact]
+    public async Task AttachDomainAsync_puts_the_hostname_service_and_zone_to_the_collection()
+    {
+        using var harness = CloudflareHarness.Create();
+        harness.RespondWithResult("""{"id":"d-2","hostname":"app.example.com","service":"my-worker","enabled":true}""");
+
+        var domain = await harness.Client.Workers.AttachDomainAsync(
+            AttachWorkerDomainRequest.For("app.example.com", "my-worker", "zone-1"));
+
+        Assert.Equal(HttpMethod.Put, harness.LastRequest.Method);
+        Assert.Equal($"/client/v4/accounts/{CloudflareHarness.TestAccountId}/workers/domains", harness.LastRequest.Path);
+        Assert.Equal("{\"hostname\":\"app.example.com\",\"service\":\"my-worker\",\"zone_id\":\"zone-1\"}", harness.LastRequest.Body);
+        Assert.Equal("d-2", domain.Id);
+    }
+
+    [Fact]
+    public async Task AttachDomainAsync_falls_back_to_the_configured_zone_id()
+    {
+        using var harness = CloudflareHarness.Create();
+        harness.RespondWithResult("""{"id":"d-3","hostname":"app.example.com"}""");
+
+        await harness.Client.Workers.AttachDomainAsync("app.example.com", "my-worker");
+
+        Assert.Contains($"\"zone_id\":\"{CloudflareHarness.TestZoneId}\"", harness.LastRequest.Body, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task AttachDomainAsync_can_send_the_preview_routing_flags()
+    {
+        using var harness = CloudflareHarness.Create();
+        harness.RespondWithResult("""{"id":"d-4","hostname":"app.example.com"}""");
+
+        await harness.Client.Workers.AttachDomainAsync(new AttachWorkerDomainRequest
+        {
+            Hostname = "app.example.com",
+            Service = "my-worker",
+            Enabled = false,
+            PreviewsEnabled = true,
+        });
+
+        Assert.Equal(
+            "{\"hostname\":\"app.example.com\",\"service\":\"my-worker\",\"enabled\":false,\"previews_enabled\":true}",
+            harness.LastRequest.Body);
+    }
+
+    [Theory]
+    [InlineData(null, "my-worker", null, null, "Hostname")]
+    [InlineData("app.example.com", null, null, null, "Service")]
+    [InlineData("app.example.com", "my-worker", false, null, "preview routing")]
+    [InlineData("app.example.com", "my-worker", null, false, "hostname routing")]
+    public void AttachWorkerDomainRequest_rejects_what_cloudflare_would_refuse(
+        string? hostname,
+        string? service,
+        bool? enabled,
+        bool? previewsEnabled,
+        string expectedInMessage)
+    {
+        var request = new AttachWorkerDomainRequest
+        {
+            Hostname = hostname,
+            Service = service,
+            Enabled = enabled,
+            PreviewsEnabled = previewsEnabled,
+        };
+
+        var exception = Assert.Throws<CloudflareConfigurationException>(request.EnsureValid);
+
+        Assert.Contains(expectedInMessage, exception.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task DeleteDomainAsync_detaches_by_id()
+    {
+        using var harness = CloudflareHarness.Create();
+        harness.RespondWithResult("null");
+
+        await harness.Client.Workers.DeleteDomainAsync("d-1");
+
+        Assert.Equal(HttpMethod.Delete, harness.LastRequest.Method);
+        Assert.Equal($"/client/v4/accounts/{CloudflareHarness.TestAccountId}/workers/domains/d-1", harness.LastRequest.Path);
+    }
+
+    [Fact]
+    public async Task Domain_calls_accept_an_explicit_account()
+    {
+        using var harness = CloudflareHarness.Create();
+        harness.RespondWithResult("[]");
+
+        await harness.Client.Workers.ListDomainsAsync("acct-other");
+
+        Assert.Equal("/client/v4/accounts/acct-other/workers/domains", harness.LastRequest.Path);
+    }
+}
+
+public class PagesDeploymentRollbackTests
+{
+    [Fact]
+    public async Task RollbackDeploymentAsync_posts_to_the_deployments_rollback_path()
+    {
+        using var harness = CloudflareHarness.Create();
+        harness.RespondWithResult("""{"id":"d-1","latest_stage":{"status":"success"},"environment":"production"}""");
+
+        var deployment = await harness.Client.Pages.RollbackDeploymentAsync("site", "d-1");
+
+        Assert.Equal(HttpMethod.Post, harness.LastRequest.Method);
+        Assert.Equal(
+            $"/client/v4/accounts/{CloudflareHarness.TestAccountId}/pages/projects/site/deployments/d-1/rollback",
+            harness.LastRequest.Path);
+        Assert.Equal("d-1", deployment.Id);
+    }
+
+    [Fact]
+    public async Task RollbackDeploymentAsync_escapes_both_path_segments()
+    {
+        using var harness = CloudflareHarness.Create();
+        harness.RespondWithResult("""{"id":"d/2"}""");
+
+        await harness.Client.Pages.RollbackDeploymentAsync("a/b", "d/2");
+
+        Assert.Contains("/pages/projects/a%2Fb/deployments/d%2F2/rollback", harness.LastRequest.Uri!.OriginalString, StringComparison.Ordinal);
+    }
+}
+
+
+public class WorkerDomainFilterTests
+{
+    private static string DomainsOfTwoWorkers() =>
+        """
+        [
+          {"id":"d-1","hostname":"app.example.com","service":"my-worker","enabled":true,"zone_name":"example.com"},
+          {"id":"d-2","hostname":"beta.example.com","service":"other-worker","enabled":true,"zone_name":"example.com"},
+          {"id":"d-3","hostname":"api.example.com","service":"My-Worker","enabled":false,"zone_name":"example.com"}
+        ]
+        """;
+
+    [Fact]
+    public async Task ListDomainsForWorkerAsync_keeps_only_the_attachments_of_that_worker()
+    {
+        using var harness = CloudflareHarness.Create();
+        harness.RespondWithResult(DomainsOfTwoWorkers());
+
+        var domains = await harness.Client.Workers.ListDomainsForWorkerAsync("my-worker");
+
+        // The v4 API only exposes the account-level collection, so the filter runs on one list call.
+        Assert.Equal(1, harness.RequestCount);
+        Assert.Equal(
+            $"/client/v4/accounts/{CloudflareHarness.TestAccountId}/workers/domains",
+            harness.LastRequest.Path);
+
+        Assert.Equal(2, domains.Count);
+        Assert.Equal(new[] { "d-1", "d-3" }, domains.Select(domain => domain.Id).ToArray());
+        Assert.Equal("api.example.com", domains[1].Hostname);
+    }
+
+    [Fact]
+    public async Task ListDomainsForWorkerAsync_returns_nothing_for_a_worker_without_domains()
+    {
+        using var harness = CloudflareHarness.Create();
+        harness.RespondWithResult(DomainsOfTwoWorkers());
+
+        var domains = await harness.Client.Workers.ListDomainsForWorkerAsync("missing-worker");
+
+        Assert.Empty(domains);
+        Assert.Equal(1, harness.RequestCount);
+    }
+
+    [Fact]
+    public async Task ListDomainsForWorkerAsync_passes_the_account_id_through_to_the_list_call()
+    {
+        using var harness = CloudflareHarness.Create();
+        harness.RespondWithResult(DomainsOfTwoWorkers());
+
+        var domains = await harness.Client.Workers.ListDomainsForWorkerAsync("other-worker", "acct-9999");
+
+        Assert.Contains("/accounts/acct-9999/workers/domains", harness.LastRequest.Path, StringComparison.Ordinal);
+        Assert.Equal("d-2", Assert.Single(domains).Id);
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData("   ")]
+    public async Task ListDomainsForWorkerAsync_needs_a_worker_name(string? workerName)
+    {
+        using var harness = CloudflareHarness.Create();
+
+        await Assert.ThrowsAsync<CloudflareConfigurationException>(
+            () => harness.Client.Workers.ListDomainsForWorkerAsync(workerName!));
+
+        Assert.Equal(0, harness.RequestCount);
+    }
+}
+
+public class PagesDirectUploadAndLogsTests
+{
+    private static string ProjectPath(string suffix) =>
+        $"/client/v4/accounts/{CloudflareHarness.TestAccountId}/pages/projects/site{suffix}";
+
+    [Fact]
+    public async Task PurgeBuildCacheAsync_posts_with_no_body()
+    {
+        using var harness = CloudflareHarness.Create();
+        harness.RespondWithResult("null");
+
+        await harness.Client.Pages.PurgeBuildCacheAsync("site");
+
+        Assert.Equal(HttpMethod.Post, harness.LastRequest.Method);
+        Assert.Equal(ProjectPath("/purge_build_cache"), harness.LastRequest.Path);
+        Assert.True(string.IsNullOrEmpty(harness.LastRequest.Body));
+    }
+
+    [Fact]
+    public async Task PurgeBuildCacheAsync_surfaces_a_rejection()
+    {
+        using var harness = CloudflareHarness.Create();
+        harness.RespondWithError(HttpStatusCode.Forbidden, 10000, "Not allowed to edit this resource");
+
+        var exception = await Assert.ThrowsAsync<CloudflareApiException>(
+            () => harness.Client.Pages.PurgeBuildCacheAsync("site"));
+
+        Assert.Equal(10000, exception.ErrorCode);
+    }
+
+    [Fact]
+    public async Task GetUploadTokenAsync_reads_the_jwt_without_ever_printing_it()
+    {
+        using var harness = CloudflareHarness.Create();
+        const string jwt = "eyJhbGciOiJIUzI1NiJ9.pages-upload-token";
+        harness.RespondWithResult($"{{\"jwt\":\"{jwt}\"}}");
+
+        var token = await harness.Client.Pages.GetUploadTokenAsync("site");
+
+        Assert.Equal(HttpMethod.Get, harness.LastRequest.Method);
+        Assert.Equal(ProjectPath("/upload-token"), harness.LastRequest.Path);
+        Assert.Equal(jwt, token.Jwt);
+        Assert.True(token.HasToken);
+        // A credential must not turn up in a log line, a watch window or an exception message.
+        Assert.Equal($"jwt, {jwt.Length} characters", token.ToString());
+        Assert.DoesNotContain(jwt, token.ToString(), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task GetUploadTokenAsync_without_a_result_payload_raises()
+    {
+        using var harness = CloudflareHarness.Create();
+        harness.RespondWithResult("null");
+
+        var exception = await Assert.ThrowsAsync<CloudflareApiException>(
+            () => harness.Client.Pages.GetUploadTokenAsync("site"));
+
+        Assert.Contains("without a result payload", exception.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task RetryDeploymentAsync_posts_to_the_retry_path_and_returns_the_deployment()
+    {
+        using var harness = CloudflareHarness.Create();
+        harness.RespondWithResult("""{"id":"d-1","latest_stage":{"name":"build","status":"active"}}""");
+
+        var deployment = await harness.Client.Pages.RetryDeploymentAsync("site", "d-1");
+
+        Assert.Equal(HttpMethod.Post, harness.LastRequest.Method);
+        Assert.Equal(ProjectPath("/deployments/d-1/retry"), harness.LastRequest.Path);
+        Assert.True(string.IsNullOrEmpty(harness.LastRequest.Body));
+        Assert.Equal("d-1", deployment.Id);
+        Assert.Equal("build", deployment.LatestStage!.Name);
+        Assert.Equal(PagesDeploymentStatusValues.Active, deployment.LatestStage.Status);
+    }
+
+    [Fact]
+    public async Task RetryDeploymentAsync_escapes_the_path_segments_and_requires_an_id()
+    {
+        using var harness = CloudflareHarness.Create();
+        harness.RespondWithResult("""{"id":"d/2"}""");
+
+        await harness.Client.Pages.RetryDeploymentAsync("a/b", "d/2");
+        Assert.Contains("/pages/projects/a%2Fb/deployments/d%2F2/retry", harness.LastRequest.Uri!.OriginalString, StringComparison.Ordinal);
+
+        await Assert.ThrowsAsync<CloudflareConfigurationException>(
+            () => harness.Client.Pages.RetryDeploymentAsync("site", "  "));
+    }
+
+    [Fact]
+    public async Task GetDeploymentLogsAsync_reads_the_lines_the_container_flag_and_the_total()
+    {
+        using var harness = CloudflareHarness.Create();
+        harness.RespondWithResult(
+            """
+            {
+              "data": [
+                { "line": "Installing dependencies", "ts": "2026-05-05T13:00:15Z" },
+                { "line": "Build failed: missing script", "ts": "2026-05-05T13:00:41Z" }
+              ],
+              "includes_container_logs": true,
+              "total": 42
+            }
+            """);
+
+        var logs = await harness.Client.Pages.GetDeploymentLogsAsync("site", "d-1");
+
+        Assert.Equal(HttpMethod.Get, harness.LastRequest.Method);
+        Assert.Equal(ProjectPath("/deployments/d-1/history/logs"), harness.LastRequest.Path);
+        Assert.Equal(2, logs.Data!.Count);
+        Assert.Equal("Installing dependencies", logs.Data[0].Line);
+        // Cloudflare types "ts" as a string, so it stays one rather than being parsed on a guess.
+        Assert.Equal("2026-05-05T13:00:15Z", logs.Data[0].Timestamp);
+        Assert.True(logs.IncludesContainerLogs);
+        Assert.Equal(42, logs.Total);
+        Assert.Equal("2 of 42 log lines", logs.ToString());
+
+        // A truncated log is normal: fewer lines returned than Cloudflare holds in total.
+        Assert.Contains("Installing dependencies", logs.Text, StringComparison.Ordinal);
+        Assert.Contains("Build failed: missing script", logs.Text, StringComparison.Ordinal);
+        Assert.EndsWith("\n", logs.Text, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task GetDeploymentLogsAsync_reads_a_deployment_with_no_logs()
+    {
+        using var harness = CloudflareHarness.Create();
+        harness.RespondWithResult("""{"data":[],"includes_container_logs":false,"total":0}""");
+
+        var logs = await harness.Client.Pages.GetDeploymentLogsAsync("site", "d-1");
+
+        Assert.Empty(logs.Data!);
+        Assert.Equal(string.Empty, logs.Text);
+        Assert.False(logs.IncludesContainerLogs);
+        Assert.Equal("0 of 0 log lines", logs.ToString());
+    }
+
+    [Fact]
+    public async Task Deployment_logs_keep_fields_this_release_does_not_name()
+    {
+        using var harness = CloudflareHarness.Create();
+        harness.RespondWithResult(
+            """
+            {
+              "data": [{ "line": "hi", "ts": "now", "level": "info" }],
+              "total": 1,
+              "truncated": true
+            }
+            """);
+
+        var logs = await harness.Client.Pages.GetDeploymentLogsAsync("site", "d-1");
+
+        Assert.True(logs.AdditionalData!["truncated"].GetBoolean());
+        Assert.Equal("info", logs.Data![0].AdditionalData!["level"].GetString());
+        Assert.Equal("hi", logs.Data[0].ToString());
+    }
+
+    [Fact]
+    public async Task GetDeploymentLogsAsync_without_a_result_payload_raises()
+    {
+        using var harness = CloudflareHarness.Create();
+        harness.RespondWithResult("null");
+
+        await Assert.ThrowsAsync<CloudflareApiException>(
+            () => harness.Client.Pages.GetDeploymentLogsAsync("site", "d-1"));
+    }
+
+    [Fact]
+    public async Task GetDomainAsync_reads_one_domain_and_returns_null_when_it_is_not_attached()
+    {
+        using var harness = CloudflareHarness.Create();
+        harness
+            .RespondWithResult("""{"name":"shop.example.com","project_name":"site","status":"active"}""")
+            .Respond("{\"success\":false,\"errors\":[],\"messages\":[],\"result\":null}", HttpStatusCode.NotFound);
+
+        var domain = await harness.Client.Pages.GetDomainAsync("site", "shop.example.com");
+        Assert.Equal(ProjectPath("/domains/shop.example.com"), harness.LastRequest.Path);
+        Assert.Equal("shop.example.com", domain!.Name);
+        Assert.Equal("active", domain.Status);
+
+        Assert.Null(await harness.Client.Pages.GetDomainAsync("site", "missing.example.com"));
+    }
+
+    [Fact]
+    public async Task ListDeploymentsAsync_sends_the_documented_env_filter()
+    {
+        using var harness = CloudflareHarness.Create();
+        harness.RespondWithPage("[]", page: 1, totalPages: 1, count: 0, totalCount: 0);
+
+        await harness.Client.Pages.ListDeploymentsAsync(
+            "site",
+            new PagesDeploymentListParameters { Env = PagesDeploymentEnvironments.Preview, Page = 2, PerPage = 20 });
+
+        Assert.Equal(ProjectPath("/deployments"), harness.LastRequest.Path);
+        Assert.Equal("page=2&per_page=20&env=preview", harness.LastRequest.Query.TrimStart('?'));
+    }
+
+    [Fact]
+    public async Task ListDeploymentsAsync_sends_no_query_at_all_when_nothing_is_set()
+    {
+        using var harness = CloudflareHarness.Create();
+        harness.RespondWithPage("[]", page: 1, totalPages: 1, count: 0, totalCount: 0);
+
+        await harness.Client.Pages.ListDeploymentsAsync("site");
+
+        Assert.Equal(string.Empty, harness.LastRequest.Query);
+        Assert.Equal(new[] { "production", "preview" }, PagesDeploymentEnvironments.All);
+    }
+}
+
+/// <summary>
+/// <c>GET /accounts/{account_id}/workers/scripts/{script_name}/versions</c>, which pages with
+/// <c>page</c>/<c>per_page</c> but answers with <c>{"items":[…]}</c> and no <c>result_info</c> - so it is
+/// not the shape the rest of the API's lists use, and these pin that difference.
+/// </summary>
+public class WorkerVersionTests
+{
+    private const string VersionList = """
+    {"items":[
+      {"id":"00000000-0000-0000-0000-000000000002","number":1,
+       "metadata":{"author_email":"deploy@example.com","author_id":"user-1","created_on":"2026-01-02T03:04:05Z"}},
+      {"id":"00000000-0000-0000-0000-000000000001","number":0,
+       "metadata":{"author_email":"deploy@example.com","author_id":"user-1","created_on":"2026-01-01T00:00:00Z"}}
+    ]}
+    """;
+
+    [Fact]
+    public async Task ListVersionsAsync_uses_the_versions_sub_resource_and_reads_the_items_object()
+    {
+        using var harness = CloudflareHarness.Create();
+        harness.RespondWithResult(VersionList);
+
+        var result = await harness.Client.Workers.ListVersionsAsync("hello");
+
+        Assert.Equal(
+            $"/client/v4/accounts/{CloudflareHarness.TestAccountId}/workers/scripts/hello/versions",
+            harness.LastRequest.Path);
+        Assert.Equal(string.Empty, harness.LastRequest.Query);
+
+        Assert.NotNull(result);
+        Assert.Equal(2, result!.Count);
+        // Cloudflare documents the first entry as the latest version.
+        Assert.Equal(1, result.Latest?.Number);
+        Assert.Equal("00000000-0000-0000-0000-000000000002", result.Latest?.Id);
+        Assert.Equal("deploy@example.com", result.Latest?.Metadata?.AuthorEmail);
+        Assert.Equal("user-1", result.Latest?.Metadata?.AuthorId);
+        Assert.Equal(2026, result.Latest?.Metadata?.CreatedOn?.Year);
+        Assert.Equal("version 0 (00000000-0000-0000-0000-000000000001)", result.Items![1].ToString());
+    }
+
+    [Fact]
+    public async Task ListVersionsAsync_passes_paging_and_the_deployable_filter_only_when_given()
+    {
+        using var harness = CloudflareHarness.Create();
+        harness.RespondWithResult(VersionList);
+        harness.RespondWithResult(VersionList);
+
+        await harness.Client.Workers.ListVersionsAsync("hello");
+        await harness.Client.Workers.ListVersionsAsync(
+            "hello", new WorkerVersionListParameters { Page = 2, PerPage = 10, Deployable = true });
+
+        Assert.Equal(string.Empty, harness.Requests[0].Query);
+        Assert.Equal("?page=2&per_page=10&deployable=true", harness.Requests[1].Query);
+    }
+
+    [Fact]
+    public async Task A_script_with_no_versions_answers_an_empty_list_rather_than_an_error()
+    {
+        using var harness = CloudflareHarness.Create();
+        harness.RespondWithResult("""{"items":[]}""");
+
+        var result = await harness.Client.Workers.ListVersionsAsync("hello");
+
+        Assert.NotNull(result);
+        Assert.Equal(0, result!.Count);
+        Assert.Null(result.Latest);
+        Assert.Equal("0 version(s)", result.ToString());
+    }
+
+    [Fact]
+    public async Task Fields_the_reference_does_not_document_are_captured_rather_than_dropped()
+    {
+        using var harness = CloudflareHarness.Create();
+        // The published schema names id, number and three metadata fields, and says metadata has three
+        // more it does not name. Everything unnamed has to survive, because that is how it gets modelled.
+        harness.RespondWithResult("""
+        {"items":[{"id":"v-1","number":0,
+          "metadata":{"author_email":"a@example.com","created_on":"2026-01-01T00:00:00Z",
+                      "source_version_id":"v-0","something_new":42},
+          "resources":{"limits":{"cpu_ms":30000},"bindings":[],"observability":{"enabled":false}},
+          "secrets":["TOKEN"],
+          "annotations":{"workers_message":"first"}}],
+         "total_count":1}
+        """);
+
+        var result = await harness.Client.Workers.ListVersionsAsync("hello");
+
+        var version = Assert.Single(result!.Items!);
+        Assert.NotNull(version.AdditionalData);
+        Assert.True(version.AdditionalData!.ContainsKey("resources"));
+        Assert.True(version.AdditionalData.ContainsKey("secrets"));
+        // annotations stopped being unnamed when a live run reported it, so it is a property now and must
+        // not be captured twice: this is what the promotion of an observed field is supposed to look like.
+        Assert.False(version.AdditionalData.ContainsKey("annotations"));
+        Assert.NotNull(version.Annotations);
+        // A key that is not one of the two the deployment schema names is still captured, not dropped.
+        Assert.True(version.Annotations!.AdditionalData!.ContainsKey("workers_message"));
+        Assert.Equal(30000, version.AdditionalData["resources"].GetProperty("limits").GetProperty("cpu_ms").GetInt32());
+        Assert.NotNull(version.Metadata?.AdditionalData);
+        Assert.True(version.Metadata!.AdditionalData!.ContainsKey("source_version_id"));
+        Assert.True(version.Metadata.AdditionalData.ContainsKey("something_new"));
+        // A sibling of items on the result itself is captured too, rather than throwing the answer away.
+        Assert.True(result.AdditionalData!.ContainsKey("total_count"));
+    }
+
+    [Fact]
+    public async Task A_version_number_sent_as_a_string_still_parses()
+    {
+        using var harness = CloudflareHarness.Create();
+        harness.RespondWithResult("""{"items":[{"id":"v-1","number":"3"}]}""");
+
+        var result = await harness.Client.Workers.ListVersionsAsync("hello");
+
+        Assert.Equal(3, Assert.Single(result!.Items!).Number);
+    }
+
+    [Fact]
+    public async Task A_version_uploaded_through_the_api_reads_back_with_its_source_and_annotations()
+    {
+        using var harness = CloudflareHarness.Create();
+        // Taken from a live run: a version uploaded through the API by an account-owned token, which came
+        // back with an empty author_email and with the two metadata fields the reference does not name.
+        harness.RespondWithResult("""
+        {"items":[{"id":"4bb9c50a-07a8-4dc4-a2eb-c5f6b98b0c8b","number":1,
+          "metadata":{"author_email":"","author_id":"user-1",
+                      "created_on":"2026-10-15T06:45:49.7773300+00:00","source":"api","has_preview":true},
+          "annotations":{"workers/triggered_by":"upload"}}]}
+        """);
+
+        var result = await harness.Client.Workers.ListVersionsAsync("hello");
+
+        var version = Assert.Single(result!.Items!);
+        Assert.Equal("4bb9c50a-07a8-4dc4-a2eb-c5f6b98b0c8b", version.Id);
+        Assert.Equal(1, version.Number);
+        Assert.Equal("api", version.Metadata?.Source);
+        Assert.True(version.Metadata?.HasPreview);
+        Assert.Equal("upload", version.Annotations?.TriggeredBy);
+        Assert.Null(version.Annotations?.Message);
+
+        // An account-owned token uploads with no author email, so the empty string is the real answer and
+        // describing the author falls back to the id rather than printing nothing at all.
+        Assert.Equal(string.Empty, version.Metadata?.AuthorEmail);
+        Assert.Equal("user-1", version.Metadata?.ToString());
+
+        // Nothing in that answer is left unnamed, which is the point of modelling it from the run.
+        Assert.Null(version.AdditionalData);
+        Assert.Null(version.Metadata?.AdditionalData);
+    }
+}
+
+/// <summary>
+/// <c>GET /accounts/{account_id}/workers/scripts/{script_name}/deployments</c>, which nests its array under
+/// <c>deployments</c> and, unlike the versions endpoint, does return <c>result_info</c>.
+/// </summary>
+public class WorkerDeploymentTests
+{
+    private const string DeploymentList = """
+    {"deployments":[
+      {"id":"2b1b9b6a-2f2f-4d0e-8d5e-4d4f4f4f4f4f","created_on":"2026-10-15T06:45:50Z",
+       "source":"upload","strategy":"percentage",
+       "versions":[{"version_id":"4bb9c50a-07a8-4dc4-a2eb-c5f6b98b0c8b","percentage":100}],
+       "annotations":{"workers/message":"first release","workers/triggered_by":"upload"},
+       "author_email":"deploy@example.com"}
+    ]}
+    """;
+
+    [Fact]
+    public async Task ListDeploymentsAsync_reads_the_deployments_object_and_the_paging_info()
+    {
+        using var harness = CloudflareHarness.Create();
+        harness.RespondWithPage(DeploymentList, 1, 2, 1, 3);
+
+        var result = await harness.Client.Workers.ListDeploymentsAsync("hello");
+
+        Assert.Equal(
+            $"/client/v4/accounts/{CloudflareHarness.TestAccountId}/workers/scripts/hello/deployments",
+            harness.LastRequest.Path);
+
+        Assert.NotNull(result);
+        Assert.Equal(1, result!.Count);
+        Assert.Equal(3, result.TotalCount);
+        Assert.True(result.HasMore);
+        Assert.Equal(2, result.NextPage);
+
+        // Cloudflare documents the first entry as the deployment currently serving traffic.
+        var latest = result.Latest;
+        Assert.NotNull(latest);
+        Assert.Equal("2b1b9b6a-2f2f-4d0e-8d5e-4d4f4f4f4f4f", latest!.Id);
+        Assert.Equal("upload", latest.Source);
+        Assert.Equal(WorkerDeploymentStrategies.Percentage, latest.Strategy);
+        Assert.Equal(2026, latest.CreatedOn?.Year);
+        Assert.Equal("deploy@example.com", latest.AuthorEmail);
+        Assert.Equal("first release", latest.Annotations?.Message);
+        Assert.Equal("upload", latest.Annotations?.TriggeredBy);
+        Assert.False(latest.IsGradual);
+    }
+
+    [Fact]
+    public async Task A_gradual_deployment_splits_traffic_between_two_versions()
+    {
+        using var harness = CloudflareHarness.Create();
+        harness.RespondWithResult("""
+        {"deployments":[{"id":"d-1","strategy":"percentage",
+          "versions":[{"version_id":"v-new","percentage":10},{"version_id":"v-old","percentage":90}]}]}
+        """);
+
+        var result = await harness.Client.Workers.ListDeploymentsAsync("hello");
+
+        var deployment = Assert.Single(result!.Deployments!);
+        Assert.True(deployment.IsGradual);
+        Assert.Equal(2, deployment.Versions!.Count);
+        Assert.Equal("v-new", deployment.Versions[0].VersionId);
+        Assert.Equal(10m, deployment.Versions[0].Percentage);
+        Assert.Equal(90m, deployment.Versions[1].Percentage);
+        Assert.Equal("deployment d-1: v-new at 10%, v-old at 90%", deployment.ToString());
+    }
+
+    [Fact]
+    public async Task ListDeploymentsAsync_passes_paging_and_the_time_range_only_when_given()
+    {
+        using var harness = CloudflareHarness.Create();
+        harness.RespondWithResult("""{"deployments":[]}""");
+        harness.RespondWithResult("""{"deployments":[]}""");
+
+        await harness.Client.Workers.ListDeploymentsAsync("hello");
+        await harness.Client.Workers.ListDeploymentsAsync(
+            "hello",
+            new WorkerDeploymentListParameters
+            {
+                Page = 2,
+                PerPage = 50,
+                Since = new DateTimeOffset(2026, 10, 1, 0, 0, 0, TimeSpan.Zero),
+                Until = new DateTimeOffset(2026, 10, 15, 0, 0, 0, TimeSpan.Zero),
+            });
+
+        Assert.Equal(string.Empty, harness.Requests[0].Query);
+        Assert.StartsWith("?page=2&per_page=50", harness.Requests[1].Query, StringComparison.Ordinal);
+        // The exact date format is the query builder's business; what matters is that both ends are sent.
+        Assert.Contains("since=", harness.Requests[1].Query, StringComparison.Ordinal);
+        Assert.Contains("until=", harness.Requests[1].Query, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task A_script_with_no_deployments_answers_an_empty_list()
+    {
+        using var harness = CloudflareHarness.Create();
+        harness.RespondWithResult("""{"deployments":[]}""");
+
+        var result = await harness.Client.Workers.ListDeploymentsAsync("hello");
+
+        Assert.NotNull(result);
+        Assert.Equal(0, result!.Count);
+        Assert.Null(result.Latest);
+        Assert.False(result.HasMore);
+        Assert.Null(result.NextPage);
+        Assert.Equal("0 deployment(s)", result.ToString());
+    }
+
+    [Fact]
+    public async Task Parameters_outside_the_documented_bounds_are_rejected_before_sending()
+    {
+        using var harness = CloudflareHarness.Create();
+
+        var exception = await Assert.ThrowsAsync<CloudflareConfigurationException>(() =>
+            harness.Client.Workers.ListDeploymentsAsync(
+                "hello",
+                new WorkerDeploymentListParameters
+                {
+                    Page = 0,
+                    PerPage = 101,
+                    Since = new DateTimeOffset(2026, 10, 15, 0, 0, 0, TimeSpan.Zero),
+                    Until = new DateTimeOffset(2026, 10, 1, 0, 0, 0, TimeSpan.Zero),
+                }));
+
+        // page from 1, per_page 1..100, and an end that is not before its start - all three documented.
+        Assert.Contains("Page must be at least 1", exception.Message, StringComparison.Ordinal);
+        Assert.Contains("PerPage must be between 1 and 100", exception.Message, StringComparison.Ordinal);
+        Assert.Contains("is before Since", exception.Message, StringComparison.Ordinal);
+        Assert.Equal(0, harness.RequestCount);
+    }
+
+    [Fact]
+    public void Empty_annotations_say_so_rather_than_printing_nothing()
+    {
+        Assert.True(new WorkerAnnotations().IsEmpty);
+        Assert.Equal(string.Empty, new WorkerAnnotations().ToString());
+        Assert.Equal("upload", new WorkerAnnotations { TriggeredBy = "upload" }.ToString());
+        Assert.Equal("upload: shipped", new WorkerAnnotations
+        {
+            TriggeredBy = "upload",
+            Message = "shipped",
+        }.ToString());
+        Assert.False(new WorkerAnnotations { Message = "shipped" }.IsEmpty);
+    }
+}
+
+/// <summary>
+/// <c>GET /accounts/{account_id}/workers/scripts-search</c> - its own endpoint rather than a filter on the
+/// scripts list, page numbered, and answering with one compact row per script.
+/// </summary>
+public class WorkerScriptSearchTests
+{
+    /// <summary>The single row of the reference's own 200 example, so nothing here is invented.</summary>
+    private const string DocumentedRow = """
+        {"id":"023e105f4ecef8ad9ca31a8372d0c353","created_on":"2017-01-01T00:00:00Z","modified_on":"2017-01-01T00:00:00Z","script_name":"this-is_my_script-01","environment_is_default":true,"environment_name":"production","service_name":"my-service"}
+        """;
+
+    [Fact]
+    public async Task SearchAsync_uses_the_scripts_search_resource_and_reads_the_documented_row()
+    {
+        using var harness = CloudflareHarness.Create();
+        harness.RespondWithPage($"[{DocumentedRow}]", page: 1, totalPages: 100, count: 1, totalCount: 2000);
+
+        var search = await harness.Client.Workers.SearchAsync();
+
+        Assert.EndsWith("/workers/scripts-search", harness.LastRequest.Path, StringComparison.Ordinal);
+        var row = Assert.Single(search.Items);
+        Assert.Equal("023e105f4ecef8ad9ca31a8372d0c353", row.Id);
+        Assert.Equal("this-is_my_script-01", row.ScriptName);
+        Assert.Equal(new DateTimeOffset(2017, 1, 1, 0, 0, 0, TimeSpan.Zero), row.CreatedOn);
+        Assert.Equal(new DateTimeOffset(2017, 1, 1, 0, 0, 0, TimeSpan.Zero), row.ModifiedOn);
+        Assert.True(row.EnvironmentIsDefault);
+        Assert.Equal("production", row.EnvironmentName);
+        Assert.Equal("my-service", row.ServiceName);
+    }
+
+    [Fact]
+    public async Task SearchAsync_reads_the_paging_info_that_sits_beside_the_result()
+    {
+        using var harness = CloudflareHarness.Create();
+        harness.RespondWithPage($"[{DocumentedRow}]", page: 1, totalPages: 100, count: 1, totalCount: 2000);
+
+        var search = await harness.Client.Workers.SearchAsync();
+
+        // result is the array itself here, so the ordinary paged wrapper describes this endpoint - the
+        // opposite of the versions and deployments endpoints, which both nest their arrays.
+        Assert.Equal(1, search.Count);
+        Assert.Equal(2000, search.TotalCount);
+        Assert.Equal(100, search.Info?.TotalPages);
+        Assert.True(search.HasMore);
+        Assert.Equal(2, search.NextPage);
+    }
+
+    [Fact]
+    public async Task SearchAsync_sends_no_query_at_all_when_nothing_is_set()
+    {
+        using var harness = CloudflareHarness.Create();
+        harness.RespondWithPage("[]", page: 1, totalPages: 1, count: 0, totalCount: 0);
+
+        var search = await harness.Client.Workers.SearchAsync(new WorkerScriptSearchParameters());
+
+        Assert.Equal(string.Empty, harness.LastRequest.Query);
+        Assert.Empty(search.Items);
+    }
+
+    [Fact]
+    public async Task SearchAsync_sends_id_name_order_by_and_page_numbering()
+    {
+        using var harness = CloudflareHarness.Create();
+        harness.RespondWithPage("[]", page: 2, totalPages: 3, count: 0, totalCount: 0);
+
+        await harness.Client.Workers.SearchAsync(new WorkerScriptSearchParameters
+        {
+            Page = 2,
+            PerPage = 25,
+            Id = "023e105f4ecef8ad9ca31a8372d0c353",
+            Name = "my-script",
+            OrderBy = WorkerScriptSearchOrderBy.ModifiedOn,
+        });
+
+        Assert.Equal(
+            "page=2&per_page=25&id=023e105f4ecef8ad9ca31a8372d0c353&name=my-script&order_by=modified_on",
+            harness.LastRequest.Query.TrimStart('?'));
+    }
+
+    [Theory]
+    [InlineData(0, null)]
+    [InlineData(null, 0)]
+    [InlineData(null, 101)]
+    public async Task SearchAsync_rejects_paging_outside_the_documented_bounds(int? page, int? perPage)
+    {
+        using var harness = CloudflareHarness.Create();
+
+        await Assert.ThrowsAsync<CloudflareConfigurationException>(() =>
+            harness.Client.Workers.SearchAsync(new WorkerScriptSearchParameters
+            {
+                Page = page,
+                PerPage = perPage,
+            }));
+
+        // page from 1 and per_page between 1 and 100 are both documented for this endpoint.
+        Assert.Equal(0, harness.RequestCount);
+    }
+
+    [Fact]
+    public async Task SearchAsync_captures_fields_the_row_model_does_not_declare()
+    {
+        using var harness = CloudflareHarness.Create();
+        harness.RespondWithPage(
+            """[{"id":"abc","script_name":"hello","usage_model":"bundled"}]""",
+            page: 1, totalPages: 1, count: 1, totalCount: 1);
+
+        var row = Assert.Single((await harness.Client.Workers.SearchAsync()).Items);
+
+        Assert.Equal("hello", row.ScriptName);
+        Assert.NotNull(row.AdditionalData);
+        Assert.Contains("usage_model", row.AdditionalData!.Keys, StringComparer.Ordinal);
+    }
+
+    [Fact]
+    public void A_row_prints_its_environment_only_when_that_environment_is_not_the_default()
+    {
+        Assert.Equal("hello", new WorkerScriptSearchItem { ScriptName = "hello" }.ToString());
+        Assert.Equal(
+            "hello",
+            new WorkerScriptSearchItem
+            {
+                ScriptName = "hello",
+                EnvironmentName = "production",
+                EnvironmentIsDefault = true,
+            }.ToString());
+        Assert.Equal(
+            "hello (staging)",
+            new WorkerScriptSearchItem
+            {
+                ScriptName = "hello",
+                EnvironmentName = "staging",
+                EnvironmentIsDefault = false,
+            }.ToString());
+    }
+}
+
+/// <summary>
+/// <c>GET /accounts/{account_id}/workers/scripts/{script_name}/versions/{version_id}</c> - the list plus a
+/// version's resources, which is where its bindings, exported handlers and runtime live.
+/// </summary>
+public class WorkerVersionDetailTests
+{
+    /// <summary>
+    /// Every field the reference publishes for one version, assembled from its own schema, so nothing in
+    /// these assertions is invented. The <c>has_preview</c> spelling is the one a live answer used.
+    /// </summary>
+    private const string DocumentedVersion = """
+        {
+          "id": "8cbb1a64-1a55-4b6f-9b90-3a2c1a2d6b0e",
+          "number": 3,
+          "metadata": {
+            "author_email": "",
+            "author_id": "a-token",
+            "created_on": "2026-10-15T02:00:00Z",
+            "modified_on": "2026-10-15T02:05:00Z",
+            "source": "api",
+            "has_preview": true
+          },
+          "annotations": { "workers/triggered_by": "upload" },
+          "resources": {
+            "bindings": [ { "name": "GREETING", "type": "plain_text", "text": "hello" } ],
+            "script": {
+              "etag": "9f2c4b1e",
+              "handlers": [ "fetch", "scheduled" ],
+              "last_deployed_from": "api",
+              "named_handlers": [ { "name": "Counter", "handlers": [ "alarm" ] } ]
+            },
+            "script_runtime": {
+              "compatibility_date": "2026-10-01",
+              "compatibility_flags": [ "nodejs_compat" ],
+              "limits": { "cpu_ms": 30000 },
+              "migration_tag": "v1",
+              "usage_model": "bundled",
+              "exports": { "Counter": { "type": "durable-object", "storage": "sqlite", "state": "created" } }
+            }
+          }
+        }
+        """;
+
+    [Fact]
+    public async Task GetVersionAsync_reads_one_version_by_id_including_its_resources()
+    {
+        using var harness = CloudflareHarness.Create();
+        harness.RespondWithResult(DocumentedVersion);
+
+        var version = await harness.Client.Workers.GetVersionAsync("hello", "8cbb1a64");
+
+        Assert.EndsWith(
+            "/workers/scripts/hello/versions/8cbb1a64",
+            harness.LastRequest.Path,
+            StringComparison.Ordinal);
+        Assert.NotNull(version);
+        Assert.Equal("8cbb1a64-1a55-4b6f-9b90-3a2c1a2d6b0e", version!.Id);
+        Assert.Equal(3, version.Number);
+        Assert.Equal(WorkerVersionSources.Api, version.Metadata?.Source);
+        Assert.Equal("upload", version.Annotations?.TriggeredBy);
+        Assert.Equal(
+            new DateTimeOffset(2026, 10, 15, 2, 5, 0, TimeSpan.Zero),
+            version.Metadata?.ModifiedOn);
+        Assert.True(version.Metadata?.HasPreview);
+
+        var binding = Assert.Single(version.Resources!.Bindings!);
+        Assert.Equal("GREETING", binding.Name);
+        Assert.Equal(WorkerBindingTypes.PlainText, binding.Type);
+        Assert.Equal("hello", binding.Text);
+
+        Assert.Equal("9f2c4b1e", version.Resources.Script!.Etag);
+        Assert.Equal(new[] { "fetch", "scheduled" }, version.Resources.Script.Handlers);
+        Assert.Equal("api", version.Resources.Script.LastDeployedFrom);
+        var exported = Assert.Single(version.Resources.Script.NamedHandlers!);
+        Assert.Equal("Counter", exported.Name);
+        Assert.Equal(new[] { "alarm" }, exported.Handlers);
+
+        var runtime = version.Resources.ScriptRuntime!;
+        Assert.Equal("2026-10-01", runtime.CompatibilityDate);
+        Assert.Equal(new[] { "nodejs_compat" }, runtime.CompatibilityFlags);
+        Assert.Equal(30000, runtime.Limits?.CpuMs);
+        Assert.Equal("v1", runtime.MigrationTag);
+        Assert.Equal(WorkerUsageModels.Bundled, runtime.UsageModel);
+    }
+
+    [Fact]
+    public async Task GetVersionAsync_returns_null_when_the_version_does_not_exist()
+    {
+        using var harness = CloudflareHarness.Create();
+        harness.RespondWithError(HttpStatusCode.NotFound, 10007, "Version not found");
+
+        var version = await harness.Client.Workers.GetVersionAsync("hello", "no-such-version");
+
+        Assert.Null(version);
+        Assert.Equal(1, harness.RequestCount);
+    }
+
+    [Fact]
+    public async Task GetVersionAsync_keeps_the_exports_map_raw_instead_of_guessing_at_the_union()
+    {
+        using var harness = CloudflareHarness.Create();
+        harness.RespondWithResult(DocumentedVersion);
+
+        var version = await harness.Client.Workers.GetVersionAsync("hello", "8cbb1a64");
+
+        // Six documented variants, distinguished by type and lifecycle state, and no live answer to check
+        // them against: the entry stays readable as JSON rather than becoming a wrong model.
+        var exports = version!.Resources!.ScriptRuntime!.Exports;
+        Assert.NotNull(exports);
+        var counter = Assert.Contains("Counter", exports!);
+        Assert.Equal("durable-object", counter.GetProperty("type").GetString());
+        Assert.Equal("sqlite", counter.GetProperty("storage").GetString());
+        Assert.Equal("created", counter.GetProperty("state").GetString());
+    }
+
+    [Fact]
+    public async Task GetVersionAsync_captures_fields_the_model_does_not_declare_at_every_level()
+    {
+        using var harness = CloudflareHarness.Create();
+        harness.RespondWithResult("""
+            {
+              "id": "v-1",
+              "number": 1,
+              "secrets": [ { "name": "API_KEY", "type": "secret_text" } ],
+              "resources": {
+                "something_new": true,
+                "script": { "etag": "abc", "compiled_at": "2026-10-15T02:00:00Z" },
+                "script_runtime": { "usage_model": "bundled", "placement": { "mode": "smart" } }
+              }
+            }
+            """);
+
+        var version = await harness.Client.Workers.GetVersionAsync("hello", "v-1");
+
+        Assert.NotNull(version);
+        Assert.Contains("secrets", version!.AdditionalData!.Keys, StringComparer.Ordinal);
+        Assert.Contains("something_new", version.Resources!.AdditionalData!.Keys, StringComparer.Ordinal);
+        Assert.Contains("compiled_at", version.Resources.Script!.AdditionalData!.Keys, StringComparer.Ordinal);
+        Assert.Contains("placement", version.Resources.ScriptRuntime!.AdditionalData!.Keys, StringComparer.Ordinal);
+        Assert.Equal(WorkerUsageModels.Bundled, version.Resources.ScriptRuntime.UsageModel);
+    }
+
+    [Fact]
+    public async Task GetVersionAsync_needs_both_a_script_name_and_a_version_id()
+    {
+        using var harness = CloudflareHarness.Create();
+
+        await Assert.ThrowsAsync<CloudflareConfigurationException>(() =>
+            harness.Client.Workers.GetVersionAsync(" ", "v-1"));
+        await Assert.ThrowsAsync<CloudflareConfigurationException>(() =>
+            harness.Client.Workers.GetVersionAsync("hello", " "));
+
+        Assert.Equal(0, harness.RequestCount);
+    }
+
+    [Fact]
+    public void A_version_and_its_resources_print_something_readable()
+    {
+        var version = new WorkerVersionDetail { Id = "v-1", Number = 3 };
+        Assert.Equal("version 3 (v-1)", version.ToString());
+        Assert.Equal("version v-1", new WorkerVersionDetail { Id = "v-1" }.ToString());
+
+        var resources = new WorkerVersionResources
+        {
+            Bindings = new List<WorkerBinding> { new() { Name = "GREETING" } },
+            Script = new WorkerVersionScript { Handlers = new List<string> { "fetch", "scheduled" } },
+        };
+        Assert.Equal("1 binding(s), 2 default handler(s)", resources.ToString());
+        Assert.Equal("0 binding(s), 0 default handler(s)", new WorkerVersionResources().ToString());
+
+        Assert.Equal(
+            "bundled, compatibility 2026-10-01",
+            new WorkerVersionScriptRuntime
+            {
+                UsageModel = WorkerUsageModels.Bundled,
+                CompatibilityDate = "2026-10-01",
+            }.ToString());
+        Assert.Equal(
+            "runtime, compatibility unset",
+            new WorkerVersionScriptRuntime().ToString());
+        Assert.Equal("30000 ms CPU", new WorkerVersionLimits { CpuMs = 30000 }.ToString());
+        Assert.Equal("no CPU limit reported", new WorkerVersionLimits().ToString());
+        Assert.Equal("Counter: alarm", new WorkerNamedExport
+        {
+            Name = "Counter",
+            Handlers = new List<string> { "alarm" },
+        }.ToString());
+    }
+}
+
+/// <summary>
+/// <c>POST /accounts/{account_id}/workers/scripts/{script_name}/versions</c> - the same multipart bundle as
+/// an upload, but it creates a version and leaves the deployment alone.
+/// </summary>
+public class WorkerVersionUploadTests
+{
+    /// <summary>A minimal module-syntax bundle, which is all this endpoint accepts.</summary>
+    private static UploadWorkerScriptRequest Bundle() =>
+        new("hello", "export default { async fetch() { return new Response('v2'); } }", "2026-10-01");
+
+    [Fact]
+    public async Task CreateVersionAsync_posts_the_same_multipart_bundle_an_upload_does()
+    {
+        using var harness = CloudflareHarness.Create();
+        harness.RespondWithResult("""
+            {"id":"v-2","number":2,"startup_time_ms":10,"metadata":{"source":"api","hasPreview":true}}
+            """);
+
+        var request = Bundle();
+        request.Annotations = new WorkerAnnotations { Message = "second try", Tag = "v2" };
+
+        var version = await harness.Client.Workers.CreateVersionAsync("hello", request);
+
+        Assert.Equal(HttpMethod.Post, harness.LastRequest.Method);
+        Assert.EndsWith("/workers/scripts/hello/versions", harness.LastRequest.Path, StringComparison.Ordinal);
+        Assert.StartsWith("multipart/form-data", harness.LastRequest.ContentType, StringComparison.Ordinal);
+        Assert.Equal(string.Empty, harness.LastRequest.Query);
+
+        var body = harness.LastRequest.Body!;
+        Assert.Contains("name=metadata", body, StringComparison.Ordinal);
+        Assert.Contains("\"main_module\":\"worker.mjs\"", body, StringComparison.Ordinal);
+        Assert.Contains("\"compatibility_date\":\"2026-10-01\"", body, StringComparison.Ordinal);
+        Assert.Contains("\"workers/message\":\"second try\"", body, StringComparison.Ordinal);
+        Assert.Contains("\"workers/tag\":\"v2\"", body, StringComparison.Ordinal);
+        Assert.Contains("name=worker.mjs", body, StringComparison.Ordinal);
+        Assert.Contains("application/javascript+module", body, StringComparison.Ordinal);
+
+        Assert.NotNull(version);
+        Assert.Equal("v-2", version!.Id);
+        Assert.Equal(2, version.Number);
+        Assert.Equal(10, version.StartupTimeMs);
+        Assert.Equal(WorkerVersionSources.Api, version.Metadata?.Source);
+
+        // The response example publishes the preview flag in camelCase, unlike the live list answer.
+        Assert.True(version.Metadata?.HasPreview);
+    }
+
+    [Fact]
+    public async Task CreateVersionAsync_sends_bindings_inherit_strict_only_when_asked()
+    {
+        using var harness = CloudflareHarness.Create();
+        harness.RespondWithResult("{\"id\":\"v-2\"}");
+        harness.RespondWithResult("{\"id\":\"v-3\"}");
+
+        await harness.Client.Workers.CreateVersionAsync("hello", Bundle(), bindingsInheritStrict: true);
+        await harness.Client.Workers.CreateVersionAsync("hello", Bundle());
+
+        // Strict is the only published value, and it changes an unresolvable inherit binding from something
+        // Cloudflare quietly drops into error 10057.
+        Assert.Equal("?bindings_inherit=strict", harness.Requests[0].Query);
+        Assert.Equal(string.Empty, harness.Requests[1].Query);
+    }
+
+    [Fact]
+    public async Task CreateVersionAsync_rejects_service_worker_syntax()
+    {
+        using var harness = CloudflareHarness.Create();
+
+        var request = new UploadWorkerScriptRequest
+        {
+            ScriptName = "hello",
+            BodyPart = "worker.js",
+            Modules = new List<WorkerModule>
+            {
+                new("worker.js", "addEventListener('fetch', event => {})", WorkerModuleContentTypes.JavaScript),
+            },
+        };
+
+        var exception = await Assert.ThrowsAsync<CloudflareConfigurationException>(() =>
+            harness.Client.Workers.CreateVersionAsync("hello", request));
+
+        Assert.Contains("module syntax", exception.Message, StringComparison.Ordinal);
+        Assert.Equal(0, harness.RequestCount);
+    }
+
+    [Fact]
+    public async Task CreateVersionAsync_takes_the_script_name_from_the_path_when_the_request_has_none()
+    {
+        using var harness = CloudflareHarness.Create();
+        harness.RespondWithResult("{\"id\":\"v-2\"}");
+
+        var request = Bundle();
+        request.ScriptName = null;
+
+        await harness.Client.Workers.CreateVersionAsync("hello", request);
+
+        // Validate() requires a script name because an upload builds its URL from one; a version already
+        // has the name in the path, so the argument stands in for it rather than failing the request.
+        Assert.EndsWith("/workers/scripts/hello/versions", harness.LastRequest.Path, StringComparison.Ordinal);
+        Assert.Equal(1, harness.RequestCount);
+    }
+
+    [Fact]
+    public async Task Resources_bindings_read_as_an_empty_list_when_cloudflare_sends_the_object_its_example_shows()
+    {
+        using var harness = CloudflareHarness.Create();
+        harness.RespondWithResult("""{"id":"v-1","resources":{"bindings":{}}}""");
+
+        var version = await harness.Client.Workers.GetVersionAsync("hello", "v-1");
+
+        // Cloudflare's own 200 example of the version upload response carries "bindings": {} where the
+        // schema implies a list. Reading only the array would throw on a Worker with no bindings.
+        Assert.NotNull(version);
+        Assert.NotNull(version!.Resources?.Bindings);
+        Assert.Empty(version.Resources!.Bindings!);
+    }
+
+    [Fact]
+    public async Task Resources_bindings_still_read_as_a_list_when_cloudflare_sends_an_array()
+    {
+        using var harness = CloudflareHarness.Create();
+        harness.RespondWithResult("""
+            {"id":"v-1","resources":{"bindings":[
+              {"name":"ENV","type":"plain_text","text":"production"},
+              {"name":"MY_KV","type":"kv_namespace","namespace_id":"ns-1"}
+            ]}}
+            """);
+
+        var version = await harness.Client.Workers.GetVersionAsync("hello", "v-1");
+
+        var bindings = version!.Resources!.Bindings!;
+        Assert.Equal(2, bindings.Count);
+        Assert.Equal("ENV", bindings[0].Name);
+        Assert.Equal(WorkerBindingTypes.PlainText, bindings[0].Type);
+        Assert.Equal("ns-1", bindings[1].NamespaceId);
+    }
+
+    [Theory]
+    [InlineData("{\"has_preview\":true}")]
+    [InlineData("{\"hasPreview\":true}")]
+    public async Task Metadata_reads_the_preview_flag_in_either_spelling(string metadata)
+    {
+        using var harness = CloudflareHarness.Create();
+        harness.RespondWithResult($"{{\"id\":\"v-1\",\"metadata\":{metadata}}}");
+
+        var version = await harness.Client.Workers.GetVersionAsync("hello", "v-1");
+
+        Assert.True(version!.Metadata?.HasPreview);
+    }
+
+    [Fact]
+    public async Task Annotations_read_the_whole_vocabulary_the_version_upload_publishes()
+    {
+        using var harness = CloudflareHarness.Create();
+        harness.RespondWithResult("""
+            {
+              "id": "v-1",
+              "annotations": {
+                "workers/message": "ship it",
+                "workers/alias": "canary",
+                "workers/tag": "v1.2.3",
+                "workers/commit_sha": "0123456789abcdef",
+                "workers/repository_url": "https://example.com/repo",
+                "workers/pull_request_number": "42",
+                "workers/pull_request_title": "Fix the thing",
+                "workers/pull_request_url": "https://example.com/repo/pull/42",
+                "workers/triggered_by": "upload"
+              }
+            }
+            """);
+
+        var version = await harness.Client.Workers.GetVersionAsync("hello", "v-1");
+        var annotations = version!.Annotations;
+
+        Assert.NotNull(annotations);
+        Assert.Equal("ship it", annotations!.Message);
+        Assert.Equal("canary", annotations.Alias);
+        Assert.Equal("v1.2.3", annotations.Tag);
+        Assert.Equal("0123456789abcdef", annotations.CommitSha);
+        Assert.Equal("https://example.com/repo", annotations.RepositoryUrl);
+        Assert.Equal("42", annotations.PullRequestNumber);
+        Assert.Equal("Fix the thing", annotations.PullRequestTitle);
+        Assert.Equal("https://example.com/repo/pull/42", annotations.PullRequestUrl);
+        Assert.Equal("upload", annotations.TriggeredBy);
+        Assert.False(annotations.IsEmpty);
+    }
+
+    [Fact]
+    public void Annotations_print_the_ci_details_after_the_message_and_trigger()
+    {
+        Assert.Equal(
+            "tag=v1.2.3 commit=0123456",
+            new WorkerAnnotations { Tag = "v1.2.3", CommitSha = "0123456" }.ToString());
+        Assert.Equal(
+            "upload: ship it [alias=canary pr=42]",
+            new WorkerAnnotations
+            {
+                TriggeredBy = "upload",
+                Message = "ship it",
+                Alias = "canary",
+                PullRequestNumber = "42",
+            }.ToString());
+        Assert.True(new WorkerAnnotations().IsEmpty);
+        Assert.False(new WorkerAnnotations { Alias = "canary" }.IsEmpty);
+    }
+
+    [Fact]
+    public async Task Exports_reconciliation_stays_readable_as_raw_json()
+    {
+        using var harness = CloudflareHarness.Create();
+        harness.RespondWithResult("""
+            {"id":"v-1","number":1,"exports_reconciliation":{
+              "created":["Counter"],
+              "renamed":[{"from":"OldCounter","to":"Counter"}],
+              "warnings":[{"class":"Counter","message":"m","scenario":"code_class_not_in_exports"}]
+            }}
+            """);
+
+        var version = await harness.Client.Workers.GetVersionAsync("hello", "v-1");
+
+        var reconciliation = version!.ExportsReconciliation;
+        Assert.NotNull(reconciliation);
+        Assert.Equal("Counter", reconciliation!.Value.GetProperty("created")[0].GetString());
+        Assert.Equal("OldCounter", reconciliation.Value.GetProperty("renamed")[0].GetProperty("from").GetString());
+        Assert.Equal(
+            "code_class_not_in_exports",
+            reconciliation.Value.GetProperty("warnings")[0].GetProperty("scenario").GetString());
+    }
+}
+
+/// <summary>
+/// <c>GET</c> and <c>PUT /accounts/{account_id}/workers/scripts/{script_name}/schedules</c> - a script's cron
+/// triggers, where the update replaces the whole set and its body is a bare JSON array.
+/// </summary>
+public class WorkerScheduleTests
+{
+    [Fact]
+    public async Task ListSchedulesAsync_reads_the_schedules_object_the_result_nests()
+    {
+        using var harness = CloudflareHarness.Create();
+        harness.RespondWithResult("""
+            {"schedules":[
+              {"cron":"*/30 * * * *","created_on":"2026-10-15T07:00:00Z","modified_on":"2026-10-15T07:05:00Z"},
+              {"cron":"0 3 * * *"}
+            ]}
+            """);
+
+        var schedules = await harness.Client.Workers.ListSchedulesAsync("hello");
+
+        Assert.EndsWith(
+            "/workers/scripts/hello/schedules",
+            harness.LastRequest.Path,
+            StringComparison.Ordinal);
+        Assert.Equal(string.Empty, harness.LastRequest.Query);
+        Assert.NotNull(schedules);
+        Assert.Equal(2, schedules!.Count);
+        Assert.Equal(new[] { "*/30 * * * *", "0 3 * * *" }, schedules.Expressions);
+        Assert.Equal(
+            new DateTimeOffset(2026, 10, 15, 7, 0, 0, TimeSpan.Zero),
+            schedules.Schedules![0].CreatedOn);
+        Assert.Equal(
+            new DateTimeOffset(2026, 10, 15, 7, 5, 0, TimeSpan.Zero),
+            schedules.Schedules![0].ModifiedOn);
+        Assert.Null(schedules.Schedules![1].CreatedOn);
+        Assert.Equal("*/30 * * * *, 0 3 * * *", schedules.ToString());
+    }
+
+    [Fact]
+    public async Task A_script_with_no_cron_triggers_answers_an_empty_set_rather_than_an_error()
+    {
+        using var harness = CloudflareHarness.Create();
+        harness.RespondWithResult("""{"schedules":[]}""");
+
+        var schedules = await harness.Client.Workers.ListSchedulesAsync("hello");
+
+        Assert.NotNull(schedules);
+        Assert.Equal(0, schedules!.Count);
+        Assert.Empty(schedules.Expressions);
+        Assert.Equal("no cron triggers", schedules.ToString());
+    }
+
+    [Fact]
+    public async Task UpdateSchedulesAsync_puts_a_bare_array_of_expressions()
+    {
+        using var harness = CloudflareHarness.Create();
+        harness.RespondWithResult("""{"schedules":[{"cron":"*/30 * * * *"},{"cron":"0 3 * * *"}]}""");
+
+        var updated = await harness.Client.Workers.UpdateSchedulesAsync(
+            "hello",
+            new[] { "*/30 * * * *", "0 3 * * *" });
+
+        Assert.Equal(HttpMethod.Put, harness.LastRequest.Method);
+        Assert.EndsWith("/workers/scripts/hello/schedules", harness.LastRequest.Path, StringComparison.Ordinal);
+
+        var body = harness.LastRequest.Body!;
+
+        // The body is the array itself, not an object holding one, and the timestamps Cloudflare writes are
+        // not echoed back to it.
+        Assert.StartsWith("[{", body, StringComparison.Ordinal);
+        Assert.Contains("\"cron\":\"*/30 * * * *\"", body, StringComparison.Ordinal);
+        Assert.Contains("\"cron\":\"0 3 * * *\"", body, StringComparison.Ordinal);
+        Assert.DoesNotContain("created_on", body, StringComparison.Ordinal);
+
+        Assert.Equal(2, updated!.Count);
+    }
+
+    [Fact]
+    public async Task UpdateSchedulesAsync_with_no_expressions_clears_every_trigger()
+    {
+        using var harness = CloudflareHarness.Create();
+        harness.RespondWithResult("""{"schedules":[]}""");
+
+        var cleared = await harness.Client.Workers.UpdateSchedulesAsync("hello", Array.Empty<string>());
+
+        Assert.Equal("[]", harness.LastRequest.Body);
+        Assert.Equal(0, cleared!.Count);
+    }
+
+    [Fact]
+    public async Task UpdateSchedulesAsync_rejects_blank_and_duplicate_expressions_before_sending()
+    {
+        using var harness = CloudflareHarness.Create();
+
+        var blank = await Assert.ThrowsAsync<CloudflareConfigurationException>(() =>
+            harness.Client.Workers.UpdateSchedulesAsync("hello", new[] { "*/30 * * * *", "   " }));
+        Assert.Contains("non-empty", blank.Message, StringComparison.Ordinal);
+
+        var duplicate = await Assert.ThrowsAsync<CloudflareConfigurationException>(() =>
+            harness.Client.Workers.UpdateSchedulesAsync("hello", new[] { "0 3 * * *", "0 3 * * *" }));
+        Assert.Contains("Duplicate cron expression", duplicate.Message, StringComparison.Ordinal);
+
+        Assert.Equal(0, harness.RequestCount);
+    }
+
+    [Fact]
+    public async Task Schedules_capture_fields_the_model_does_not_declare()
+    {
+        using var harness = CloudflareHarness.Create();
+        harness.RespondWithResult("""
+            {"schedules":[{"cron":"* * * * *","timezone":"UTC"}],"scheduler":"v2"}
+            """);
+
+        var schedules = await harness.Client.Workers.ListSchedulesAsync("hello");
+
+        Assert.Contains("timezone", schedules!.Schedules![0].AdditionalData!.Keys, StringComparer.Ordinal);
+        Assert.Contains("scheduler", schedules.AdditionalData!.Keys, StringComparer.Ordinal);
+    }
+
+    [Fact]
+    public void A_schedule_prints_its_expression()
+    {
+        Assert.Equal("*/30 * * * *", new WorkerSchedule("*/30 * * * *").ToString());
+        Assert.Equal(string.Empty, new WorkerSchedule().ToString());
+    }
+}

@@ -1,0 +1,36 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    A single-window Avalonia gallery used to exercise every CF.Net service by hand: pick a module on
+    the left, fill in the operation, hit Run and watch the outgoing request and the incoming
+    response in the inspector at the bottom.
+
+    Avalonia 12 is the first line that supports the .NET 10 SDK, which this repository builds with,
+    so the gallery tracks it. net8.0 is still a supported target there and keeps the sample usable
+    on the oldest runtime the library itself supports.
+  -->
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <AssemblyName>CF.Net.Gallery</AssemblyName>
+    <RootNamespace>CFNet.Gallery</RootNamespace>
+    <IsPackable>false</IsPackable>
+    <AvaloniaUseCompiledBindingsByDefault>true</AvaloniaUseCompiledBindingsByDefault>
+    <!-- The gallery is a sample, not a shipped library: no XML docs, no analyzer noise. -->
+    <GenerateDocumentationFile>false</GenerateDocumentationFile>
+    <EnableNETAnalyzers>false</EnableNETAnalyzers>
+    <NoWarn>$(NoWarn);CS1591;AVLN</NoWarn>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Avalonia" Version="12.1.4" />
+    <PackageReference Include="Avalonia.Desktop" Version="12.1.4" />
+    <PackageReference Include="Avalonia.Themes.Fluent" Version="12.1.4" />
+    <PackageReference Include="Avalonia.Fonts.Inter" Version="12.1.4" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\CF.Net\CF.Net.csproj" />
+  </ItemGroup>
+
+</Project>

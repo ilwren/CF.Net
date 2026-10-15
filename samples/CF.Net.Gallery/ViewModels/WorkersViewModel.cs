@@ -239,7 +239,7 @@ public sealed class WorkersViewModel : ModuleViewModelBase
                 new()
                 {
                     VersionId = versionId,
-                    Percentage = double.TryParse(Percentage, out var percentage) ? percentage : 100d,
+                    Percentage = decimal.TryParse(Percentage, out var percentage) ? percentage : 100m,
                 },
             },
         };

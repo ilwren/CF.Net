@@ -1,6 +1,7 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using CFNet.Http;
+using CFNet.Models.Common;
 
 namespace CFNet.Models.Workers;
 
@@ -57,7 +58,7 @@ public sealed class WorkerAnnotations
 /// <remarks>
 /// Like the versions endpoint this nests its array inside the result - under <c>deployments</c>, not
 /// <c>items</c> - so <see cref="CloudflarePage{T}"/>, which expects <c>result</c> to be the array itself,
-/// does not describe it. Unlike versions it <i>does</i> return <c>result_info</i>, so the paging figures are
+/// does not describe it. Unlike versions it <i>does</i> return <c>result_info</c>, so the paging figures are
 /// carried here on <see cref="Info"/>, filled in by the service from the envelope. Cloudflare documents the
 /// first entry as the latest deployment actively serving traffic, which <see cref="Latest"/> exposes.
 /// </remarks>
@@ -185,6 +186,44 @@ public static class WorkerDeploymentStrategies
 {
     /// <summary>Split traffic by percentage across one or more versions. The only published value.</summary>
     public const string Percentage = "percentage";
+}
+
+/// <summary>
+/// Request body of <c>POST /accounts/{account_id}/workers/scripts/{script_name}/deployments</c>.
+/// </summary>
+/// <remarks>
+/// The same shape the reference documents for a deployment's <c>versions</c> and <c>annotations</c> fields,
+/// which is what the <c>cf</c> CLI sends as <c>--versions '[{"version_id":"…","percentage":100}]'</c>.
+/// </remarks>
+public sealed class CreateWorkerDeploymentRequest
+{
+    /// <summary>Creates a request that routes all traffic to one version.</summary>
+    /// <param name="versionId">The version to deploy.</param>
+    /// <param name="message">Optional <c>workers/message</c> annotation, up to 1000 bytes.</param>
+    public static CreateWorkerDeploymentRequest SingleVersion(string versionId, string? message = null) => new()
+    {
+        Strategy = WorkerDeploymentStrategies.Percentage,
+        Versions = new List<WorkerDeploymentVersion>
+        {
+            new() { VersionId = versionId, Percentage = 100 },
+        },
+        Annotations = message is null ? null : new WorkerAnnotations { Message = message },
+    };
+
+    /// <summary>
+    /// Rollout strategy. <see cref="WorkerDeploymentStrategies.Percentage"/> is the only published value, and
+    /// <c>CreateDeploymentAsync</c> defaults it to that.
+    /// </summary>
+    [JsonPropertyName("strategy")]
+    public string? Strategy { get; set; }
+
+    /// <summary>Versions taking traffic. Percentages must add up to exactly 100.</summary>
+    [JsonPropertyName("versions")]
+    public List<WorkerDeploymentVersion>? Versions { get; set; }
+
+    /// <summary>Annotations to attach to the deployment.</summary>
+    [JsonPropertyName("annotations")]
+    public WorkerAnnotations? Annotations { get; set; }
 }
 
 /// <summary>Query parameters for listing Worker deployments.</summary>

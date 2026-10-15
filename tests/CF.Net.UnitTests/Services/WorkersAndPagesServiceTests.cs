@@ -379,18 +379,6 @@ public class WorkersScriptsServiceTests
     }
 
     [Fact]
-    public async Task ListDeploymentsAsync_uses_the_deployments_sub_resource()
-    {
-        using var harness = CloudflareHarness.Create();
-        harness.RespondWithPage("[{\"id\":\"d-1\",\"version_id\":\"v-1\"}]", page: 1, totalPages: 1, count: 1, totalCount: 1);
-
-        var page = await harness.Client.Workers.ListDeploymentsAsync("hello");
-
-        Assert.EndsWith("/workers/scripts/hello/deployments", harness.LastRequest.Path, StringComparison.Ordinal);
-        Assert.Equal("d-1", Assert.Single(page.Items).Id);
-    }
-
-    [Fact]
     public async Task CreateDeploymentAsync_defaults_the_strategy_and_validates_the_split()
     {
         using var harness = CloudflareHarness.Create();
@@ -423,8 +411,8 @@ public class WorkersScriptsServiceTests
             {
                 Versions = new List<WorkerDeploymentVersion>
                 {
-                    new() { VersionId = "v-1", Percentage = first },
-                    new() { VersionId = "v-2", Percentage = second },
+                    new() { VersionId = "v-1", Percentage = (decimal)first },
+                    new() { VersionId = "v-2", Percentage = (decimal)second },
                 },
             }));
 

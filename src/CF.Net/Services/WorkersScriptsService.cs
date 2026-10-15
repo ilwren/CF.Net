@@ -140,17 +140,6 @@ public interface IWorkersScriptsService
     /// <param name="cancellationToken">Cancellation token.</param>
     Task DeleteAsync(string scriptName, string? accountId = null, CancellationToken cancellationToken = default);
 
-    /// <summary>Lists deployments of a script.</summary>
-    /// <param name="scriptName">The Worker name.</param>
-    /// <param name="parameters">Optional filters and cursor.</param>
-    /// <param name="accountId">Account id; falls back to the configured default when null.</param>
-    /// <param name="cancellationToken">Cancellation token.</param>
-    Task<CloudflarePage<WorkerDeployment>> ListDeploymentsAsync(
-        string scriptName,
-        WorkerDeploymentListParameters? parameters = null,
-        string? accountId = null,
-        CancellationToken cancellationToken = default);
-
     /// <summary>Creates a deployment, routing traffic to the given versions.</summary>
     /// <param name="scriptName">The Worker name.</param>
     /// <param name="request">The rollout description.</param>
@@ -511,25 +500,6 @@ public sealed class WorkersScriptsService : CloudflareService, IWorkersScriptsSe
     }
 
     /// <inheritdoc />
-    public async Task<CloudflarePage<WorkerDeployment>> ListDeploymentsAsync(
-        string scriptName,
-        WorkerDeploymentListParameters? parameters = null,
-        string? accountId = null,
-        CancellationToken cancellationToken = default)
-    {
-        var account = ResolveAccountId(accountId);
-        var name = Require(scriptName, nameof(scriptName));
-
-        var request = Apply(
-            CloudflareRequest.Get($"{AccountPath(account)}/workers/scripts/{CloudflareUrl.EncodeSegment(name)}/deployments"),
-            parameters);
-        request.OperationName = "List Worker Deployments";
-
-        var response = await Transport.SendAsync<List<WorkerDeployment>>(request, cancellationToken).ConfigureAwait(false);
-        return response.ToPage();
-    }
-
-    /// <inheritdoc />
     public async Task<WorkerDeployment> CreateDeploymentAsync(
         string scriptName,
         CreateWorkerDeploymentRequest request,
@@ -541,19 +511,19 @@ public sealed class WorkersScriptsService : CloudflareService, IWorkersScriptsSe
         var account = ResolveAccountId(accountId);
         var name = Require(scriptName, nameof(scriptName));
 
-        var total = request.Versions?.Sum(v => v.Percentage ?? 0) ?? 0;
+        var total = request.Versions?.Sum(v => v.Percentage ?? 0m) ?? 0m;
         if (request.Versions is null || request.Versions.Count == 0)
         {
             throw new Exceptions.CloudflareConfigurationException("A deployment needs at least one version.");
         }
 
-        if (Math.Abs(total - 100d) > 0.0001d)
+        if (Math.Abs(total - 100m) > 0.0001m)
         {
             throw new Exceptions.CloudflareConfigurationException(
                 $"Deployment version percentages must add up to 100 (got {total}).");
         }
 
-        request.Strategy ??= "percentage";
+        request.Strategy ??= WorkerDeploymentStrategies.Percentage;
 
         var httpRequest = CloudflareRequest.Post(
             $"{AccountPath(account)}/workers/scripts/{CloudflareUrl.EncodeSegment(name)}/deployments",

@@ -1,4 +1,5 @@
 using System.Reflection;
+using System.Text.Json;
 using CFNet.Exceptions;
 using CFNet.Http;
 using CFNet.Models.Common;
@@ -875,6 +876,24 @@ public class WriteIntegrationTests : CloudflareIntegrationTest
             var content = await Client.Workers.GetContentAsync(name);
             Assert.NotNull(content);
             Log($"content/v2 returned {content!.Length} characters");
+
+            // The reference documents id, number and three of metadata's fields, and says metadata has
+            // three more it does not name. Everything unnamed lands in AdditionalData, so reporting it here
+            // is how those fields become properties instead of guesses - the run report is the only channel
+            // back out of CI that survives the job log being discarded.
+            var versions = await Client.Workers.ListVersionsAsync(name);
+            Assert.NotNull(versions);
+            Log($"versions: {versions!.Count}; latest: {versions.Latest}");
+            var latest = versions.Latest;
+            if (latest is not null)
+            {
+                Warn($"GET /accounts/{{account_id}}/workers/scripts/{name}/versions returned version " +
+                     $"{latest.Number} (id {latest.Id}) by {latest.Metadata?.AuthorEmail ?? "(no author)"} " +
+                     $"at {latest.Metadata?.CreatedOn:O}. Fields beyond the documented ones - version: " +
+                     $"{JsonSerializer.Serialize(latest.AdditionalData)}, metadata: " +
+                     $"{JsonSerializer.Serialize(latest.Metadata?.AdditionalData)}, result: " +
+                     $"{JsonSerializer.Serialize(versions.AdditionalData)}");
+            }
 
             var settings = await Client.Workers.GetSettingsAsync(name);
             Log($"logpush={settings?.Logpush} tags={string.Join(",", settings?.Tags ?? new List<string>())}");

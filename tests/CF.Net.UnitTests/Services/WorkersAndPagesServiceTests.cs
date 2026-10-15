@@ -1420,3 +1420,115 @@ public class PagesDirectUploadAndLogsTests
         Assert.Equal(new[] { "production", "preview" }, PagesDeploymentEnvironments.All);
     }
 }
+
+/// <summary>
+/// <c>GET /accounts/{account_id}/workers/scripts/{script_name}/versions</c>, which pages with
+/// <c>page</c>/<c>per_page</c> but answers with <c>{"items":[…]}</c> and no <c>result_info</c> - so it is
+/// not the shape the rest of the API's lists use, and these pin that difference.
+/// </summary>
+public class WorkerVersionTests
+{
+    private const string VersionList = """
+    {"items":[
+      {"id":"00000000-0000-0000-0000-000000000002","number":1,
+       "metadata":{"author_email":"deploy@example.com","author_id":"user-1","created_on":"2026-01-02T03:04:05Z"}},
+      {"id":"00000000-0000-0000-0000-000000000001","number":0,
+       "metadata":{"author_email":"deploy@example.com","author_id":"user-1","created_on":"2026-01-01T00:00:00Z"}}
+    ]}
+    """;
+
+    [Fact]
+    public async Task ListVersionsAsync_uses_the_versions_sub_resource_and_reads_the_items_object()
+    {
+        using var harness = CloudflareHarness.Create();
+        harness.RespondWithResult(VersionList);
+
+        var result = await harness.Client.Workers.ListVersionsAsync("hello");
+
+        Assert.Equal(
+            $"/client/v4/accounts/{CloudflareHarness.TestAccountId}/workers/scripts/hello/versions",
+            harness.LastRequest.Path);
+        Assert.Equal(string.Empty, harness.LastRequest.Query);
+
+        Assert.NotNull(result);
+        Assert.Equal(2, result!.Count);
+        // Cloudflare documents the first entry as the latest version.
+        Assert.Equal(1, result.Latest?.Number);
+        Assert.Equal("00000000-0000-0000-0000-000000000002", result.Latest?.Id);
+        Assert.Equal("deploy@example.com", result.Latest?.Metadata?.AuthorEmail);
+        Assert.Equal("user-1", result.Latest?.Metadata?.AuthorId);
+        Assert.Equal(2026, result.Latest?.Metadata?.CreatedOn?.Year);
+        Assert.Equal("version 0 (00000000-0000-0000-0000-000000000001)", result.Items![1].ToString());
+    }
+
+    [Fact]
+    public async Task ListVersionsAsync_passes_paging_and_the_deployable_filter_only_when_given()
+    {
+        using var harness = CloudflareHarness.Create();
+        harness.RespondWithResult(VersionList);
+        harness.RespondWithResult(VersionList);
+
+        await harness.Client.Workers.ListVersionsAsync("hello");
+        await harness.Client.Workers.ListVersionsAsync(
+            "hello", new WorkerVersionListParameters { Page = 2, PerPage = 10, Deployable = true });
+
+        Assert.Equal(string.Empty, harness.Requests[0].Query);
+        Assert.Equal("?page=2&per_page=10&deployable=true", harness.Requests[1].Query);
+    }
+
+    [Fact]
+    public async Task A_script_with_no_versions_answers_an_empty_list_rather_than_an_error()
+    {
+        using var harness = CloudflareHarness.Create();
+        harness.RespondWithResult("""{"items":[]}""");
+
+        var result = await harness.Client.Workers.ListVersionsAsync("hello");
+
+        Assert.NotNull(result);
+        Assert.Equal(0, result!.Count);
+        Assert.Null(result.Latest);
+        Assert.Equal("0 version(s)", result.ToString());
+    }
+
+    [Fact]
+    public async Task Fields_the_reference_does_not_document_are_captured_rather_than_dropped()
+    {
+        using var harness = CloudflareHarness.Create();
+        // The published schema names id, number and three metadata fields, and says metadata has three
+        // more it does not name. Everything unnamed has to survive, because that is how it gets modelled.
+        harness.RespondWithResult("""
+        {"items":[{"id":"v-1","number":0,
+          "metadata":{"author_email":"a@example.com","created_on":"2026-01-01T00:00:00Z",
+                      "source_version_id":"v-0","something_new":42},
+          "resources":{"limits":{"cpu_ms":30000},"bindings":[],"observability":{"enabled":false}},
+          "secrets":["TOKEN"],
+          "annotations":{"workers_message":"first"}}],
+         "total_count":1}
+        """);
+
+        var result = await harness.Client.Workers.ListVersionsAsync("hello");
+
+        var version = Assert.Single(result!.Items!);
+        Assert.NotNull(version.AdditionalData);
+        Assert.True(version.AdditionalData!.ContainsKey("resources"));
+        Assert.True(version.AdditionalData.ContainsKey("secrets"));
+        Assert.True(version.AdditionalData.ContainsKey("annotations"));
+        Assert.Equal(30000, version.AdditionalData["resources"].GetProperty("limits").GetProperty("cpu_ms").GetInt32());
+        Assert.NotNull(version.Metadata?.AdditionalData);
+        Assert.True(version.Metadata!.AdditionalData!.ContainsKey("source_version_id"));
+        Assert.True(version.Metadata.AdditionalData.ContainsKey("something_new"));
+        // A sibling of items on the result itself is captured too, rather than throwing the answer away.
+        Assert.True(result.AdditionalData!.ContainsKey("total_count"));
+    }
+
+    [Fact]
+    public async Task A_version_number_sent_as_a_string_still_parses()
+    {
+        using var harness = CloudflareHarness.Create();
+        harness.RespondWithResult("""{"items":[{"id":"v-1","number":"3"}]}""");
+
+        var result = await harness.Client.Workers.ListVersionsAsync("hello");
+
+        Assert.Equal(3, Assert.Single(result!.Items!).Number);
+    }
+}

@@ -60,6 +60,25 @@ public interface IWorkersScriptsService
         string? accountId = null,
         CancellationToken cancellationToken = default);
 
+    /// <summary>Lists a script's uploaded versions, newest first.</summary>
+    /// <param name="scriptName">The Worker name.</param>
+    /// <param name="parameters">Paging and the <c>deployable</c> filter; <c>null</c> for Cloudflare's defaults.</param>
+    /// <param name="accountId">Account id; falls back to the configured default when null.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <remarks>
+    /// <c>GET …/workers/scripts/{script_name}/versions</c> takes <c>page</c> and <c>per_page</c> but answers
+    /// with <c>{"items":[…]}</c> and no <c>result_info</c>, so this returns a
+    /// <see cref="WorkerVersionListResult"/> rather than the <see cref="CloudflarePage{T}"/> the other list
+    /// endpoints return - there are no totals to read. Cloudflare documents the first entry as the latest
+    /// version, which <see cref="WorkerVersionListResult.Latest"/> exposes. <c>deployable</c> is documented
+    /// as ignoring pagination. Permissions are the Workers Scripts read/write this service already uses.
+    /// </remarks>
+    Task<WorkerVersionListResult?> ListVersionsAsync(
+        string scriptName,
+        WorkerVersionListParameters? parameters = null,
+        string? accountId = null,
+        CancellationToken cancellationToken = default);
+
     /// <summary>Fetches the script-level settings (Logpush, tail consumers, observability, tags).</summary>
     /// <param name="scriptName">The Worker name.</param>
     /// <param name="accountId">Account id; falls back to the configured default when null.</param>
@@ -327,6 +346,28 @@ public sealed class WorkersScriptsService : CloudflareService, IWorkersScriptsSe
 
         var raw = await Transport.SendRawAsync(request, cancellationToken).ConfigureAwait(false);
         return raw.IsSuccessStatusCode ? raw.Body : null;
+    }
+
+    /// <inheritdoc />
+    public async Task<WorkerVersionListResult?> ListVersionsAsync(
+        string scriptName,
+        WorkerVersionListParameters? parameters = null,
+        string? accountId = null,
+        CancellationToken cancellationToken = default)
+    {
+        var account = ResolveAccountId(accountId);
+        var name = Require(scriptName, nameof(scriptName));
+
+        var request = CloudflareRequest.Get(
+            $"{AccountPath(account)}/workers/scripts/{CloudflareUrl.EncodeSegment(name)}/versions");
+        request.OperationName = "List Worker Versions";
+        request.Query.Add("page", parameters?.Page);
+        request.Query.Add("per_page", parameters?.PerPage);
+        request.Query.Add("deployable", parameters?.Deployable);
+
+        // Not the usual paged shape: result is an object holding an items array, with no result_info.
+        var response = await Transport.SendAsync<WorkerVersionListResult>(request, cancellationToken).ConfigureAwait(false);
+        return response.Result;
     }
 
     /// <inheritdoc />

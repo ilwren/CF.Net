@@ -1704,3 +1704,139 @@ public class WorkerDeploymentTests
         Assert.False(new WorkerAnnotations { Message = "shipped" }.IsEmpty);
     }
 }
+
+/// <summary>
+/// <c>GET /accounts/{account_id}/workers/scripts-search</c> - its own endpoint rather than a filter on the
+/// scripts list, page numbered, and answering with one compact row per script.
+/// </summary>
+public class WorkerScriptSearchTests
+{
+    /// <summary>The single row of the reference's own 200 example, so nothing here is invented.</summary>
+    private const string DocumentedRow = """
+        {"id":"023e105f4ecef8ad9ca31a8372d0c353","created_on":"2017-01-01T00:00:00Z","modified_on":"2017-01-01T00:00:00Z","script_name":"this-is_my_script-01","environment_is_default":true,"environment_name":"production","service_name":"my-service"}
+        """;
+
+    [Fact]
+    public async Task SearchAsync_uses_the_scripts_search_resource_and_reads_the_documented_row()
+    {
+        using var harness = CloudflareHarness.Create();
+        harness.RespondWithPage($"[{DocumentedRow}]", page: 1, totalPages: 100, count: 1, totalCount: 2000);
+
+        var search = await harness.Client.Workers.SearchAsync();
+
+        Assert.EndsWith("/workers/scripts-search", harness.LastRequest.Path, StringComparison.Ordinal);
+        var row = Assert.Single(search.Items);
+        Assert.Equal("023e105f4ecef8ad9ca31a8372d0c353", row.Id);
+        Assert.Equal("this-is_my_script-01", row.ScriptName);
+        Assert.Equal(new DateTimeOffset(2017, 1, 1, 0, 0, 0, TimeSpan.Zero), row.CreatedOn);
+        Assert.Equal(new DateTimeOffset(2017, 1, 1, 0, 0, 0, TimeSpan.Zero), row.ModifiedOn);
+        Assert.True(row.EnvironmentIsDefault);
+        Assert.Equal("production", row.EnvironmentName);
+        Assert.Equal("my-service", row.ServiceName);
+    }
+
+    [Fact]
+    public async Task SearchAsync_reads_the_paging_info_that_sits_beside_the_result()
+    {
+        using var harness = CloudflareHarness.Create();
+        harness.RespondWithPage($"[{DocumentedRow}]", page: 1, totalPages: 100, count: 1, totalCount: 2000);
+
+        var search = await harness.Client.Workers.SearchAsync();
+
+        // result is the array itself here, so the ordinary paged wrapper describes this endpoint - the
+        // opposite of the versions and deployments endpoints, which both nest their arrays.
+        Assert.Equal(1, search.Count);
+        Assert.Equal(2000, search.TotalCount);
+        Assert.Equal(100, search.Info?.TotalPages);
+        Assert.True(search.HasMore);
+        Assert.Equal(2, search.NextPage);
+    }
+
+    [Fact]
+    public async Task SearchAsync_sends_no_query_at_all_when_nothing_is_set()
+    {
+        using var harness = CloudflareHarness.Create();
+        harness.RespondWithPage("[]", page: 1, totalPages: 1, count: 0, totalCount: 0);
+
+        var search = await harness.Client.Workers.SearchAsync(new WorkerScriptSearchParameters());
+
+        Assert.Equal(string.Empty, harness.LastRequest.Query);
+        Assert.Empty(search.Items);
+    }
+
+    [Fact]
+    public async Task SearchAsync_sends_id_name_order_by_and_page_numbering()
+    {
+        using var harness = CloudflareHarness.Create();
+        harness.RespondWithPage("[]", page: 2, totalPages: 3, count: 0, totalCount: 0);
+
+        await harness.Client.Workers.SearchAsync(new WorkerScriptSearchParameters
+        {
+            Page = 2,
+            PerPage = 25,
+            Id = "023e105f4ecef8ad9ca31a8372d0c353",
+            Name = "my-script",
+            OrderBy = WorkerScriptSearchOrderBy.ModifiedOn,
+        });
+
+        Assert.Equal(
+            "page=2&per_page=25&id=023e105f4ecef8ad9ca31a8372d0c353&name=my-script&order_by=modified_on",
+            harness.LastRequest.Query.TrimStart('?'));
+    }
+
+    [Theory]
+    [InlineData(0, null)]
+    [InlineData(null, 0)]
+    [InlineData(null, 101)]
+    public async Task SearchAsync_rejects_paging_outside_the_documented_bounds(int? page, int? perPage)
+    {
+        using var harness = CloudflareHarness.Create();
+
+        await Assert.ThrowsAsync<CloudflareConfigurationException>(() =>
+            harness.Client.Workers.SearchAsync(new WorkerScriptSearchParameters
+            {
+                Page = page,
+                PerPage = perPage,
+            }));
+
+        // page from 1 and per_page between 1 and 100 are both documented for this endpoint.
+        Assert.Equal(0, harness.RequestCount);
+    }
+
+    [Fact]
+    public async Task SearchAsync_captures_fields_the_row_model_does_not_declare()
+    {
+        using var harness = CloudflareHarness.Create();
+        harness.RespondWithPage(
+            """[{"id":"abc","script_name":"hello","usage_model":"bundled"}]""",
+            page: 1, totalPages: 1, count: 1, totalCount: 1);
+
+        var row = Assert.Single((await harness.Client.Workers.SearchAsync()).Items);
+
+        Assert.Equal("hello", row.ScriptName);
+        Assert.NotNull(row.AdditionalData);
+        Assert.Contains("usage_model", row.AdditionalData!.Keys, StringComparer.Ordinal);
+    }
+
+    [Fact]
+    public void A_row_prints_its_environment_only_when_that_environment_is_not_the_default()
+    {
+        Assert.Equal("hello", new WorkerScriptSearchItem { ScriptName = "hello" }.ToString());
+        Assert.Equal(
+            "hello",
+            new WorkerScriptSearchItem
+            {
+                ScriptName = "hello",
+                EnvironmentName = "production",
+                EnvironmentIsDefault = true,
+            }.ToString());
+        Assert.Equal(
+            "hello (staging)",
+            new WorkerScriptSearchItem
+            {
+                ScriptName = "hello",
+                EnvironmentName = "staging",
+                EnvironmentIsDefault = false,
+            }.ToString());
+    }
+}

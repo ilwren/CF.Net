@@ -20,6 +20,9 @@ public sealed class WorkersViewModel : ModuleViewModelBase
 
     private string _listPerPage = "20";
     private string _listName = string.Empty;
+    private string _searchName = string.Empty;
+    private string _searchId = string.Empty;
+    private string _searchOrderBy = string.Empty;
     private string _scriptName = string.Empty;
     private string _uploadSource = DefaultSource;
     private string _compatibilityDate = DateTime.UtcNow.ToString("yyyy-MM-dd");
@@ -42,6 +45,7 @@ public sealed class WorkersViewModel : ModuleViewModelBase
     {
         ListCommand = new RelayCommand(ListAsync);
         ListAllCommand = new RelayCommand(ListAllAsync);
+        SearchCommand = new RelayCommand(SearchAsync);
         GetCommand = new RelayCommand(GetAsync);
         GetContentCommand = new RelayCommand(GetContentAsync);
         GetSettingsCommand = new RelayCommand(GetSettingsAsync);
@@ -73,6 +77,15 @@ public sealed class WorkersViewModel : ModuleViewModelBase
 
     /// <summary>Name filter (substring).</summary>
     public string ListName { get => _listName; set => SetProperty(ref _listName, value); }
+
+    /// <summary>Name to search for; exact and partial matches both come back.</summary>
+    public string SearchName { get => _searchName; set => SetProperty(ref _searchName, value); }
+
+    /// <summary>Worker id, also called a tag; only exact matches come back.</summary>
+    public string SearchId { get => _searchId; set => SetProperty(ref _searchId, value); }
+
+    /// <summary>Sort field: created_on, modified_on or name. Always ascending.</summary>
+    public string SearchOrderBy { get => _searchOrderBy; set => SetProperty(ref _searchOrderBy, value); }
 
     /// <summary>Script every single-script call operates on.</summary>
     public string ScriptName { get => _scriptName; set => SetProperty(ref _scriptName, value); }
@@ -142,6 +155,9 @@ public sealed class WorkersViewModel : ModuleViewModelBase
 
     /// <summary>Walks every script page.</summary>
     public RelayCommand ListAllCommand { get; }
+
+    /// <summary>Searches the account's scripts by id or name.</summary>
+    public RelayCommand SearchCommand { get; }
 
     /// <summary>Gets one script.</summary>
     public RelayCommand GetCommand { get; }
@@ -217,6 +233,15 @@ public sealed class WorkersViewModel : ModuleViewModelBase
 
         return Client.Workers.UploadAsync(request);
     });
+
+    private Task SearchAsync() => RunAsync("Search worker scripts", async () =>
+        await Client.Workers.SearchAsync(new WorkerScriptSearchParameters
+        {
+            Id = Blank(SearchId),
+            Name = Blank(SearchName),
+            OrderBy = Blank(SearchOrderBy),
+            PerPage = OptionalInt(ListPerPage),
+        }));
 
     private Task DeleteAsync() => RunVoidAsync("Delete worker script", () =>
         Client.Workers.DeleteAsync(Script()));

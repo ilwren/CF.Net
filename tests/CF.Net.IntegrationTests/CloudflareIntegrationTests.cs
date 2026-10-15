@@ -935,6 +935,41 @@ public class WriteIntegrationTests : CloudflareIntegrationTest
                 }
             }
 
+            // The search endpoint is a separate index from the scripts list, so a script uploaded moments
+            // ago may not be in it yet. One retry keeps that honest without turning a lag into a red build,
+            // and a still-missing row is reported rather than asserted, because "eventually" is not a
+            // contract this library can hold Cloudflare to.
+            var search = await Client.Workers.SearchAsync(new WorkerScriptSearchParameters { Name = name });
+            if (search.Items.All(item => item.ScriptName != name))
+            {
+                await Task.Delay(TimeSpan.FromSeconds(5));
+                search = await Client.Workers.SearchAsync(new WorkerScriptSearchParameters { Name = name });
+            }
+
+            var found = search.Items.FirstOrDefault(item => item.ScriptName == name);
+            Log($"search: {search.Count} row(s), total_count={search.TotalCount}, matched={found is not null}");
+            if (found is null)
+            {
+                Warn($"GET /accounts/{{account_id}}/workers/scripts-search?name={name} returned {search.Count} " +
+                     "row(s) and none of them was the script uploaded moments earlier. Either the search " +
+                     "index lags longer than the five second retry, or its name filter does not match the " +
+                     "way the scripts list does.");
+            }
+            else
+            {
+                Log($"search row: {found} id={found.Id} created={found.CreatedOn:O} " +
+                    $"modified={found.ModifiedOn:O} service={found.ServiceName} " +
+                    $"env={found.EnvironmentName} default={found.EnvironmentIsDefault}");
+
+                if (found.AdditionalData is { Count: > 0 })
+                {
+                    Warn($"GET /accounts/{{account_id}}/workers/scripts-search returned fields this library " +
+                         $"does not model yet: {JsonSerializer.Serialize(found.AdditionalData)}. They are " +
+                         "captured rather than dropped, and belong in WorkerScriptSearchItem once they have " +
+                         "been seen more than once.");
+                }
+            }
+
             var settings = await Client.Workers.GetSettingsAsync(name);
             Log($"logpush={settings?.Logpush} tags={string.Join(",", settings?.Tags ?? new List<string>())}");
         }

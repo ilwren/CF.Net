@@ -28,6 +28,24 @@ public interface IWorkersScriptsService
         string? accountId = null,
         CancellationToken cancellationToken = default);
 
+    /// <summary>Searches the account's Worker scripts by id or by name.</summary>
+    /// <param name="parameters">Filters, sort field and page numbering; <c>null</c> for Cloudflare's defaults.</param>
+    /// <param name="accountId">Account id; falls back to the configured default when null.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <remarks>
+    /// <c>GET /accounts/{account_id}/workers/scripts-search</c> is its own endpoint rather than a filter on
+    /// <see cref="ListAsync"/>: it answers with a compact row per script - id, name, created_on,
+    /// modified_on, and the environment and service the script belongs to - and it is page numbered with
+    /// <c>result_info</c>, where the scripts list is cursor paginated. <c>id</c> matches exactly only while
+    /// <c>name</c> matches exactly and partially. Note that <c>result_info.total_count</c> is documented as
+    /// the total available without any search parameters, so it describes the account's script set and not
+    /// the filtered result.
+    /// </remarks>
+    Task<CloudflarePage<WorkerScriptSearchItem>> SearchAsync(
+        WorkerScriptSearchParameters? parameters = null,
+        string? accountId = null,
+        CancellationToken cancellationToken = default);
+
     /// <summary>Downloads a script's source.</summary>
     /// <param name="scriptName">The Worker name.</param>
     /// <param name="accountId">Account id; falls back to the configured default when null.</param>
@@ -317,6 +335,22 @@ public sealed class WorkersScriptsService : CloudflareService, IWorkersScriptsSe
                 yield break;
             }
         }
+    }
+
+    /// <inheritdoc />
+    public async Task<CloudflarePage<WorkerScriptSearchItem>> SearchAsync(
+        WorkerScriptSearchParameters? parameters = null,
+        string? accountId = null,
+        CancellationToken cancellationToken = default)
+    {
+        var account = ResolveAccountId(accountId);
+        parameters?.EnsureValid();
+
+        var request = Apply(CloudflareRequest.Get($"{AccountPath(account)}/workers/scripts-search"), parameters);
+        request.OperationName = "Search Worker Scripts";
+
+        var response = await Transport.SendAsync<List<WorkerScriptSearchItem>>(request, cancellationToken).ConfigureAwait(false);
+        return response.ToPage();
     }
 
     /// <inheritdoc />

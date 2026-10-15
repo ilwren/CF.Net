@@ -38,6 +38,30 @@
 
         <Border Classes="card">
           <StackPanel Orientation="Vertical" Spacing="10">
+            <TextBlock Classes="h2" Text="Search scripts  -  GET /accounts/{account_id}/workers/scripts-search" />
+            <WrapPanel Orientation="Horizontal">
+              <StackPanel Orientation="Vertical" Spacing="3" Margin="0,0,16,8">
+                <TextBlock Classes="hint" Text="Name (exact or partial)" />
+                <TextBox Text="{Binding SearchName, Mode=TwoWay}" Width="230" />
+              </StackPanel>
+              <StackPanel Orientation="Vertical" Spacing="3" Margin="0,0,16,8">
+                <TextBlock Classes="hint" Text="Id / tag (exact only)" />
+                <TextBox Text="{Binding SearchId, Mode=TwoWay}" Width="230" />
+              </StackPanel>
+              <StackPanel Orientation="Vertical" Spacing="3" Margin="0,0,16,8">
+                <TextBlock Classes="hint" Text="Order by" />
+                <TextBox Text="{Binding SearchOrderBy, Mode=TwoWay}" Width="140" PlaceholderText="created_on" />
+              </StackPanel>
+            </WrapPanel>
+            <WrapPanel Orientation="Horizontal">
+              <Button Classes="run" Content="Search" Command="{Binding SearchCommand}" />
+            </WrapPanel>
+            <TextBlock Classes="hint" Text="A separate endpoint from the list above: page numbered rather than cursor paginated, so it reuses the per-page box there. order_by takes created_on, modified_on or name and results are always ascending. Rows name the script's environment and service, and total_count is the account's script count with no filter applied." />
+          </StackPanel>
+        </Border>
+
+        <Border Classes="card">
+          <StackPanel Orientation="Vertical" Spacing="10">
             <TextBlock Classes="h2" Text="Script name used by everything below" />
             <TextBox Text="{Binding ScriptName, Mode=TwoWay}" MinWidth="420" HorizontalAlignment="Left" PlaceholderText="my-worker" />
             <WrapPanel Orientation="Horizontal">
@@ -46,7 +70,7 @@
               <Button Content="Get settings" Command="{Binding GetSettingsCommand}" Margin="0,0,8,0" />
               <Button Content="Delete script" Command="{Binding DeleteCommand}" />
             </WrapPanel>
-            <TextBlock Classes="hint" Text="Content comes back as modules; the library decodes base64 for you and exposes the main module directly." />
+            <TextBlock Classes="hint" Text="Get script returns the raw source text rather than JSON - Cloudflare documents this endpoint as not JSON encoded. Get content returns the module bundle as text too; bindings, usage model and compatibility date come from Get settings." />
           </StackPanel>
         </Border>
 

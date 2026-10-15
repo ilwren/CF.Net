@@ -5,8 +5,8 @@ using CFNet.Models.Workers;
 namespace CFNet.Services;
 
 /// <summary>
-/// Operations on Workers scripts: listing, uploading, deleting, deployments and the
-/// <c>*.workers.dev</c> subdomain.
+/// Operations on Workers scripts: listing and searching them, their versions, their deployments,
+/// uploading and deleting them, and the <c>*.workers.dev</c> subdomain.
 /// </summary>
 public interface IWorkersScriptsService
 {
@@ -114,6 +114,34 @@ public interface IWorkersScriptsService
     Task<WorkerVersionDetail?> GetVersionAsync(
         string scriptName,
         string versionId,
+        string? accountId = null,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>Uploads a new version of a script without deploying it.</summary>
+    /// <param name="scriptName">The Worker name.</param>
+    /// <param name="request">The bundle and its configuration. Validated locally first.</param>
+    /// <param name="bindingsInheritStrict">
+    /// Sends <c>bindings_inherit=strict</c>, which fails the upload with error 10057 when an <c>inherit</c>
+    /// binding cannot be resolved against the latest uploaded version - which may not be the deployed one.
+    /// Without it Cloudflare silently drops the inherit bindings it cannot resolve.
+    /// </param>
+    /// <param name="accountId">Account id; falls back to the configured default when null.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>The version that was created, read back in full.</returns>
+    /// <remarks>
+    /// <c>POST …/workers/scripts/{script_name}/versions</c> takes the same <c>multipart/form-data</c> body as
+    /// <see cref="UploadAsync(UploadWorkerScriptRequest, string, CancellationToken)"/> - a <c>metadata</c>
+    /// part plus one part per module - but it creates a version and leaves the deployment alone, so traffic
+    /// keeps going to whatever was serving before. Module syntax is required: the reference publishes
+    /// <c>main_module</c> as mandatory here and offers no <c>body_part</c> alternative. The response is the
+    /// version in full, and adds two things the version read does not: <c>startup_time_ms</c> and
+    /// <c>exports_reconciliation</c>. This endpoint needs Workers Scripts Write, which is narrower than the
+    /// read permission the other version endpoints accept.
+    /// </remarks>
+    Task<WorkerVersionDetail?> CreateVersionAsync(
+        string scriptName,
+        UploadWorkerScriptRequest request,
+        bool? bindingsInheritStrict = null,
         string? accountId = null,
         CancellationToken cancellationToken = default);
 
@@ -453,6 +481,48 @@ public sealed class WorkersScriptsService : CloudflareService, IWorkersScriptsSe
     }
 
     /// <inheritdoc />
+    public async Task<WorkerVersionDetail?> CreateVersionAsync(
+        string scriptName,
+        UploadWorkerScriptRequest request,
+        bool? bindingsInheritStrict = null,
+        string? accountId = null,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+
+        var account = ResolveAccountId(accountId);
+        var name = Require(scriptName, nameof(scriptName));
+
+        // Validate() insists on a script name because an upload carries it in the URL it builds; a version
+        // takes the name from this argument instead, so the argument fills the request in first.
+        request.ScriptName ??= name;
+        request.Validate();
+
+        if (request.BodyPart is { Length: > 0 })
+        {
+            throw new Exceptions.CloudflareConfigurationException(
+                "A version upload requires module syntax: the reference publishes main_module as required " +
+                "for POST …/versions and offers no body_part alternative, so set MainModule instead.");
+        }
+
+        var httpRequest = new CloudflareRequest(
+            HttpMethod.Post,
+            $"{AccountPath(account)}/workers/scripts/{CloudflareUrl.EncodeSegment(name)}/versions")
+        {
+            Body = BuildWorkerBundle(request),
+            OperationName = "Upload Worker Version",
+        };
+
+        if (bindingsInheritStrict == true)
+        {
+            httpRequest.Query.Add("bindings_inherit", "strict");
+        }
+
+        var response = await Transport.SendAsync<WorkerVersionDetail>(httpRequest, cancellationToken).ConfigureAwait(false);
+        return response.Result;
+    }
+
+    /// <inheritdoc />
     public async Task<WorkerDeploymentListResult?> ListDeploymentsAsync(
         string scriptName,
         WorkerDeploymentListParameters? parameters = null,
@@ -512,19 +582,9 @@ public sealed class WorkersScriptsService : CloudflareService, IWorkersScriptsSe
         var name = Require(request.ScriptName, nameof(request.ScriptName));
         var path = $"{AccountPath(account)}/workers/scripts/{CloudflareUrl.EncodeSegment(name)}";
 
-        // The request object itself is the metadata part: ScriptName and Modules are [JsonIgnore]d,
-        // so only the fields Cloudflare expects inside "metadata" are serialised.
-        var multipart = new MultipartRequestBody().AddJson("metadata", request);
-
-        foreach (var module in request.Modules!)
-        {
-            var bytes = module.Bytes ?? DecodeBase64(module);
-            multipart.AddFile(module.Name!, bytes, module.ContentType ?? WorkerModuleContentTypes.JavaScriptModule, module.Name);
-        }
-
         var httpRequest = new CloudflareRequest(HttpMethod.Put, path)
         {
-            Body = multipart,
+            Body = BuildWorkerBundle(request),
             OperationName = "Upload Worker Script",
         };
 
@@ -677,6 +737,35 @@ public sealed class WorkersScriptsService : CloudflareService, IWorkersScriptsSe
 
         var response = await Transport.SendAsync<WorkerScriptSubdomain>(httpRequest, cancellationToken).ConfigureAwait(false);
         return response.Result;
+    }
+
+    /// <summary>
+    /// Builds the <c>multipart/form-data</c> body both Worker upload endpoints take: a JSON
+    /// <c>metadata</c> part plus one file part per module.
+    /// </summary>
+    /// <remarks>
+    /// The request object itself is the metadata part - <see cref="UploadWorkerScriptRequest.ScriptName"/>
+    /// and <see cref="UploadWorkerScriptRequest.Modules"/> are marked <c>[JsonIgnore]</c>, so only
+    /// the fields Cloudflare expects inside <c>metadata</c> are serialised. A very common failure is
+    /// uploading an ES module with the wrong media type, which Cloudflare reports as
+    /// <c>10021: Main module name is not present in bundle</c>; <see cref="UploadWorkerScriptRequest.Validate"/>
+    /// catches the mistakes that produce that message before the body is built.
+    /// </remarks>
+    private static MultipartRequestBody BuildWorkerBundle(UploadWorkerScriptRequest request)
+    {
+        var multipart = new MultipartRequestBody().AddJson("metadata", request);
+
+        foreach (var module in request.Modules!)
+        {
+            var bytes = module.Bytes ?? DecodeBase64(module);
+            multipart.AddFile(
+                module.Name!,
+                bytes,
+                module.ContentType ?? WorkerModuleContentTypes.JavaScriptModule,
+                module.Name);
+        }
+
+        return multipart;
     }
 
     private static byte[] DecodeBase64(WorkerModule module)

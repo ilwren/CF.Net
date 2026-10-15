@@ -10,11 +10,16 @@ namespace CFNet.Models.Workers;
 /// </summary>
 /// <remarks>
 /// <para>
-/// The deployment schema names both keys: <c>workers/message</c> is a human-readable note truncated to
-/// 1000 bytes, and <c>workers/triggered_by</c> is the operation that created the object. The version schema
-/// does not name its annotations at all, and a live version uploaded through the API carried
-/// <c>{"workers/triggered_by": "upload"}</c> - the same vocabulary - so one type serves both rather than a
-/// string map on one side and properties on the other.
+/// Three schemas name three different parts of this vocabulary. The version upload's <c>metadata</c>
+/// publishes eight keys - an alias, a tag, a message and five the CI environment fills in about the commit
+/// and pull request a version was built from. The deployment schema publishes <c>workers/message</c> and
+/// <c>workers/triggered_by</c>. The version read publishes none of them, yet a live version uploaded through
+/// the API carried <c>{"workers/triggered_by": "upload"}</c>. One type covers the union rather than a string
+/// map on one side and properties on the other, and anything a future schema adds is captured.
+/// </para>
+/// <para>
+/// The published limits are permissive rather than strict: a <c>workers/message</c> longer than 1000 bytes is
+/// truncated by Cloudflare, not refused, so this type validates nothing and only documents the maxima.
 /// </para>
 /// <para>
 /// The keys contain a slash, which is why they need explicit <see cref="JsonPropertyNameAttribute"/> values:
@@ -35,6 +40,34 @@ public sealed class WorkerAnnotations
     [JsonPropertyName("workers/triggered_by")]
     public string? TriggeredBy { get; set; }
 
+    /// <summary>Alias associated with the version. Up to 63 characters.</summary>
+    [JsonPropertyName("workers/alias")]
+    public string? Alias { get; set; }
+
+    /// <summary>User-provided identifier for the version. Up to 100 bytes.</summary>
+    [JsonPropertyName("workers/tag")]
+    public string? Tag { get; set; }
+
+    /// <summary>Full commit SHA the version was built from, detected from the CI environment. Up to 64 bytes.</summary>
+    [JsonPropertyName("workers/commit_sha")]
+    public string? CommitSha { get; set; }
+
+    /// <summary>URL of the source repository the version was built from. Up to 512 bytes.</summary>
+    [JsonPropertyName("workers/repository_url")]
+    public string? RepositoryUrl { get; set; }
+
+    /// <summary>Number of the pull or merge request, detected from the CI environment. Up to 20 bytes.</summary>
+    [JsonPropertyName("workers/pull_request_number")]
+    public string? PullRequestNumber { get; set; }
+
+    /// <summary>Title of the pull or merge request, detected from the CI environment. Up to 512 bytes.</summary>
+    [JsonPropertyName("workers/pull_request_title")]
+    public string? PullRequestTitle { get; set; }
+
+    /// <summary>URL of the pull or merge request, detected from the CI environment. Up to 512 bytes.</summary>
+    [JsonPropertyName("workers/pull_request_url")]
+    public string? PullRequestUrl { get; set; }
+
     /// <summary>Captures any annotation key Cloudflare adds in the future.</summary>
     [JsonExtensionData]
     public IDictionary<string, JsonElement>? AdditionalData { get; set; }
@@ -43,13 +76,61 @@ public sealed class WorkerAnnotations
     [JsonIgnore]
     public bool IsEmpty =>
         string.IsNullOrEmpty(Message) && string.IsNullOrEmpty(TriggeredBy) &&
-        AdditionalData is not { Count: > 0 };
+        string.IsNullOrEmpty(Alias) && string.IsNullOrEmpty(Tag) &&
+        string.IsNullOrEmpty(CommitSha) && string.IsNullOrEmpty(RepositoryUrl) &&
+        string.IsNullOrEmpty(PullRequestNumber) && string.IsNullOrEmpty(PullRequestTitle) &&
+        string.IsNullOrEmpty(PullRequestUrl) && AdditionalData is not { Count: > 0 };
 
     /// <inheritdoc />
-    public override string ToString() =>
-        TriggeredBy is { Length: > 0 } triggeredBy
+    public override string ToString()
+    {
+        var core = TriggeredBy is { Length: > 0 } triggeredBy
             ? Message is { Length: > 0 } ? $"{triggeredBy}: {Message}" : triggeredBy
             : Message ?? string.Empty;
+
+        var extras = new List<string>();
+        if (Alias is { Length: > 0 })
+        {
+            extras.Add($"alias={Alias}");
+        }
+
+        if (Tag is { Length: > 0 })
+        {
+            extras.Add($"tag={Tag}");
+        }
+
+        if (CommitSha is { Length: > 0 })
+        {
+            extras.Add($"commit={CommitSha}");
+        }
+
+        if (RepositoryUrl is { Length: > 0 })
+        {
+            extras.Add($"repo={RepositoryUrl}");
+        }
+
+        if (PullRequestNumber is { Length: > 0 })
+        {
+            extras.Add($"pr={PullRequestNumber}");
+        }
+
+        if (PullRequestTitle is { Length: > 0 })
+        {
+            extras.Add($"pr_title={PullRequestTitle}");
+        }
+
+        if (PullRequestUrl is { Length: > 0 })
+        {
+            extras.Add($"pr_url={PullRequestUrl}");
+        }
+
+        if (extras.Count == 0)
+        {
+            return core;
+        }
+
+        return core.Length == 0 ? string.Join(" ", extras) : $"{core} [{string.Join(" ", extras)}]";
+    }
 }
 
 /// <summary>

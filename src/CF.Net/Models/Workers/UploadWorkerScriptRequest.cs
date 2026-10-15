@@ -100,6 +100,18 @@ public sealed class UploadWorkerScriptRequest
     [JsonPropertyName("assets")]
     public WorkerAssetsConfiguration? Assets { get; set; }
 
+    /// <summary>
+    /// Annotations to attach to this upload: a message, an alias, a tag, and the commit and pull request
+    /// details Cloudflare documents. Read back on the version.
+    /// </summary>
+    /// <remarks>
+    /// Published on the version upload's <c>metadata</c>, which shares this vocabulary with the script
+    /// upload. Null by default, and nulls are not written, so an upload that does not set it sends exactly
+    /// the body it sent before this property existed.
+    /// </remarks>
+    [JsonPropertyName("annotations")]
+    public WorkerAnnotations? Annotations { get; set; }
+
     /// <summary>Tags attached to the script.</summary>
     [JsonPropertyName("tags")]
     public List<string>? Tags { get; set; }

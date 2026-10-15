@@ -1016,6 +1016,74 @@ public class WriteIntegrationTests : CloudflareIntegrationTest
                 }
             }
 
+            // Uploading a version leaves the deployment alone, so this is safe after the deployment
+            // assertions above: traffic still goes to the version the first upload created. This is also
+            // the only call that answers with startup_time_ms and exports_reconciliation.
+            var secondRequest = new UploadWorkerScriptRequest(
+                name,
+                "export default { async fetch() { return new Response('v2'); } }",
+                DateTime.UtcNow.ToString("yyyy-MM-dd"))
+            {
+                Annotations = new WorkerAnnotations
+                {
+                    Message = "CF.Net integration second version",
+                    Tag = UniqueSuffix("cfnet"),
+                },
+            };
+
+            var created = await Client.Workers.CreateVersionAsync(name, secondRequest);
+            Assert.NotNull(created);
+            Assert.True(created!.Number > latest?.Number);
+            Assert.NotEqual(latest?.Id, created.Id);
+            Assert.Equal(WorkerVersionSources.Api, created.Metadata?.Source);
+            Log($"created version {created.Number} ({created.Id}) startup={created.StartupTimeMs}ms " +
+                $"resources={created.Resources} runtime={created.Resources?.ScriptRuntime} " +
+                $"preview={created.Metadata?.HasPreview}");
+
+            var createdExtras = new (string Where, IDictionary<string, JsonElement>? Data)[]
+            {
+                ("version", created.AdditionalData),
+                ("resources", created.Resources?.AdditionalData),
+                ("script", created.Resources?.Script?.AdditionalData),
+                ("script_runtime", created.Resources?.ScriptRuntime?.AdditionalData),
+                ("metadata", created.Metadata?.AdditionalData),
+            };
+            var createdUnmodelled = createdExtras.Where(extra => extra.Data is { Count: > 0 }).ToList();
+            if (createdUnmodelled.Count > 0)
+            {
+                Warn($"POST /accounts/{{account_id}}/workers/scripts/{name}/versions returned fields this " +
+                     "library does not model yet - " +
+                     string.Join("; ", createdUnmodelled.Select(
+                         extra => $"{extra.Where}: {JsonSerializer.Serialize(extra.Data)}")) +
+                     ". They are captured rather than dropped.");
+            }
+
+            // Published only on this response, and never yet seen live: reporting it is what would turn the
+            // deliberately raw ExportsReconciliation into a type.
+            if (created.ExportsReconciliation is { ValueKind: JsonValueKind.Object } reconciliation &&
+                reconciliation.EnumerateObject().Any())
+            {
+                Warn($"POST /accounts/{{account_id}}/workers/scripts/{name}/versions returned " +
+                     $"exports_reconciliation, which this library keeps raw: {reconciliation.GetRawText()}.");
+            }
+
+            // The reference says Cloudflare fills the CI annotations in from the environment; this checks
+            // that a caller can set one by hand and read it back, which no version schema promises.
+            var readBack = await Client.Workers.GetVersionAsync(name, created.Id!);
+            Log($"read back: annotations={readBack?.Annotations} preview={readBack?.Metadata?.HasPreview} " +
+                $"startup={readBack?.StartupTimeMs}");
+            if (readBack?.Annotations?.Message != secondRequest.Annotations!.Message)
+            {
+                Warn($"POST /accounts/{{account_id}}/workers/scripts/{name}/versions accepted workers/message " +
+                     $"but GET …/versions/{created.Id} returned " +
+                     $"{JsonSerializer.Serialize(readBack?.Annotations)}. Either annotations are not readable " +
+                     "on a single version, or the message was dropped on the way in.");
+            }
+
+            var afterCreate = await Client.Workers.ListVersionsAsync(name);
+            Assert.Equal(2, afterCreate!.Count);
+            Assert.Equal(created.Id, afterCreate.Latest?.Id);
+
             var settings = await Client.Workers.GetSettingsAsync(name);
             Log($"logpush={settings?.Logpush} tags={string.Join(",", settings?.Tags ?? new List<string>())}");
         }

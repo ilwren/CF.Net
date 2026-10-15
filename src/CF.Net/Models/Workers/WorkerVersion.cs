@@ -103,15 +103,24 @@ public sealed class WorkerVersionMetadata
     [JsonPropertyName("source")]
     public string? Source { get; set; }
 
-    /// <summary>Whether the version can be previewed.</summary>
-    /// <remarks>
-    /// The reference spells this one property <c>hasPreview</c> while every other metadata property is snake
-    /// case, but a live answer sent <c>has_preview</c>, and that is what this reads. Were Cloudflare to send
-    /// the camelCase spelling instead it would land in <see cref="AdditionalData"/>, which the integration
-    /// run reports, rather than being dropped.
-    /// </remarks>
+    /// <summary>Whether the version can be previewed, in whichever spelling arrived.</summary>
+    [JsonIgnore]
+    public bool? HasPreview => HasPreviewSnakeCase ?? HasPreviewCamelCase;
+
+    /// <summary>
+    /// The <c>has_preview</c> spelling: every other metadata property is snake case, and this is what a live
+    /// list answer sent.
+    /// </summary>
     [JsonPropertyName("has_preview")]
-    public bool? HasPreview { get; set; }
+    public bool? HasPreviewSnakeCase { get; set; }
+
+    /// <summary>
+    /// The <c>hasPreview</c> spelling the reference publishes for this one property, both in the versions
+    /// schema and in its own 200 example for the version upload. Reading only one spelling would quietly
+    /// drop the other, so both are read and <see cref="HasPreview"/> reports whichever arrived.
+    /// </summary>
+    [JsonPropertyName("hasPreview")]
+    public bool? HasPreviewCamelCase { get; set; }
 
     /// <summary>When the version was last modified.</summary>
     [JsonPropertyName("modified_on")]
@@ -228,6 +237,27 @@ public sealed class WorkerVersionDetail
     [JsonPropertyName("resources")]
     public WorkerVersionResources? Resources { get; set; }
 
+    /// <summary>
+    /// How long the Worker took to start, in milliseconds. Published on the version upload's response; the
+    /// version read does not list it, so it stays <c>null</c> there.
+    /// </summary>
+    [JsonPropertyName("startup_time_ms")]
+    public int? StartupTimeMs { get; set; }
+
+    /// <summary>
+    /// What the upload did to this Worker's Durable Object exports - created, deleted, updated, renamed,
+    /// transferred and pending transfers, plus <c>info</c> and <c>warnings</c> entries naming the class, a
+    /// message, a <c>scenario</c> such as <c>code_class_not_in_exports</c> and the namespace involved.
+    /// </summary>
+    /// <remarks>
+    /// Deliberately raw, like <see cref="WorkerVersionScriptRuntime.Exports"/>. Every field describes a
+    /// Durable Object migration outcome, the reference publishes nine of them across four lifecycle shapes,
+    /// and this library has no way to exercise any of it yet: a wrong model here would be worse than an
+    /// honest <see cref="JsonElement"/>. The integration run reports what a real upload returns.
+    /// </remarks>
+    [JsonPropertyName("exports_reconciliation")]
+    public JsonElement? ExportsReconciliation { get; set; }
+
     /// <summary>Captures any field Cloudflare adds in the future.</summary>
     [JsonExtensionData]
     public IDictionary<string, JsonElement>? AdditionalData { get; set; }
@@ -246,6 +276,13 @@ public sealed class WorkerVersionResources
     /// <see cref="WorkerBinding"/> vocabulary an upload writes - which carries its own
     /// <see cref="WorkerBinding.AdditionalData"/> for anything a binding type adds.
     /// </summary>
+    /// <remarks>
+    /// Cloudflare's own 200 example of the version upload response carries <c>"bindings": {}</c> - an empty
+    /// object where the schema implies a list - so <see cref="WorkerBindingListConverter"/> accepts either
+    /// and reports an empty list for the object. Reading only the array would make a Worker with no bindings
+    /// fail to parse, and this library now throws on an unparseable envelope rather than returning null.
+    /// </remarks>
+    [JsonConverter(typeof(WorkerBindingListConverter))]
     [JsonPropertyName("bindings")]
     public List<WorkerBinding>? Bindings { get; set; }
 
@@ -319,8 +356,14 @@ public sealed class WorkerVersionScriptRuntime
 {
     /// <summary>
     /// Date indicating targeted support in the Workers runtime. Backwards incompatible fixes after this
-    /// date do not affect the Worker. A <c>yyyy-MM-dd</c> string rather than a timestamp, as published.
+    /// date do not affect the Worker.
     /// </summary>
+    /// <remarks>
+    /// Published as a plain string, and Cloudflare's own two examples disagree about its shape: an upload
+    /// writes <c>yyyy-MM-dd</c>, while the version upload's 200 example answers
+    /// <c>2022-11-08T00:00:00Z</c>. A <see cref="DateTimeOffset"/> would reject one of the two, so this
+    /// stays the string the API sent.
+    /// </remarks>
     [JsonPropertyName("compatibility_date")]
     public string? CompatibilityDate { get; set; }
 
@@ -376,5 +419,67 @@ public sealed class WorkerVersionLimits
 
     /// <inheritdoc />
     public override string ToString() => CpuMs is { } cpu ? $"{cpu} ms CPU" : "no CPU limit reported";
+}
+
+/// <summary>
+/// Reads <c>resources.bindings</c> as a list whether Cloudflare sends the array the upload metadata
+/// documents or the empty object its own published response example shows.
+/// </summary>
+/// <remarks>
+/// The items are deserialised one at a time rather than by handing the array back to the serializer, which
+/// would re-enter this converter. Writing always produces an array, because that is the shape an upload
+/// writes and the one the schema describes.
+/// </remarks>
+internal sealed class WorkerBindingListConverter : JsonConverter<List<WorkerBinding>>
+{
+    /// <inheritdoc />
+    public override List<WorkerBinding>? Read(
+        ref Utf8JsonReader reader,
+        Type typeToConvert,
+        JsonSerializerOptions options)
+    {
+        switch (reader.TokenType)
+        {
+            case JsonTokenType.Null:
+                return null;
+
+            case JsonTokenType.StartObject:
+                // "bindings": {} - no bindings, expressed as an object rather than an empty array.
+                reader.Skip();
+                return new List<WorkerBinding>();
+
+            case JsonTokenType.StartArray:
+                var bindings = new List<WorkerBinding>();
+                while (reader.Read() && reader.TokenType != JsonTokenType.EndArray)
+                {
+                    var binding = JsonSerializer.Deserialize<WorkerBinding>(ref reader, options);
+                    if (binding is not null)
+                    {
+                        bindings.Add(binding);
+                    }
+                }
+
+                return bindings;
+
+            default:
+                throw new JsonException(
+                    $"resources.bindings was neither an array nor an object but {reader.TokenType}.");
+        }
+    }
+
+    /// <inheritdoc />
+    public override void Write(
+        Utf8JsonWriter writer,
+        List<WorkerBinding> value,
+        JsonSerializerOptions options)
+    {
+        writer.WriteStartArray();
+        foreach (var binding in value)
+        {
+            JsonSerializer.Serialize(writer, binding, options);
+        }
+
+        writer.WriteEndArray();
+    }
 }
 

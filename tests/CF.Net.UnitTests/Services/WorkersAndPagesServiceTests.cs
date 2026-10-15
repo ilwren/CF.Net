@@ -2030,3 +2030,233 @@ public class WorkerVersionDetailTests
         }.ToString());
     }
 }
+
+/// <summary>
+/// <c>POST /accounts/{account_id}/workers/scripts/{script_name}/versions</c> - the same multipart bundle as
+/// an upload, but it creates a version and leaves the deployment alone.
+/// </summary>
+public class WorkerVersionUploadTests
+{
+    /// <summary>A minimal module-syntax bundle, which is all this endpoint accepts.</summary>
+    private static UploadWorkerScriptRequest Bundle() =>
+        new("hello", "export default { async fetch() { return new Response('v2'); } }", "2026-10-01");
+
+    [Fact]
+    public async Task CreateVersionAsync_posts_the_same_multipart_bundle_an_upload_does()
+    {
+        using var harness = CloudflareHarness.Create();
+        harness.RespondWithResult("""
+            {"id":"v-2","number":2,"startup_time_ms":10,"metadata":{"source":"api","hasPreview":true}}
+            """);
+
+        var request = Bundle();
+        request.Annotations = new WorkerAnnotations { Message = "second try", Tag = "v2" };
+
+        var version = await harness.Client.Workers.CreateVersionAsync("hello", request);
+
+        Assert.Equal(HttpMethod.Post, harness.LastRequest.Method);
+        Assert.EndsWith("/workers/scripts/hello/versions", harness.LastRequest.Path, StringComparison.Ordinal);
+        Assert.StartsWith("multipart/form-data", harness.LastRequest.ContentType, StringComparison.Ordinal);
+        Assert.Equal(string.Empty, harness.LastRequest.Query);
+
+        var body = harness.LastRequest.Body!;
+        Assert.Contains("name=metadata", body, StringComparison.Ordinal);
+        Assert.Contains("\"main_module\":\"worker.mjs\"", body, StringComparison.Ordinal);
+        Assert.Contains("\"compatibility_date\":\"2026-10-01\"", body, StringComparison.Ordinal);
+        Assert.Contains("\"workers/message\":\"second try\"", body, StringComparison.Ordinal);
+        Assert.Contains("\"workers/tag\":\"v2\"", body, StringComparison.Ordinal);
+        Assert.Contains("name=worker.mjs", body, StringComparison.Ordinal);
+        Assert.Contains("application/javascript+module", body, StringComparison.Ordinal);
+
+        Assert.NotNull(version);
+        Assert.Equal("v-2", version!.Id);
+        Assert.Equal(2, version.Number);
+        Assert.Equal(10, version.StartupTimeMs);
+        Assert.Equal(WorkerVersionSources.Api, version.Metadata?.Source);
+
+        // The response example publishes the preview flag in camelCase, unlike the live list answer.
+        Assert.True(version.Metadata?.HasPreview);
+    }
+
+    [Fact]
+    public async Task CreateVersionAsync_sends_bindings_inherit_strict_only_when_asked()
+    {
+        using var harness = CloudflareHarness.Create();
+        harness.RespondWithResult("{\"id\":\"v-2\"}");
+        harness.RespondWithResult("{\"id\":\"v-3\"}");
+
+        await harness.Client.Workers.CreateVersionAsync("hello", Bundle(), bindingsInheritStrict: true);
+        await harness.Client.Workers.CreateVersionAsync("hello", Bundle());
+
+        // Strict is the only published value, and it changes an unresolvable inherit binding from something
+        // Cloudflare quietly drops into error 10057.
+        Assert.Equal("?bindings_inherit=strict", harness.Requests[0].Query);
+        Assert.Equal(string.Empty, harness.Requests[1].Query);
+    }
+
+    [Fact]
+    public async Task CreateVersionAsync_rejects_service_worker_syntax()
+    {
+        using var harness = CloudflareHarness.Create();
+
+        var request = new UploadWorkerScriptRequest
+        {
+            ScriptName = "hello",
+            BodyPart = "worker.js",
+            Modules = new List<WorkerModule>
+            {
+                new("worker.js", "addEventListener('fetch', event => {})", WorkerModuleContentTypes.JavaScript),
+            },
+        };
+
+        var exception = await Assert.ThrowsAsync<CloudflareConfigurationException>(() =>
+            harness.Client.Workers.CreateVersionAsync("hello", request));
+
+        Assert.Contains("module syntax", exception.Message, StringComparison.Ordinal);
+        Assert.Equal(0, harness.RequestCount);
+    }
+
+    [Fact]
+    public async Task CreateVersionAsync_takes_the_script_name_from_the_path_when_the_request_has_none()
+    {
+        using var harness = CloudflareHarness.Create();
+        harness.RespondWithResult("{\"id\":\"v-2\"}");
+
+        var request = Bundle();
+        request.ScriptName = null;
+
+        await harness.Client.Workers.CreateVersionAsync("hello", request);
+
+        // Validate() requires a script name because an upload builds its URL from one; a version already
+        // has the name in the path, so the argument stands in for it rather than failing the request.
+        Assert.EndsWith("/workers/scripts/hello/versions", harness.LastRequest.Path, StringComparison.Ordinal);
+        Assert.Equal(1, harness.RequestCount);
+    }
+
+    [Fact]
+    public async Task Resources_bindings_read_as_an_empty_list_when_cloudflare_sends_the_object_its_example_shows()
+    {
+        using var harness = CloudflareHarness.Create();
+        harness.RespondWithResult("""{"id":"v-1","resources":{"bindings":{}}}""");
+
+        var version = await harness.Client.Workers.GetVersionAsync("hello", "v-1");
+
+        // Cloudflare's own 200 example of the version upload response carries "bindings": {} where the
+        // schema implies a list. Reading only the array would throw on a Worker with no bindings.
+        Assert.NotNull(version);
+        Assert.NotNull(version!.Resources?.Bindings);
+        Assert.Empty(version.Resources!.Bindings!);
+    }
+
+    [Fact]
+    public async Task Resources_bindings_still_read_as_a_list_when_cloudflare_sends_an_array()
+    {
+        using var harness = CloudflareHarness.Create();
+        harness.RespondWithResult("""
+            {"id":"v-1","resources":{"bindings":[
+              {"name":"ENV","type":"plain_text","text":"production"},
+              {"name":"MY_KV","type":"kv_namespace","namespace_id":"ns-1"}
+            ]}}
+            """);
+
+        var version = await harness.Client.Workers.GetVersionAsync("hello", "v-1");
+
+        var bindings = version!.Resources!.Bindings!;
+        Assert.Equal(2, bindings.Count);
+        Assert.Equal("ENV", bindings[0].Name);
+        Assert.Equal(WorkerBindingTypes.PlainText, bindings[0].Type);
+        Assert.Equal("ns-1", bindings[1].NamespaceId);
+    }
+
+    [Theory]
+    [InlineData("{\"has_preview\":true}")]
+    [InlineData("{\"hasPreview\":true}")]
+    public async Task Metadata_reads_the_preview_flag_in_either_spelling(string metadata)
+    {
+        using var harness = CloudflareHarness.Create();
+        harness.RespondWithResult($"{{\"id\":\"v-1\",\"metadata\":{metadata}}}");
+
+        var version = await harness.Client.Workers.GetVersionAsync("hello", "v-1");
+
+        Assert.True(version!.Metadata?.HasPreview);
+    }
+
+    [Fact]
+    public async Task Annotations_read_the_whole_vocabulary_the_version_upload_publishes()
+    {
+        using var harness = CloudflareHarness.Create();
+        harness.RespondWithResult("""
+            {
+              "id": "v-1",
+              "annotations": {
+                "workers/message": "ship it",
+                "workers/alias": "canary",
+                "workers/tag": "v1.2.3",
+                "workers/commit_sha": "0123456789abcdef",
+                "workers/repository_url": "https://example.com/repo",
+                "workers/pull_request_number": "42",
+                "workers/pull_request_title": "Fix the thing",
+                "workers/pull_request_url": "https://example.com/repo/pull/42",
+                "workers/triggered_by": "upload"
+              }
+            }
+            """);
+
+        var version = await harness.Client.Workers.GetVersionAsync("hello", "v-1");
+        var annotations = version!.Annotations;
+
+        Assert.NotNull(annotations);
+        Assert.Equal("ship it", annotations!.Message);
+        Assert.Equal("canary", annotations.Alias);
+        Assert.Equal("v1.2.3", annotations.Tag);
+        Assert.Equal("0123456789abcdef", annotations.CommitSha);
+        Assert.Equal("https://example.com/repo", annotations.RepositoryUrl);
+        Assert.Equal("42", annotations.PullRequestNumber);
+        Assert.Equal("Fix the thing", annotations.PullRequestTitle);
+        Assert.Equal("https://example.com/repo/pull/42", annotations.PullRequestUrl);
+        Assert.Equal("upload", annotations.TriggeredBy);
+        Assert.False(annotations.IsEmpty);
+    }
+
+    [Fact]
+    public void Annotations_print_the_ci_details_after_the_message_and_trigger()
+    {
+        Assert.Equal(
+            "tag=v1.2.3 commit=0123456",
+            new WorkerAnnotations { Tag = "v1.2.3", CommitSha = "0123456" }.ToString());
+        Assert.Equal(
+            "upload: ship it [alias=canary pr=42]",
+            new WorkerAnnotations
+            {
+                TriggeredBy = "upload",
+                Message = "ship it",
+                Alias = "canary",
+                PullRequestNumber = "42",
+            }.ToString());
+        Assert.True(new WorkerAnnotations().IsEmpty);
+        Assert.False(new WorkerAnnotations { Alias = "canary" }.IsEmpty);
+    }
+
+    [Fact]
+    public async Task Exports_reconciliation_stays_readable_as_raw_json()
+    {
+        using var harness = CloudflareHarness.Create();
+        harness.RespondWithResult("""
+            {"id":"v-1","number":1,"exports_reconciliation":{
+              "created":["Counter"],
+              "renamed":[{"from":"OldCounter","to":"Counter"}],
+              "warnings":[{"class":"Counter","message":"m","scenario":"code_class_not_in_exports"}]
+            }}
+            """);
+
+        var version = await harness.Client.Workers.GetVersionAsync("hello", "v-1");
+
+        var reconciliation = version!.ExportsReconciliation;
+        Assert.NotNull(reconciliation);
+        Assert.Equal("Counter", reconciliation!.Value.GetProperty("created")[0].GetString());
+        Assert.Equal("OldCounter", reconciliation.Value.GetProperty("renamed")[0].GetProperty("from").GetString());
+        Assert.Equal(
+            "code_class_not_in_exports",
+            reconciliation.Value.GetProperty("warnings")[0].GetProperty("scenario").GetString());
+    }
+}

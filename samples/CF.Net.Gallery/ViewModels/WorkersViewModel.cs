@@ -28,6 +28,7 @@ public sealed class WorkersViewModel : ModuleViewModelBase
     private string _compatibilityDate = DateTime.UtcNow.ToString("yyyy-MM-dd");
     private string _bindingsJson = string.Empty;
     private string _versionId = string.Empty;
+    private string _versionMessage = string.Empty;
     private string _percentage = "100";
     private string _subdomain = string.Empty;
     private bool _subdomainEnabled = true;
@@ -53,6 +54,7 @@ public sealed class WorkersViewModel : ModuleViewModelBase
         DeleteCommand = new RelayCommand(DeleteAsync);
         ListVersionsCommand = new RelayCommand(ListVersionsAsync);
         GetVersionCommand = new RelayCommand(GetVersionAsync);
+        CreateVersionCommand = new RelayCommand(CreateVersionAsync);
         ListDeploymentsCommand = new RelayCommand(ListDeploymentsAsync);
         CreateDeploymentCommand = new RelayCommand(CreateDeploymentAsync);
         GetSubdomainCommand = new RelayCommand(GetSubdomainAsync);
@@ -104,8 +106,11 @@ public sealed class WorkersViewModel : ModuleViewModelBase
     /// </summary>
     public string BindingsJson { get => _bindingsJson; set => SetProperty(ref _bindingsJson, value); }
 
-    /// <summary>Version id to deploy.</summary>
+    /// <summary>Version id to read or deploy.</summary>
     public string VersionId { get => _versionId; set => SetProperty(ref _versionId, value); }
+
+    /// <summary>Sent as the workers/message annotation on a version upload.</summary>
+    public string VersionMessage { get => _versionMessage; set => SetProperty(ref _versionMessage, value); }
 
     /// <summary>Traffic percentage for the version.</summary>
     public string Percentage { get => _percentage; set => SetProperty(ref _percentage, value); }
@@ -181,6 +186,9 @@ public sealed class WorkersViewModel : ModuleViewModelBase
 
     /// <summary>Reads one version, including its resources.</summary>
     public RelayCommand GetVersionCommand { get; }
+
+    /// <summary>Uploads a version without deploying it.</summary>
+    public RelayCommand CreateVersionCommand { get; }
 
     /// <summary>Lists deployments.</summary>
     public RelayCommand ListDeploymentsCommand { get; }
@@ -265,6 +273,23 @@ public sealed class WorkersViewModel : ModuleViewModelBase
             ?? throw new ArgumentException("Enter a version id - list the script's versions first.");
 
         return Client.Workers.GetVersionAsync(Script(), versionId);
+    });
+
+    private Task CreateVersionAsync() => RunAsync("Upload worker version", () =>
+    {
+        var request = new UploadWorkerScriptRequest(
+            Script(),
+            UploadSource ?? string.Empty,
+            Blank(CompatibilityDate))
+        {
+            Annotations = string.IsNullOrWhiteSpace(VersionMessage)
+                ? null
+                : new WorkerAnnotations { Message = VersionMessage },
+        };
+
+        request.Validate();
+
+        return Client.Workers.CreateVersionAsync(Script(), request);
     });
 
     private Task ListDeploymentsAsync() => RunAsync("List worker deployments", async () =>

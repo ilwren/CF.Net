@@ -95,12 +95,17 @@
 
         <Border Classes="card">
           <StackPanel Orientation="Vertical" Spacing="10">
-            <TextBlock Classes="h2" Text="Versions  -  GET /accounts/{account_id}/workers/scripts/{script_name}/versions" />
+            <TextBlock Classes="h2" Text="Versions  -  GET / POST /accounts/{account_id}/workers/scripts/{script_name}/versions" />
+            <StackPanel Orientation="Vertical" Spacing="3" Margin="0,0,16,8">
+              <TextBlock Classes="hint" Text="workers/message annotation for the upload" />
+              <TextBox Text="{Binding VersionMessage, Mode=TwoWay}" MinWidth="420" HorizontalAlignment="Left" PlaceholderText="what this version changes" />
+            </StackPanel>
             <WrapPanel Orientation="Horizontal">
               <Button Classes="run" Content="List versions" Command="{Binding ListVersionsCommand}" Margin="0,0,8,0" />
-              <Button Content="Get version by id" Command="{Binding GetVersionCommand}" />
+              <Button Content="Get version by id" Command="{Binding GetVersionCommand}" Margin="0,0,8,0" />
+              <Button Content="Upload version (no deploy)" Command="{Binding CreateVersionCommand}" />
             </WrapPanel>
-            <TextBlock Classes="hint" Text="The list answers {items:[...]} with no result_info, newest first, and its deployable filter ignores pagination. Reading one version by id - the id box is in the Deployments card below - is the only call that returns that version's resources: its bindings, the handlers its script exports and its runtime. metadata.source is api for anything this library uploads." />
+            <TextBlock Classes="hint" Text="The list answers {items:[...]} with no result_info, newest first, and its deployable filter ignores pagination. Reading one version by id - the id box is in the Deployments card below - is the only call that returns that version's resources: its bindings, the handlers its script exports and its runtime. metadata.source is api for anything this library uploads. Uploading a version takes the same multipart bundle as the upload above, with the source and compatibility date from there, but it creates a version and leaves the deployment alone, so traffic keeps going to whatever was serving. Module syntax only, and it needs Workers Scripts Write rather than just Read." />
           </StackPanel>
         </Border>
 

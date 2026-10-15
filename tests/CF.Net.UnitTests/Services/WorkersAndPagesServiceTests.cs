@@ -1951,7 +1951,9 @@ public class WorkerVersionDetailTests
         var exports = version!.Resources!.ScriptRuntime!.Exports;
         Assert.NotNull(exports);
         var counter = Assert.Contains("Counter", exports!);
-        Assert.Contains("\"storage\":\"sqlite\"", counter.GetRawText(), StringComparison.Ordinal);
+        Assert.Equal("durable-object", counter.GetProperty("type").GetString());
+        Assert.Equal("sqlite", counter.GetProperty("storage").GetString());
+        Assert.Equal("created", counter.GetProperty("state").GetString());
     }
 
     [Fact]
@@ -1999,7 +2001,7 @@ public class WorkerVersionDetailTests
     {
         var version = new WorkerVersionDetail { Id = "v-1", Number = 3 };
         Assert.Equal("version 3 (v-1)", version.ToString());
-        Assert.Equal("version (v-1)", new WorkerVersionDetail { Id = "v-1" }.ToString());
+        Assert.Equal("version v-1", new WorkerVersionDetail { Id = "v-1" }.ToString());
 
         var resources = new WorkerVersionResources
         {

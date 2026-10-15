@@ -298,11 +298,18 @@ results when something is misconfigured. From it, three different refusals are t
 | `N probe(s) were refused, covering M missing permission(s)` | the permission really is absent. The step summary carries a token-creation URL that pre-fills every permission this suite needs, so the fix is one click rather than a form |
 | `N probe(s) refused while their permission group read fine elsewhere` | a paid feature that is not switched on, not a token problem. Observed live: `custom_hostnames` answers `1404 No quota has been allocated for this zone` while certificate packs and origin TLS settings in the same *SSL and Certificates* group read fine — that is SSL for SaaS not being enabled |
 | `R2 answered 403` | either the R2 permission is missing or R2 is not enabled on the account (`10042`). Reported as a notice, not an error, because the R2 tests skip with a reason by design |
+| `PUT …/schedules was refused with [10063]` | cron triggers need the account to have a `workers.dev` subdomain and this one does not — the same reason `GET …/workers/subdomain` answers 404 and the subdomain test skips with `10007`. Reported rather than asserted: the token's *Workers Scripts Write* is proved by the upload, version create and deployment read in that very test, so nothing about the credentials explains the refusal. Opening Workers & Pages in the dashboard once creates the subdomain, after which the step writes, reads back and clears two triggers for real |
 
 A probe that answers 4xx for a reason that is *not* a refusal still proves the permission is there: cache
 purge is probed with an empty body, so `400 [1012 Request must contain one of "purge_everything"…]` means
 *Cache Purge — Purge* is granted and nothing was purged. Any 2xx counts as readable, which matters because
 `GET …/origin_tls_client_auth/settings` answers **202**, not 200.
+
+Four codes seen live mean *the account is missing something*, not that the token is — and each is reported
+rather than failed, because a credential change would not fix any of them: **1404** (SSL for SaaS is not
+enabled, on `custom_hostnames`), **10042** (R2 is not enabled), **10007** (no `workers.dev` subdomain, on
+`workers/subdomain`) and **10063** (cron triggers, which need that same subdomain). The last two are one
+gap with two symptoms: opening Workers & Pages in the dashboard once clears both.
 
 The step never fails the job — a repository with no credentials yet is still allowed to be green — so read
 the annotations rather than the conclusion. Only the annotations, in fact: the step writes its table and the

@@ -1089,33 +1089,49 @@ public class WriteIntegrationTests : CloudflareIntegrationTest
             // Cron triggers are a whole-set replacement, so this writes two, reads them back and then
             // clears them again - the empty PUT is how a script's triggers are removed. The script is
             // deleted in the finally block below, which takes whatever is left of them with it.
-            var scheduled = await Client.Workers.UpdateSchedulesAsync(
-                name,
-                new[] { "*/30 * * * *", "0 3 * * *" });
-            Assert.NotNull(scheduled);
-            Assert.Equal(2, scheduled!.Count);
-            Assert.Equal(new[] { "*/30 * * * *", "0 3 * * *" }, scheduled.Expressions);
-            Log($"cron triggers set: {scheduled}");
-
-            var schedules = await Client.Workers.ListSchedulesAsync(name);
-            Assert.NotNull(schedules);
-            Assert.Equal(2, schedules!.Count);
-            Assert.Contains("*/30 * * * *", schedules.Expressions);
-            Log($"cron triggers read back: {schedules}; first created " +
-                $"{schedules.Schedules?[0].CreatedOn:O} modified {schedules.Schedules?[0].ModifiedOn:O}");
-
-            if (schedules.Schedules?[0].AdditionalData is { Count: > 0 } ||
-                schedules.AdditionalData is { Count: > 0 })
+            try
             {
-                Warn($"GET /accounts/{{account_id}}/workers/scripts/{name}/schedules returned fields this " +
-                     $"library does not model yet - schedule: " +
-                     $"{JsonSerializer.Serialize(schedules.Schedules?[0].AdditionalData)}, result: " +
-                     $"{JsonSerializer.Serialize(schedules.AdditionalData)}.");
-            }
+                var scheduled = await Client.Workers.UpdateSchedulesAsync(
+                    name,
+                    new[] { "*/30 * * * *", "0 3 * * *" });
+                Assert.NotNull(scheduled);
+                Assert.Equal(2, scheduled!.Count);
+                Assert.Equal(new[] { "*/30 * * * *", "0 3 * * *" }, scheduled.Expressions);
+                Log($"cron triggers set: {scheduled}");
 
-            var cleared = await Client.Workers.UpdateSchedulesAsync(name, Array.Empty<string>());
-            Assert.Equal(0, cleared!.Count);
-            Log("cron triggers cleared with an empty PUT");
+                var schedules = await Client.Workers.ListSchedulesAsync(name);
+                Assert.NotNull(schedules);
+                Assert.Equal(2, schedules!.Count);
+                Assert.Contains("*/30 * * * *", schedules.Expressions);
+                Log($"cron triggers read back: {schedules}; first created " +
+                    $"{schedules.Schedules?[0].CreatedOn:O} modified {schedules.Schedules?[0].ModifiedOn:O}");
+
+                if (schedules.Schedules?[0].AdditionalData is { Count: > 0 } ||
+                    schedules.AdditionalData is { Count: > 0 })
+                {
+                    Warn($"GET /accounts/{{account_id}}/workers/scripts/{name}/schedules returned fields this " +
+                         $"library does not model yet - schedule: " +
+                         $"{JsonSerializer.Serialize(schedules.Schedules?[0].AdditionalData)}, result: " +
+                         $"{JsonSerializer.Serialize(schedules.AdditionalData)}.");
+                }
+
+                var cleared = await Client.Workers.UpdateSchedulesAsync(name, Array.Empty<string>());
+                Assert.Equal(0, cleared!.Count);
+                Log("cron triggers cleared with an empty PUT");
+            }
+            catch (CloudflareApiException exception) when (exception.HasErrorCode(10063))
+            {
+                // An account prerequisite rather than a missing permission: the same token uploaded this
+                // script, created a version and read it back, all of which need Workers Scripts Write.
+                // Cloudflare refuses cron triggers until the account has a workers.dev subdomain, which
+                // this one does not - GET …/workers/subdomain answers 404 and the subdomain test skips with
+                // 10007 for the same reason. Reported rather than asserted, so the run says what would
+                // unlock it instead of going red on something the library cannot fix.
+                Warn($"PUT /accounts/{{account_id}}/workers/scripts/{name}/schedules was refused with " +
+                     $"[10063]: {exception.Message} Cron triggers need a workers.dev subdomain, which this " +
+                     "account does not have. Opening Workers & Pages in the dashboard once creates it, after " +
+                     "which this step writes, reads back and clears two triggers for real.");
+            }
 
             var settings = await Client.Workers.GetSettingsAsync(name);
             Log($"logpush={settings?.Logpush} tags={string.Join(",", settings?.Tags ?? new List<string>())}");

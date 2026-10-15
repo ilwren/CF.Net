@@ -1512,7 +1512,10 @@ public class WorkerVersionTests
         Assert.NotNull(version.AdditionalData);
         Assert.True(version.AdditionalData!.ContainsKey("resources"));
         Assert.True(version.AdditionalData.ContainsKey("secrets"));
-        Assert.True(version.AdditionalData.ContainsKey("annotations"));
+        // annotations stopped being unnamed when a live run reported it, so it is a property now and must
+        // not be captured twice: this is what the promotion of an observed field is supposed to look like.
+        Assert.False(version.AdditionalData.ContainsKey("annotations"));
+        Assert.Equal("first", version.Annotations!["workers_message"]);
         Assert.Equal(30000, version.AdditionalData["resources"].GetProperty("limits").GetProperty("cpu_ms").GetInt32());
         Assert.NotNull(version.Metadata?.AdditionalData);
         Assert.True(version.Metadata!.AdditionalData!.ContainsKey("source_version_id"));

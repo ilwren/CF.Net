@@ -891,9 +891,7 @@ public class WriteIntegrationTests : CloudflareIntegrationTest
                 // here is what keeps them honest: if Cloudflare stops sending either, this test says so
                 // instead of the model quietly carrying a field nothing populates.
                 Assert.Equal("api", latest.Metadata?.Source);
-                Assert.Equal(
-                    WorkerVersionAnnotationKeys.TriggeredByUpload,
-                    latest.Annotations?[WorkerVersionAnnotationKeys.TriggeredBy]);
+                Assert.Equal("upload", latest.Annotations?.TriggeredBy);
                 Log($"version {latest.Number} created {latest.Metadata?.CreatedOn:O} by " +
                     $"'{latest.Metadata?.AuthorEmail}' source={latest.Metadata?.Source} " +
                     $"preview={latest.Metadata?.HasPreview}");
@@ -908,6 +906,32 @@ public class WriteIntegrationTests : CloudflareIntegrationTest
                          $"metadata: {JsonSerializer.Serialize(latest.Metadata?.AdditionalData)}, result: " +
                          $"{JsonSerializer.Serialize(versions.AdditionalData)}. They are captured rather than " +
                          "dropped, and belong in WorkerVersion once they have been seen more than once.");
+                }
+            }
+
+            // Uploading a script deploys it, so there is at least one deployment to read, and it is the
+            // one serving traffic. This is also where a percentage split would show up if one existed.
+            var deployments = await Client.Workers.ListDeploymentsAsync(name);
+            Assert.NotNull(deployments);
+            Log($"deployments: {deployments!.Count}; total={deployments.TotalCount} latest={deployments.Latest}");
+            var serving = deployments.Latest;
+            if (serving is not null)
+            {
+                Assert.Equal(WorkerDeploymentStrategies.Percentage, serving.Strategy);
+                Assert.False(serving.IsGradual);
+                var share = Assert.Single(serving.Versions!);
+                Assert.Equal(100m, share.Percentage);
+                Assert.Equal(latest?.Id, share.VersionId);
+                Log($"serving version {share.VersionId} at {share.Percentage}% " +
+                    $"source={serving.Source} triggered_by={serving.Annotations?.TriggeredBy}");
+
+                if (serving.AdditionalData is { Count: > 0 } ||
+                    serving.Annotations?.AdditionalData is { Count: > 0 })
+                {
+                    Warn($"GET /accounts/{{account_id}}/workers/scripts/{name}/deployments returned fields this " +
+                         $"library does not model yet - deployment: " +
+                         $"{JsonSerializer.Serialize(serving.AdditionalData)}, annotations: " +
+                         $"{JsonSerializer.Serialize(serving.Annotations?.AdditionalData)}.");
                 }
             }
 

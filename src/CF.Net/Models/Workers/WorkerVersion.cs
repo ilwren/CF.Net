@@ -60,18 +60,12 @@ public sealed class WorkerVersion
     public WorkerVersionMetadata? Metadata { get; set; }
 
     /// <summary>
-    /// Annotations Cloudflare attaches to a version, such as
-    /// <c>{"workers/triggered_by": "upload"}</c> for one created by an upload rather than by a gradual
-    /// deployment.
+    /// Annotations Cloudflare attaches to a version. A version uploaded through the API by an account-owned
+    /// token carries <c>workers/triggered_by: upload</c> and nothing else, which is what a live run
+    /// reported; the type is shared with deployments, whose schema names both annotation keys.
     /// </summary>
-    /// <remarks>
-    /// Keys are namespaced with a slash and the values observed so far are strings, so this is a string
-    /// map; <see cref="WorkerVersionAnnotationKeys"/> names the one Cloudflare sets on upload. A version
-    /// uploaded through the API by an account-owned token carries exactly that one annotation and nothing
-    /// else, which is what a live run reported.
-    /// </remarks>
     [JsonPropertyName("annotations")]
-    public IDictionary<string, string>? Annotations { get; set; }
+    public WorkerAnnotations? Annotations { get; set; }
 
     /// <summary>Captures any field Cloudflare adds in the future.</summary>
     [JsonExtensionData]
@@ -121,22 +115,6 @@ public sealed class WorkerVersionMetadata
         string.IsNullOrWhiteSpace(AuthorEmail)
             ? AuthorId ?? "(unknown author)"
             : AuthorEmail;
-}
-
-/// <summary>Annotation keys Cloudflare is known to set on a Worker version.</summary>
-/// <remarks>
-/// Only the key observed on a real version is listed. Adding the ones that seem likely would be guessing,
-/// and a wrong constant sends somebody looking in the wrong place.
-/// </remarks>
-public static class WorkerVersionAnnotationKeys
-{
-    /// <summary>
-    /// What produced the version. Observed as <c>upload</c> for a version created by uploading a script.
-    /// </summary>
-    public const string TriggeredBy = "workers/triggered_by";
-
-    /// <summary>The value <see cref="TriggeredBy"/> carries for a plain upload.</summary>
-    public const string TriggeredByUpload = "upload";
 }
 
 /// <summary>Query parameters for listing Worker versions.</summary>

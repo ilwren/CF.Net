@@ -79,6 +79,25 @@ public interface IWorkersScriptsService
         string? accountId = null,
         CancellationToken cancellationToken = default);
 
+    /// <summary>Lists a script's deployments, newest first.</summary>
+    /// <param name="scriptName">The Worker name.</param>
+    /// <param name="parameters">Paging and a creation-time range; <c>null</c> for Cloudflare's defaults.</param>
+    /// <param name="accountId">Account id; falls back to the configured default when null.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <remarks>
+    /// <c>GET …/workers/scripts/{script_name}/deployments</c> nests its array under <c>deployments</c> rather
+    /// than returning it as <c>result</c>, so this is a <see cref="WorkerDeploymentListResult"/> and not a
+    /// <see cref="CloudflarePage{T}"/> - though unlike the versions endpoint it does return
+    /// <c>result_info</c>, which the result carries on <see cref="WorkerDeploymentListResult.Info"/>.
+    /// Cloudflare documents the first entry as the latest deployment actively serving traffic. Uploading a
+    /// script deploys it, so a script that exists has at least one deployment.
+    /// </remarks>
+    Task<WorkerDeploymentListResult?> ListDeploymentsAsync(
+        string scriptName,
+        WorkerDeploymentListParameters? parameters = null,
+        string? accountId = null,
+        CancellationToken cancellationToken = default);
+
     /// <summary>Fetches the script-level settings (Logpush, tail consumers, observability, tags).</summary>
     /// <param name="scriptName">The Worker name.</param>
     /// <param name="accountId">Account id; falls back to the configured default when null.</param>
@@ -367,6 +386,35 @@ public sealed class WorkersScriptsService : CloudflareService, IWorkersScriptsSe
 
         // Not the usual paged shape: result is an object holding an items array, with no result_info.
         var response = await Transport.SendAsync<WorkerVersionListResult>(request, cancellationToken).ConfigureAwait(false);
+        return response.Result;
+    }
+
+    /// <inheritdoc />
+    public async Task<WorkerDeploymentListResult?> ListDeploymentsAsync(
+        string scriptName,
+        WorkerDeploymentListParameters? parameters = null,
+        string? accountId = null,
+        CancellationToken cancellationToken = default)
+    {
+        var account = ResolveAccountId(accountId);
+        var name = Require(scriptName, nameof(scriptName));
+        parameters?.EnsureValid();
+
+        var request = CloudflareRequest.Get(
+            $"{AccountPath(account)}/workers/scripts/{CloudflareUrl.EncodeSegment(name)}/deployments");
+        request.OperationName = "List Worker Deployments";
+        request.Query.Add("page", parameters?.Page);
+        request.Query.Add("per_page", parameters?.PerPage);
+        request.Query.Add("since", parameters?.Since);
+        request.Query.Add("until", parameters?.Until);
+
+        var response = await Transport.SendAsync<WorkerDeploymentListResult>(request, cancellationToken).ConfigureAwait(false);
+        if (response.Result is { } result)
+        {
+            // result_info sits beside result in the envelope, so it cannot deserialize into the model.
+            result.Info = response.ResultInfo;
+        }
+
         return response.Result;
     }
 

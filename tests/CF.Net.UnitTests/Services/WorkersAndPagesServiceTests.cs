@@ -1515,7 +1515,9 @@ public class WorkerVersionTests
         // annotations stopped being unnamed when a live run reported it, so it is a property now and must
         // not be captured twice: this is what the promotion of an observed field is supposed to look like.
         Assert.False(version.AdditionalData.ContainsKey("annotations"));
-        Assert.Equal("first", version.Annotations!["workers_message"]);
+        Assert.NotNull(version.Annotations);
+        // A key that is not one of the two the deployment schema names is still captured, not dropped.
+        Assert.True(version.Annotations!.AdditionalData!.ContainsKey("workers_message"));
         Assert.Equal(30000, version.AdditionalData["resources"].GetProperty("limits").GetProperty("cpu_ms").GetInt32());
         Assert.NotNull(version.Metadata?.AdditionalData);
         Assert.True(version.Metadata!.AdditionalData!.ContainsKey("source_version_id"));
@@ -1555,9 +1557,8 @@ public class WorkerVersionTests
         Assert.Equal(1, version.Number);
         Assert.Equal("api", version.Metadata?.Source);
         Assert.True(version.Metadata?.HasPreview);
-        Assert.Equal(
-            WorkerVersionAnnotationKeys.TriggeredByUpload,
-            version.Annotations![WorkerVersionAnnotationKeys.TriggeredBy]);
+        Assert.Equal("upload", version.Annotations?.TriggeredBy);
+        Assert.Null(version.Annotations?.Message);
 
         // An account-owned token uploads with no author email, so the empty string is the real answer and
         // describing the author falls back to the id rather than printing nothing at all.
@@ -1567,5 +1568,151 @@ public class WorkerVersionTests
         // Nothing in that answer is left unnamed, which is the point of modelling it from the run.
         Assert.Null(version.AdditionalData);
         Assert.Null(version.Metadata?.AdditionalData);
+    }
+}
+
+/// <summary>
+/// <c>GET /accounts/{account_id}/workers/scripts/{script_name}/deployments</c>, which nests its array under
+/// <c>deployments</c> and, unlike the versions endpoint, does return <c>result_info</c>.
+/// </summary>
+public class WorkerDeploymentTests
+{
+    private const string DeploymentList = """
+    {"deployments":[
+      {"id":"2b1b9b6a-2f2f-4d0e-8d5e-4d4f4f4f4f4f","created_on":"2026-10-15T06:45:50Z",
+       "source":"upload","strategy":"percentage",
+       "versions":[{"version_id":"4bb9c50a-07a8-4dc4-a2eb-c5f6b98b0c8b","percentage":100}],
+       "annotations":{"workers/message":"first release","workers/triggered_by":"upload"},
+       "author_email":"deploy@example.com"}
+    ]}
+    """;
+
+    [Fact]
+    public async Task ListDeploymentsAsync_reads_the_deployments_object_and_the_paging_info()
+    {
+        using var harness = CloudflareHarness.Create();
+        harness.RespondWithPage(DeploymentList, 1, 2, 1, 3);
+
+        var result = await harness.Client.Workers.ListDeploymentsAsync("hello");
+
+        Assert.Equal(
+            $"/client/v4/accounts/{CloudflareHarness.TestAccountId}/workers/scripts/hello/deployments",
+            harness.LastRequest.Path);
+
+        Assert.NotNull(result);
+        Assert.Equal(1, result!.Count);
+        Assert.Equal(3, result.TotalCount);
+        Assert.True(result.HasMore);
+        Assert.Equal(2, result.NextPage);
+
+        // Cloudflare documents the first entry as the deployment currently serving traffic.
+        var latest = result.Latest;
+        Assert.NotNull(latest);
+        Assert.Equal("2b1b9b6a-2f2f-4d0e-8d5e-4d4f4f4f4f4f", latest!.Id);
+        Assert.Equal("upload", latest.Source);
+        Assert.Equal(WorkerDeploymentStrategies.Percentage, latest.Strategy);
+        Assert.Equal(2026, latest.CreatedOn?.Year);
+        Assert.Equal("deploy@example.com", latest.AuthorEmail);
+        Assert.Equal("first release", latest.Annotations?.Message);
+        Assert.Equal("upload", latest.Annotations?.TriggeredBy);
+        Assert.False(latest.IsGradual);
+    }
+
+    [Fact]
+    public async Task A_gradual_deployment_splits_traffic_between_two_versions()
+    {
+        using var harness = CloudflareHarness.Create();
+        harness.RespondWithResult("""
+        {"deployments":[{"id":"d-1","strategy":"percentage",
+          "versions":[{"version_id":"v-new","percentage":10},{"version_id":"v-old","percentage":90}]}]}
+        """);
+
+        var result = await harness.Client.Workers.ListDeploymentsAsync("hello");
+
+        var deployment = Assert.Single(result!.Deployments!);
+        Assert.True(deployment.IsGradual);
+        Assert.Equal(2, deployment.Versions!.Count);
+        Assert.Equal("v-new", deployment.Versions[0].VersionId);
+        Assert.Equal(10m, deployment.Versions[0].Percentage);
+        Assert.Equal(90m, deployment.Versions[1].Percentage);
+        Assert.Equal("deployment d-1: v-new at 10%, v-old at 90%", deployment.ToString());
+    }
+
+    [Fact]
+    public async Task ListDeploymentsAsync_passes_paging_and_the_time_range_only_when_given()
+    {
+        using var harness = CloudflareHarness.Create();
+        harness.RespondWithResult("""{"deployments":[]}""");
+        harness.RespondWithResult("""{"deployments":[]}""");
+
+        await harness.Client.Workers.ListDeploymentsAsync("hello");
+        await harness.Client.Workers.ListDeploymentsAsync(
+            "hello",
+            new WorkerDeploymentListParameters
+            {
+                Page = 2,
+                PerPage = 50,
+                Since = new DateTimeOffset(2026, 10, 1, 0, 0, 0, TimeSpan.Zero),
+                Until = new DateTimeOffset(2026, 10, 15, 0, 0, 0, TimeSpan.Zero),
+            });
+
+        Assert.Equal(string.Empty, harness.Requests[0].Query);
+        Assert.StartsWith("?page=2&per_page=50", harness.Requests[1].Query, StringComparison.Ordinal);
+        // The exact date format is the query builder's business; what matters is that both ends are sent.
+        Assert.Contains("since=", harness.Requests[1].Query, StringComparison.Ordinal);
+        Assert.Contains("until=", harness.Requests[1].Query, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task A_script_with_no_deployments_answers_an_empty_list()
+    {
+        using var harness = CloudflareHarness.Create();
+        harness.RespondWithResult("""{"deployments":[]}""");
+
+        var result = await harness.Client.Workers.ListDeploymentsAsync("hello");
+
+        Assert.NotNull(result);
+        Assert.Equal(0, result!.Count);
+        Assert.Null(result.Latest);
+        Assert.False(result.HasMore);
+        Assert.Null(result.NextPage);
+        Assert.Equal("0 deployment(s)", result.ToString());
+    }
+
+    [Fact]
+    public async Task Parameters_outside_the_documented_bounds_are_rejected_before_sending()
+    {
+        using var harness = CloudflareHarness.Create();
+
+        var exception = await Assert.ThrowsAsync<CloudflareConfigurationException>(() =>
+            harness.Client.Workers.ListDeploymentsAsync(
+                "hello",
+                new WorkerDeploymentListParameters
+                {
+                    Page = 0,
+                    PerPage = 101,
+                    Since = new DateTimeOffset(2026, 10, 15, 0, 0, 0, TimeSpan.Zero),
+                    Until = new DateTimeOffset(2026, 10, 1, 0, 0, 0, TimeSpan.Zero),
+                }));
+
+        // page from 1, per_page 1..100, and an end that is not before its start - all three documented.
+        Assert.Contains("Page must be at least 1", exception.Message, StringComparison.Ordinal);
+        Assert.Contains("PerPage must be between 1 and 100", exception.Message, StringComparison.Ordinal);
+        Assert.Contains("is before Since", exception.Message, StringComparison.Ordinal);
+        Assert.Equal(0, harness.RequestCount);
+    }
+
+    [Fact]
+    public void Empty_annotations_say_so_rather_than_printing_nothing()
+    {
+        Assert.True(new WorkerAnnotations().IsEmpty);
+        Assert.Equal(string.Empty, new WorkerAnnotations().ToString());
+        Assert.Equal("upload", new WorkerAnnotations { TriggeredBy = "upload" }.ToString());
+        Assert.Equal("upload: shipped", new WorkerAnnotations
+        {
+            TriggeredBy = "upload",
+            Message = "shipped",
+        }.ToString());
+        Assert.False(new WorkerAnnotations { Message = "shipped" }.IsEmpty);
     }
 }

@@ -1531,4 +1531,38 @@ public class WorkerVersionTests
 
         Assert.Equal(3, Assert.Single(result!.Items!).Number);
     }
+
+    [Fact]
+    public async Task A_version_uploaded_through_the_api_reads_back_with_its_source_and_annotations()
+    {
+        using var harness = CloudflareHarness.Create();
+        // Taken from a live run: a version uploaded through the API by an account-owned token, which came
+        // back with an empty author_email and with the two metadata fields the reference does not name.
+        harness.RespondWithResult("""
+        {"items":[{"id":"4bb9c50a-07a8-4dc4-a2eb-c5f6b98b0c8b","number":1,
+          "metadata":{"author_email":"","author_id":"user-1",
+                      "created_on":"2026-10-15T06:45:49.7773300+00:00","source":"api","has_preview":true},
+          "annotations":{"workers/triggered_by":"upload"}}]}
+        """);
+
+        var result = await harness.Client.Workers.ListVersionsAsync("hello");
+
+        var version = Assert.Single(result!.Items!);
+        Assert.Equal("4bb9c50a-07a8-4dc4-a2eb-c5f6b98b0c8b", version.Id);
+        Assert.Equal(1, version.Number);
+        Assert.Equal("api", version.Metadata?.Source);
+        Assert.True(version.Metadata?.HasPreview);
+        Assert.Equal(
+            WorkerVersionAnnotationKeys.TriggeredByUpload,
+            version.Annotations![WorkerVersionAnnotationKeys.TriggeredBy]);
+
+        // An account-owned token uploads with no author email, so the empty string is the real answer and
+        // describing the author falls back to the id rather than printing nothing at all.
+        Assert.Equal(string.Empty, version.Metadata?.AuthorEmail);
+        Assert.Equal("user-1", version.Metadata?.ToString());
+
+        // Nothing in that answer is left unnamed, which is the point of modelling it from the run.
+        Assert.Null(version.AdditionalData);
+        Assert.Null(version.Metadata?.AdditionalData);
+    }
 }

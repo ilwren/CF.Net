@@ -37,12 +37,13 @@ public sealed class WorkerVersionListResult
 
 /// <summary>One uploaded version of a Worker script.</summary>
 /// <remarks>
-/// Modelled from the published schema, which gives a version an <c>id</c>, a <c>number</c> and a
-/// <c>metadata</c> object with <c>author_email</c>, <c>author_id</c>, <c>created_on</c> and three further
-/// fields the reference does not name on this page. Those three, and anything else a version carries -
-/// resources, secrets, annotations - land in <see cref="AdditionalData"/> rather than being dropped, and the
-/// integration suite reports what a live version actually contains so they can be promoted to properties
-/// once observed rather than guessed at.
+/// The published schema gives a version an <c>id</c>, a <c>number</c> and a <c>metadata</c> object with
+/// <c>author_email</c>, <c>author_id</c>, <c>created_on</c> and three further fields it does not name. Those
+/// three were read off a live answer rather than guessed at, and are what
+/// <see cref="WorkerVersionMetadata.Source"/>, <see cref="WorkerVersionMetadata.HasPreview"/> and
+/// <see cref="Annotations"/> are. Anything still unnamed lands in <see cref="AdditionalData"/>, which the
+/// integration suite reports, so the next undocumented field shows up the same way instead of silently
+/// disappearing. A version with bindings or secrets may well carry more than a bare upload did.
 /// </remarks>
 public sealed class WorkerVersion
 {
@@ -57,6 +58,20 @@ public sealed class WorkerVersion
     /// <summary>Who uploaded it and when.</summary>
     [JsonPropertyName("metadata")]
     public WorkerVersionMetadata? Metadata { get; set; }
+
+    /// <summary>
+    /// Annotations Cloudflare attaches to a version, such as
+    /// <c>{"workers/triggered_by": "upload"}</c> for one created by an upload rather than by a gradual
+    /// deployment.
+    /// </summary>
+    /// <remarks>
+    /// Keys are namespaced with a slash and the values observed so far are strings, so this is a string
+    /// map; <see cref="WorkerVersionAnnotationKeys"/> names the one Cloudflare sets on upload. A version
+    /// uploaded through the API by an account-owned token carries exactly that one annotation and nothing
+    /// else, which is what a live run reported.
+    /// </remarks>
+    [JsonPropertyName("annotations")]
+    public IDictionary<string, string>? Annotations { get; set; }
 
     /// <summary>Captures any field Cloudflare adds in the future.</summary>
     [JsonExtensionData]
@@ -82,12 +97,46 @@ public sealed class WorkerVersionMetadata
     [JsonPropertyName("created_on")]
     public DateTimeOffset? CreatedOn { get; set; }
 
+    /// <summary>
+    /// What created the version - <c>api</c> for one uploaded through this endpoint, observed live.
+    /// </summary>
+    /// <remarks>
+    /// Not documented in the reference; read off a real answer. Other values almost certainly exist for
+    /// uploads made from the dashboard or by a gradual deployment, and they are deliberately not invented
+    /// here as constants.
+    /// </remarks>
+    [JsonPropertyName("source")]
+    public string? Source { get; set; }
+
+    /// <summary>Whether this version has a preview deployment. Not documented; observed live.</summary>
+    [JsonPropertyName("has_preview")]
+    public bool? HasPreview { get; set; }
+
     /// <summary>Captures the further metadata fields this endpoint returns but does not document.</summary>
     [JsonExtensionData]
     public IDictionary<string, JsonElement>? AdditionalData { get; set; }
 
     /// <inheritdoc />
-    public override string ToString() => AuthorEmail ?? AuthorId ?? "(unknown author)";
+    public override string ToString() =>
+        string.IsNullOrWhiteSpace(AuthorEmail)
+            ? AuthorId ?? "(unknown author)"
+            : AuthorEmail;
+}
+
+/// <summary>Annotation keys Cloudflare is known to set on a Worker version.</summary>
+/// <remarks>
+/// Only the key observed on a real version is listed. Adding the ones that seem likely would be guessing,
+/// and a wrong constant sends somebody looking in the wrong place.
+/// </remarks>
+public static class WorkerVersionAnnotationKeys
+{
+    /// <summary>
+    /// What produced the version. Observed as <c>upload</c> for a version created by uploading a script.
+    /// </summary>
+    public const string TriggeredBy = "workers/triggered_by";
+
+    /// <summary>The value <see cref="TriggeredBy"/> carries for a plain upload.</summary>
+    public const string TriggeredByUpload = "upload";
 }
 
 /// <summary>Query parameters for listing Worker versions.</summary>

@@ -887,12 +887,28 @@ public class WriteIntegrationTests : CloudflareIntegrationTest
             var latest = versions.Latest;
             if (latest is not null)
             {
-                Warn($"GET /accounts/{{account_id}}/workers/scripts/{name}/versions returned version " +
-                     $"{latest.Number} (id {latest.Id}) by {latest.Metadata?.AuthorEmail ?? "(no author)"} " +
-                     $"at {latest.Metadata?.CreatedOn:O}. Fields beyond the documented ones - version: " +
-                     $"{JsonSerializer.Serialize(latest.AdditionalData)}, metadata: " +
-                     $"{JsonSerializer.Serialize(latest.Metadata?.AdditionalData)}, result: " +
-                     $"{JsonSerializer.Serialize(versions.AdditionalData)}");
+                // Both of these came from a live answer rather than from the reference, so asserting them
+                // here is what keeps them honest: if Cloudflare stops sending either, this test says so
+                // instead of the model quietly carrying a field nothing populates.
+                Assert.Equal("api", latest.Metadata?.Source);
+                Assert.Equal(
+                    WorkerVersionAnnotationKeys.TriggeredByUpload,
+                    latest.Annotations?[WorkerVersionAnnotationKeys.TriggeredBy]);
+                Log($"version {latest.Number} created {latest.Metadata?.CreatedOn:O} by " +
+                    $"'{latest.Metadata?.AuthorEmail}' source={latest.Metadata?.Source} " +
+                    $"preview={latest.Metadata?.HasPreview}");
+
+                // Quiet while the model covers everything Cloudflare sends, and loud the moment it stops.
+                if (latest.AdditionalData is { Count: > 0 } ||
+                    latest.Metadata?.AdditionalData is { Count: > 0 } ||
+                    versions.AdditionalData is { Count: > 0 })
+                {
+                    Warn($"GET /accounts/{{account_id}}/workers/scripts/{name}/versions returned fields this " +
+                         $"library does not model yet - version: {JsonSerializer.Serialize(latest.AdditionalData)}, " +
+                         $"metadata: {JsonSerializer.Serialize(latest.Metadata?.AdditionalData)}, result: " +
+                         $"{JsonSerializer.Serialize(versions.AdditionalData)}. They are captured rather than " +
+                         "dropped, and belong in WorkerVersion once they have been seen more than once.");
+                }
             }
 
             var settings = await Client.Workers.GetSettingsAsync(name);

@@ -97,6 +97,26 @@ public interface IWorkersScriptsService
         string? accountId = null,
         CancellationToken cancellationToken = default);
 
+    /// <summary>Reads one version of a script in full, including its resources.</summary>
+    /// <param name="scriptName">The Worker name.</param>
+    /// <param name="versionId">The version's id, as <see cref="ListVersionsAsync"/> reports it.</param>
+    /// <param name="accountId">Account id; falls back to the configured default when null.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>The version, or <c>null</c> when the script or the version does not exist.</returns>
+    /// <remarks>
+    /// <c>GET …/workers/scripts/{script_name}/versions/{version_id}</c> answers with the same <c>id</c>,
+    /// <c>number</c> and <c>metadata</c> the list carries, plus a <c>resources</c> block holding that
+    /// version's bindings, the handlers its script exports and its runtime configuration - compatibility
+    /// date and flags, CPU limits, usage model, migration tag and declarative exports. It is the only
+    /// endpoint that shows a version's runtime as it was uploaded; <see cref="GetSettingsAsync"/> describes
+    /// the script rather than a version. The permissions are the ones the list already needs.
+    /// </remarks>
+    Task<WorkerVersionDetail?> GetVersionAsync(
+        string scriptName,
+        string versionId,
+        string? accountId = null,
+        CancellationToken cancellationToken = default);
+
     /// <summary>Lists a script's deployments, newest first.</summary>
     /// <param name="scriptName">The Worker name.</param>
     /// <param name="parameters">Paging and a creation-time range; <c>null</c> for Cloudflare's defaults.</param>
@@ -409,6 +429,26 @@ public sealed class WorkersScriptsService : CloudflareService, IWorkersScriptsSe
 
         // Not the usual paged shape: result is an object holding an items array, with no result_info.
         var response = await Transport.SendAsync<WorkerVersionListResult>(request, cancellationToken).ConfigureAwait(false);
+        return response.Result;
+    }
+
+    /// <inheritdoc />
+    public async Task<WorkerVersionDetail?> GetVersionAsync(
+        string scriptName,
+        string versionId,
+        string? accountId = null,
+        CancellationToken cancellationToken = default)
+    {
+        var account = ResolveAccountId(accountId);
+        var name = Require(scriptName, nameof(scriptName));
+        var version = Require(versionId, nameof(versionId));
+
+        var request = CloudflareRequest
+            .Get($"{AccountPath(account)}/workers/scripts/{CloudflareUrl.EncodeSegment(name)}/versions/{CloudflareUrl.EncodeSegment(version)}")
+            .Tolerate(System.Net.HttpStatusCode.NotFound);
+        request.OperationName = "Get Worker Script Version";
+
+        var response = await Transport.SendAsync<WorkerVersionDetail>(request, cancellationToken).ConfigureAwait(false);
         return response.Result;
     }
 

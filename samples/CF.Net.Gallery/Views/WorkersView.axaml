@@ -95,6 +95,17 @@
 
         <Border Classes="card">
           <StackPanel Orientation="Vertical" Spacing="10">
+            <TextBlock Classes="h2" Text="Versions  -  GET /accounts/{account_id}/workers/scripts/{script_name}/versions" />
+            <WrapPanel Orientation="Horizontal">
+              <Button Classes="run" Content="List versions" Command="{Binding ListVersionsCommand}" Margin="0,0,8,0" />
+              <Button Content="Get version by id" Command="{Binding GetVersionCommand}" />
+            </WrapPanel>
+            <TextBlock Classes="hint" Text="The list answers {items:[...]} with no result_info, newest first, and its deployable filter ignores pagination. Reading one version by id - the id box is in the Deployments card below - is the only call that returns that version's resources: its bindings, the handlers its script exports and its runtime. metadata.source is api for anything this library uploads." />
+          </StackPanel>
+        </Border>
+
+        <Border Classes="card">
+          <StackPanel Orientation="Vertical" Spacing="10">
             <TextBlock Classes="h2" Text="Deployments  -  GET / POST /accounts/{account_id}/workers/scripts/{script_name}/deployments" />
             <WrapPanel Orientation="Horizontal">
               <StackPanel Orientation="Vertical" Spacing="3" Margin="0,0,16,8">

@@ -970,6 +970,52 @@ public class WriteIntegrationTests : CloudflareIntegrationTest
                 }
             }
 
+            // Reading one version by id is the only call that returns a version's resources, so this is
+            // where the bindings, exported handlers and runtime of the version just uploaded become visible
+            // - and where a field this library does not model yet would show up.
+            if (latest?.Id is { Length: > 0 } versionId)
+            {
+                var detail = await Client.Workers.GetVersionAsync(name, versionId);
+                Assert.NotNull(detail);
+                Assert.Equal(versionId, detail!.Id);
+                Assert.Equal(latest.Number, detail.Number);
+                Assert.Equal(WorkerVersionSources.Api, detail.Metadata?.Source);
+
+                var runtime = detail.Resources?.ScriptRuntime;
+                Log($"version detail: resources={detail.Resources} runtime={runtime} " +
+                    $"etag={detail.Resources?.Script?.Etag} " +
+                    $"last_deployed_from={detail.Resources?.Script?.LastDeployedFrom} " +
+                    $"bindings={detail.Resources?.Bindings?.Count ?? 0}");
+
+                var extras = new (string Where, IDictionary<string, JsonElement>? Data)[]
+                {
+                    ("version", detail.AdditionalData),
+                    ("resources", detail.Resources?.AdditionalData),
+                    ("script", detail.Resources?.Script?.AdditionalData),
+                    ("script_runtime", runtime?.AdditionalData),
+                    ("metadata", detail.Metadata?.AdditionalData),
+                };
+                var unmodelled = extras.Where(extra => extra.Data is { Count: > 0 }).ToList();
+                if (unmodelled.Count > 0)
+                {
+                    Warn($"GET /accounts/{{account_id}}/workers/scripts/{name}/versions/{versionId} returned " +
+                         "fields this library does not model yet - " +
+                         string.Join("; ", unmodelled.Select(
+                             extra => $"{extra.Where}: {JsonSerializer.Serialize(extra.Data)}")) +
+                         ". They are captured rather than dropped.");
+                }
+
+                // The exports map is deliberately raw: the reference types each entry as a union of six
+                // variants and no live answer had shown this library one. Reporting what arrives is the
+                // evidence that would justify modelling them.
+                if (runtime?.Exports is { Count: > 0 })
+                {
+                    Warn($"GET /accounts/{{account_id}}/workers/scripts/{name}/versions/{versionId} reported " +
+                         $"{runtime.Exports.Count} declarative export(s), which this library keeps as raw " +
+                         $"JSON: {JsonSerializer.Serialize(runtime.Exports)}.");
+                }
+            }
+
             var settings = await Client.Workers.GetSettingsAsync(name);
             Log($"logpush={settings?.Logpush} tags={string.Join(",", settings?.Tags ?? new List<string>())}");
         }

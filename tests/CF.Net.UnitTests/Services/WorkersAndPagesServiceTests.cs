@@ -1840,3 +1840,191 @@ public class WorkerScriptSearchTests
             }.ToString());
     }
 }
+
+/// <summary>
+/// <c>GET /accounts/{account_id}/workers/scripts/{script_name}/versions/{version_id}</c> - the list plus a
+/// version's resources, which is where its bindings, exported handlers and runtime live.
+/// </summary>
+public class WorkerVersionDetailTests
+{
+    /// <summary>
+    /// Every field the reference publishes for one version, assembled from its own schema, so nothing in
+    /// these assertions is invented. The <c>has_preview</c> spelling is the one a live answer used.
+    /// </summary>
+    private const string DocumentedVersion = """
+        {
+          "id": "8cbb1a64-1a55-4b6f-9b90-3a2c1a2d6b0e",
+          "number": 3,
+          "metadata": {
+            "author_email": "",
+            "author_id": "a-token",
+            "created_on": "2026-10-15T02:00:00Z",
+            "modified_on": "2026-10-15T02:05:00Z",
+            "source": "api",
+            "has_preview": true
+          },
+          "annotations": { "workers/triggered_by": "upload" },
+          "resources": {
+            "bindings": [ { "name": "GREETING", "type": "plain_text", "text": "hello" } ],
+            "script": {
+              "etag": "9f2c4b1e",
+              "handlers": [ "fetch", "scheduled" ],
+              "last_deployed_from": "api",
+              "named_handlers": [ { "name": "Counter", "handlers": [ "alarm" ] } ]
+            },
+            "script_runtime": {
+              "compatibility_date": "2026-10-01",
+              "compatibility_flags": [ "nodejs_compat" ],
+              "limits": { "cpu_ms": 30000 },
+              "migration_tag": "v1",
+              "usage_model": "bundled",
+              "exports": { "Counter": { "type": "durable-object", "storage": "sqlite", "state": "created" } }
+            }
+          }
+        }
+        """;
+
+    [Fact]
+    public async Task GetVersionAsync_reads_one_version_by_id_including_its_resources()
+    {
+        using var harness = CloudflareHarness.Create();
+        harness.RespondWithResult(DocumentedVersion);
+
+        var version = await harness.Client.Workers.GetVersionAsync("hello", "8cbb1a64");
+
+        Assert.EndsWith(
+            "/workers/scripts/hello/versions/8cbb1a64",
+            harness.LastRequest.Path,
+            StringComparison.Ordinal);
+        Assert.NotNull(version);
+        Assert.Equal("8cbb1a64-1a55-4b6f-9b90-3a2c1a2d6b0e", version!.Id);
+        Assert.Equal(3, version.Number);
+        Assert.Equal(WorkerVersionSources.Api, version.Metadata?.Source);
+        Assert.Equal("upload", version.Annotations?.TriggeredBy);
+        Assert.Equal(
+            new DateTimeOffset(2026, 10, 15, 2, 5, 0, TimeSpan.Zero),
+            version.Metadata?.ModifiedOn);
+        Assert.True(version.Metadata?.HasPreview);
+
+        var binding = Assert.Single(version.Resources!.Bindings!);
+        Assert.Equal("GREETING", binding.Name);
+        Assert.Equal(WorkerBindingTypes.PlainText, binding.Type);
+        Assert.Equal("hello", binding.Text);
+
+        Assert.Equal("9f2c4b1e", version.Resources.Script!.Etag);
+        Assert.Equal(new[] { "fetch", "scheduled" }, version.Resources.Script.Handlers);
+        Assert.Equal("api", version.Resources.Script.LastDeployedFrom);
+        var exported = Assert.Single(version.Resources.Script.NamedHandlers!);
+        Assert.Equal("Counter", exported.Name);
+        Assert.Equal(new[] { "alarm" }, exported.Handlers);
+
+        var runtime = version.Resources.ScriptRuntime!;
+        Assert.Equal("2026-10-01", runtime.CompatibilityDate);
+        Assert.Equal(new[] { "nodejs_compat" }, runtime.CompatibilityFlags);
+        Assert.Equal(30000, runtime.Limits?.CpuMs);
+        Assert.Equal("v1", runtime.MigrationTag);
+        Assert.Equal(WorkerUsageModels.Bundled, runtime.UsageModel);
+    }
+
+    [Fact]
+    public async Task GetVersionAsync_returns_null_when_the_version_does_not_exist()
+    {
+        using var harness = CloudflareHarness.Create();
+        harness.RespondWithError(HttpStatusCode.NotFound, 10007, "Version not found");
+
+        var version = await harness.Client.Workers.GetVersionAsync("hello", "no-such-version");
+
+        Assert.Null(version);
+        Assert.Equal(1, harness.RequestCount);
+    }
+
+    [Fact]
+    public async Task GetVersionAsync_keeps_the_exports_map_raw_instead_of_guessing_at_the_union()
+    {
+        using var harness = CloudflareHarness.Create();
+        harness.RespondWithResult(DocumentedVersion);
+
+        var version = await harness.Client.Workers.GetVersionAsync("hello", "8cbb1a64");
+
+        // Six documented variants, distinguished by type and lifecycle state, and no live answer to check
+        // them against: the entry stays readable as JSON rather than becoming a wrong model.
+        var exports = version!.Resources!.ScriptRuntime!.Exports;
+        Assert.NotNull(exports);
+        var counter = Assert.Contains("Counter", exports!);
+        Assert.Contains("\"storage\":\"sqlite\"", counter.GetRawText(), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task GetVersionAsync_captures_fields_the_model_does_not_declare_at_every_level()
+    {
+        using var harness = CloudflareHarness.Create();
+        harness.RespondWithResult("""
+            {
+              "id": "v-1",
+              "number": 1,
+              "secrets": [ { "name": "API_KEY", "type": "secret_text" } ],
+              "resources": {
+                "something_new": true,
+                "script": { "etag": "abc", "compiled_at": "2026-10-15T02:00:00Z" },
+                "script_runtime": { "usage_model": "bundled", "placement": { "mode": "smart" } }
+              }
+            }
+            """);
+
+        var version = await harness.Client.Workers.GetVersionAsync("hello", "v-1");
+
+        Assert.NotNull(version);
+        Assert.Contains("secrets", version!.AdditionalData!.Keys, StringComparer.Ordinal);
+        Assert.Contains("something_new", version.Resources!.AdditionalData!.Keys, StringComparer.Ordinal);
+        Assert.Contains("compiled_at", version.Resources.Script!.AdditionalData!.Keys, StringComparer.Ordinal);
+        Assert.Contains("placement", version.Resources.ScriptRuntime!.AdditionalData!.Keys, StringComparer.Ordinal);
+        Assert.Equal(WorkerUsageModels.Bundled, version.Resources.ScriptRuntime.UsageModel);
+    }
+
+    [Fact]
+    public async Task GetVersionAsync_needs_both_a_script_name_and_a_version_id()
+    {
+        using var harness = CloudflareHarness.Create();
+
+        await Assert.ThrowsAsync<CloudflareConfigurationException>(() =>
+            harness.Client.Workers.GetVersionAsync(" ", "v-1"));
+        await Assert.ThrowsAsync<CloudflareConfigurationException>(() =>
+            harness.Client.Workers.GetVersionAsync("hello", " "));
+
+        Assert.Equal(0, harness.RequestCount);
+    }
+
+    [Fact]
+    public void A_version_and_its_resources_print_something_readable()
+    {
+        var version = new WorkerVersionDetail { Id = "v-1", Number = 3 };
+        Assert.Equal("version 3 (v-1)", version.ToString());
+        Assert.Equal("version (v-1)", new WorkerVersionDetail { Id = "v-1" }.ToString());
+
+        var resources = new WorkerVersionResources
+        {
+            Bindings = new List<WorkerBinding> { new() { Name = "GREETING" } },
+            Script = new WorkerVersionScript { Handlers = new List<string> { "fetch", "scheduled" } },
+        };
+        Assert.Equal("1 binding(s), 2 default handler(s)", resources.ToString());
+        Assert.Equal("0 binding(s), 0 default handler(s)", new WorkerVersionResources().ToString());
+
+        Assert.Equal(
+            "bundled, compatibility 2026-10-01",
+            new WorkerVersionScriptRuntime
+            {
+                UsageModel = WorkerUsageModels.Bundled,
+                CompatibilityDate = "2026-10-01",
+            }.ToString());
+        Assert.Equal(
+            "runtime, compatibility unset",
+            new WorkerVersionScriptRuntime().ToString());
+        Assert.Equal("30000 ms CPU", new WorkerVersionLimits { CpuMs = 30000 }.ToString());
+        Assert.Equal("no CPU limit reported", new WorkerVersionLimits().ToString());
+        Assert.Equal("Counter: alarm", new WorkerNamedExport
+        {
+            Name = "Counter",
+            Handlers = new List<string> { "alarm" },
+        }.ToString());
+    }
+}

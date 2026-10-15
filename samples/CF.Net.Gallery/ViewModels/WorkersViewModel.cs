@@ -51,6 +51,8 @@ public sealed class WorkersViewModel : ModuleViewModelBase
         GetSettingsCommand = new RelayCommand(GetSettingsAsync);
         UploadCommand = new RelayCommand(UploadAsync);
         DeleteCommand = new RelayCommand(DeleteAsync);
+        ListVersionsCommand = new RelayCommand(ListVersionsAsync);
+        GetVersionCommand = new RelayCommand(GetVersionAsync);
         ListDeploymentsCommand = new RelayCommand(ListDeploymentsAsync);
         CreateDeploymentCommand = new RelayCommand(CreateDeploymentAsync);
         GetSubdomainCommand = new RelayCommand(GetSubdomainAsync);
@@ -174,6 +176,12 @@ public sealed class WorkersViewModel : ModuleViewModelBase
     /// <summary>Deletes a script.</summary>
     public RelayCommand DeleteCommand { get; }
 
+    /// <summary>Lists a script's uploaded versions.</summary>
+    public RelayCommand ListVersionsCommand { get; }
+
+    /// <summary>Reads one version, including its resources.</summary>
+    public RelayCommand GetVersionCommand { get; }
+
     /// <summary>Lists deployments.</summary>
     public RelayCommand ListDeploymentsCommand { get; }
 
@@ -245,6 +253,19 @@ public sealed class WorkersViewModel : ModuleViewModelBase
 
     private Task DeleteAsync() => RunVoidAsync("Delete worker script", () =>
         Client.Workers.DeleteAsync(Script()));
+
+    private Task ListVersionsAsync() => RunAsync("List worker versions", async () =>
+        await Client.Workers.ListVersionsAsync(
+            Script(),
+            new WorkerVersionListParameters { PerPage = OptionalInt(ListPerPage) }));
+
+    private Task GetVersionAsync() => RunAsync("Get worker version", () =>
+    {
+        var versionId = Blank(VersionId)
+            ?? throw new ArgumentException("Enter a version id - list the script's versions first.");
+
+        return Client.Workers.GetVersionAsync(Script(), versionId);
+    });
 
     private Task ListDeploymentsAsync() => RunAsync("List worker deployments", async () =>
         await Client.Workers.ListDeploymentsAsync(Script(), new WorkerDeploymentListParameters

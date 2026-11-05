@@ -308,6 +308,10 @@ jobs:
             # there carries a zone file and a flag that can delete existing records first, and no empty body
             # is worth that risk. Import needs DNS Write too, so this probe already covers it.
             probe dns_batch "$zone/dns_records/batch" POST '{}'
+            # The zone-scoped groups the next modules need. Listing rulesets covers every phase at once,
+            # so a 403 here is ambiguous between them and the row says so.
+            probe zone_rulesets "$zone/rulesets?per_page=1"
+            probe waiting_rooms "$zone/waiting_rooms?per_page=1"
           fi
 
           if [ -n "${CLOUDFLARE_ACCOUNT_ID:-}" ]; then
@@ -323,6 +327,16 @@ jobs:
             probe d1 "$account/d1/database?per_page=1"
             probe kv "$account/storage/kv/namespaces?per_page=1"
             probe r2 "$account/r2/buckets?per_page=1"
+            # The account-scoped groups the next modules need: Bulk Redirects is the first three, and the
+            # rest are the modules behind them. All read-only, and per_page=1 where Cloudflare takes it,
+            # because GET rulesets and GET ai/models/search answer with everything the account can see.
+            probe rulesets "$account/rulesets?per_page=1"
+            probe rule_lists "$account/rules/lists?per_page=1"
+            probe turnstile "$account/challenges/widgets?per_page=1"
+            probe lb_monitors "$account/load_balancers/monitors"
+            probe lb_pools "$account/load_balancers/pools"
+            probe workers_ai "$account/ai/models/search?per_page=1"
+            probe tokens "$account/tokens?per_page=1"
           fi
 
           PY=$(command -v python3 || command -v python || true)
@@ -361,6 +375,12 @@ jobs:
                'a zone that has never been scanned answers with an empty list rather than an error'),
               ('dns_batch', 'POST /zones/{zone_id}/dns_records/batch', 'DNS - Write', 'dns', 'edit',
                'probed with an empty batch, which changes no records either way'),
+              ('zone_rulesets', 'GET /zones/{zone_id}/rulesets', 'Dynamic URL Redirects - Read',
+               'd8e12db741544d1586ec1d6f5d3c7786', 'read',
+               'one list covers every ruleset phase, so a 403 here is this group or Firewall Services and '
+               'the two cannot be told apart from outside'),
+              ('waiting_rooms', 'GET /zones/{zone_id}/waiting_rooms', 'Waiting Rooms - Read',
+               'cab5202d07ef47beae788e6bc95cb6fe', 'read', ''),
               ('account', 'GET /accounts/{account_id}', 'Account Settings - Read', 'account_settings', 'read', ''),
               ('permission_groups', 'GET /accounts/{account_id}/tokens/permission_groups',
                'Account API Tokens - Read', 'account_api_tokens', 'read',
@@ -380,6 +400,26 @@ jobs:
                'workers_kv_storage', 'read', ''),
               ('r2', 'GET /accounts/{account_id}/r2/buckets', 'Workers R2 Storage - Read', 'workers_r2', 'read',
                'R2 also has to be enabled on the account, under Storage and Databases, separately from the token'),
+              # Everything below has no short key, so the template key column carries the permission group
+              # id: the same value the token URL is built from, and the one the Create token endpoint takes.
+              ('rulesets', 'GET /accounts/{account_id}/rulesets', 'Account Rulesets - Read',
+               'fb39996ee9044d2a8725921e02744b39', 'read', ''),
+              ('rule_lists', 'GET /accounts/{account_id}/rules/lists', 'Account Rule Lists - Read',
+               '4f1071168de8466e9808de86febfc516', 'read',
+               'the dashboard calls this Filter Lists; Bulk Redirects needs it together with Account '
+               'Rulesets and Mass URL Redirects'),
+              ('turnstile', 'GET /accounts/{account_id}/challenges/widgets', 'Turnstile Sites - Read',
+               '5d78fd7895974fd0bdbbbb079482721b', 'read', ''),
+              ('lb_monitors', 'GET /accounts/{account_id}/load_balancers/monitors',
+               'Load Balancing: Monitors and Pools - Read', '9d24387c6e8544e2bc4024a03991339f', 'read', ''),
+              ('lb_pools', 'GET /accounts/{account_id}/load_balancers/pools',
+               'Load Balancing: Monitors and Pools - Read', '9d24387c6e8544e2bc4024a03991339f', 'read', ''),
+              ('workers_ai', 'GET /accounts/{account_id}/ai/models/search', 'Workers AI - Read',
+               'a92d2450e05d4e7bb7d0a64968f83d11', 'read', ''),
+              ('tokens', 'GET /accounts/{account_id}/tokens', 'Account API Tokens - Read',
+               'account_api_tokens', 'read',
+               'tokens/permission_groups has been refused with 9109 for an account-owned token holding this '
+               'group, so listing the tokens themselves is what says whether the group is really there'),
           ]
 
           WRITE_LEVELS = {

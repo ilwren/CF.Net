@@ -315,7 +315,9 @@ public class RulesListServiceTests
     public async Task ReplaceItemsAsync_puts_the_whole_set_and_can_clear_it()
     {
         using var harness = CloudflareHarness.Create();
+        // Two calls below, so two responses: the stub answers each request from a queue, in order.
         harness.RespondWithResult("""{"operation_id":"op-2"}""");
+        harness.RespondWithResult("""{"operation_id":"op-3"}""");
 
         await harness.Client.Lists.ReplaceItemsAsync(
             "list-1",

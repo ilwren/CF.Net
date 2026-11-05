@@ -95,6 +95,39 @@ public class ReadOnlyIntegrationTests : CloudflareIntegrationTest
     }
 
     [Fact]
+    public async Task Token_permission_groups_can_be_listed_by_a_user_token()
+    {
+        if (!SkipWithoutCredentials())
+        {
+            return;
+        }
+
+        if (!SkipUnless(
+                !IsAccountOwnedToken,
+                "GET /user/tokens/permission_groups is user-scoped, so an account-owned token (cfat_) is refused with 9109, the same refusal GET /user gets. A user token (cfut_) would list every permission group this account can grant - the id a token policy uses, the name the dashboard shows, its category and whether the caller may select it - which is how a refusal gets traced to a group instead of guessed at."))
+        {
+            return;
+        }
+
+        var groups = await Client.User.ListPermissionGroupsAsync();
+
+        Assert.NotEmpty(groups.Items);
+        Log($"{groups.Count} permission group(s) of {groups.TotalCount}");
+
+        foreach (var group in groups.Items.Take(25))
+        {
+            Log($"  {group} selectable={group.IsSelectable} " +
+                $"scopes={string.Join(",", group.Scopes ?? new List<string>())}");
+        }
+
+        if (groups.Items.FirstOrDefault(item => item.AdditionalData is { Count: > 0 }) is { } unexpected)
+        {
+            Warn($"GET /user/tokens/permission_groups returned fields this library does not model yet: " +
+                 $"{JsonSerializer.Serialize(unexpected.AdditionalData)}.");
+        }
+    }
+
+    [Fact]
     public async Task Accounts_can_be_listed()
     {
         if (!SkipWithoutCredentials())

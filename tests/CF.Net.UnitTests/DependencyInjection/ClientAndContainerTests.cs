@@ -3,6 +3,7 @@ using CFNet.Configuration;
 using CFNet.DependencyInjection;
 using CFNet.Exceptions;
 using CFNet.Http;
+using CFNet.Models.Common;
 using CFNet.Services;
 using CFNet.UnitTests.Testing;
 using Microsoft.Extensions.Configuration;
@@ -848,5 +849,117 @@ public class ServiceCollectionExtensionsTests
         Assert.Same(
             provider.GetRequiredService<ICloudflareTransport>(),
             provider.GetRequiredService<ICloudflareClient>().Transport);
+    }
+}
+
+/// <summary>
+/// <c>GET /user/tokens/permission_groups</c> - what a token may be granted, which is the question every
+/// "why was this call refused" investigation ends up asking.
+/// </summary>
+public class PermissionGroupTests
+{
+    /// <summary>Three of the rows from the reference's own 200 example, unchanged.</summary>
+    private const string DocumentedRows = """
+        [
+          {"id":"1a71c399035b4950a1bd1466bbe4f420","category":"developer_platform","is_selectable":true,"name":"Workers Scripts Read","scopes":["com.cloudflare.api.account"]},
+          {"id":"d2a1802cc9a34e30852f8b33869b2f3c","category":"network_services","is_selectable":false,"name":"Load Balancing: Monitors and Pools Write","scopes":["com.cloudflare.api.account"]},
+          {"id":"9d24387c6e8544e2bc4024a03991339f","category":"network_services","is_selectable":true,"name":"Load Balancing: Monitors and Pools Read","scopes":["com.cloudflare.api.account"]}
+        ]
+        """;
+
+    [Fact]
+    public async Task ListPermissionGroupsAsync_reads_the_documented_rows()
+    {
+        using var harness = CloudflareHarness.Create();
+        harness.RespondWithPage(DocumentedRows, page: 1, totalPages: 1, count: 3, totalCount: 3);
+
+        var groups = await harness.Client.User.ListPermissionGroupsAsync();
+
+        Assert.EndsWith("/user/tokens/permission_groups", harness.LastRequest.Path, StringComparison.Ordinal);
+        Assert.Equal(string.Empty, harness.LastRequest.Query);
+        Assert.Equal(3, groups.Count);
+
+        var scripts = groups.Items[0];
+        Assert.Equal("1a71c399035b4950a1bd1466bbe4f420", scripts.Id);
+        Assert.Equal("Workers Scripts Read", scripts.Name);
+        Assert.Equal(CloudflarePermissionCategories.DeveloperPlatform, scripts.Category);
+        Assert.True(scripts.IsSelectable);
+        Assert.True(scripts.IsAccountScoped);
+        Assert.False(scripts.IsZoneScoped);
+        Assert.False(scripts.IsUserScoped);
+        Assert.Equal("Workers Scripts Read (developer_platform)", scripts.ToString());
+
+        // is_selectable is false for groups the caller may not grant, which is the difference between a
+        // group existing and a token being able to hold it.
+        Assert.False(groups.Items[1].IsSelectable);
+        Assert.Equal("Load Balancing: Monitors and Pools Write", groups.Items[1].Name);
+    }
+
+    [Fact]
+    public async Task ListPermissionGroupsAsync_filters_by_name_and_scope()
+    {
+        using var harness = CloudflareHarness.Create();
+        harness.RespondWithPage(DocumentedRows, page: 1, totalPages: 1, count: 3, totalCount: 3);
+
+        await harness.Client.User.ListPermissionGroupsAsync(
+            name: "Workers",
+            scope: CloudflarePermissionScopes.Account);
+
+        Assert.Equal(
+            "?name=Workers&scope=com.cloudflare.api.account",
+            harness.LastRequest.Query);
+    }
+
+    [Fact]
+    public async Task ListPermissionGroupsAsync_reads_the_paging_figures_beside_the_array()
+    {
+        using var harness = CloudflareHarness.Create();
+        harness.RespondWithPage(DocumentedRows, page: 2, totalPages: 7, count: 3, totalCount: 20);
+
+        var groups = await harness.Client.User.ListPermissionGroupsAsync();
+
+        Assert.Equal(20, groups.TotalCount);
+        Assert.Equal(7, groups.Info?.TotalPages);
+        Assert.True(groups.HasMore);
+        Assert.Equal(3, groups.NextPage);
+    }
+
+    [Fact]
+    public async Task Permission_groups_capture_fields_the_model_does_not_declare()
+    {
+        using var harness = CloudflareHarness.Create();
+        harness.RespondWithPage(
+            """[{"id":"abc","name":"Workers Scripts Read","deprecated":true}]""",
+            page: 1, totalPages: 1, count: 1, totalCount: 1);
+
+        var group = Assert.Single((await harness.Client.User.ListPermissionGroupsAsync()).Items);
+
+        Assert.Contains("deprecated", group.AdditionalData!.Keys, StringComparer.Ordinal);
+    }
+
+    [Fact]
+    public void A_group_reports_which_resource_it_applies_to()
+    {
+        Assert.True(new CloudflarePermissionGroup
+        {
+            Scopes = new List<string> { CloudflarePermissionScopes.Zone },
+        }.IsZoneScoped);
+        Assert.True(new CloudflarePermissionGroup
+        {
+            Scopes = new List<string> { CloudflarePermissionScopes.User },
+        }.IsUserScoped);
+        // An R2 bucket scope is none of the three resource questions above.
+        var bucket = new CloudflarePermissionGroup
+        {
+            Scopes = new List<string> { CloudflarePermissionScopes.R2Bucket },
+        };
+        Assert.False(bucket.IsAccountScoped);
+        Assert.False(bucket.IsZoneScoped);
+        Assert.False(bucket.IsUserScoped);
+        Assert.False(new CloudflarePermissionGroup().IsAccountScoped);
+        Assert.Equal("Workers Scripts Read", new CloudflarePermissionGroup
+        {
+            Name = "Workers Scripts Read",
+        }.ToString());
     }
 }

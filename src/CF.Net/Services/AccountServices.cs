@@ -34,6 +34,26 @@ public interface IUserService
     /// </remarks>
     Task<CloudflareTokenVerification> VerifyAccountTokenAsync(string? accountId = null, CancellationToken cancellationToken = default);
 
+    /// <summary>Lists the permission groups an API token can be granted.</summary>
+    /// <param name="name">Filters by group name. Cloudflare asks for the value URL-encoded, which the query builder does.</param>
+    /// <param name="scope">
+    /// Filters by scope, e.g. <see cref="CloudflarePermissionScopes.Account"/> or
+    /// <see cref="CloudflarePermissionScopes.Zone"/>.
+    /// </param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <remarks>
+    /// <c>GET /user/tokens/permission_groups</c> is user scoped: an account-owned token (<c>cfat_…</c>) is
+    /// refused with <c>9109</c>, exactly as <see cref="GetAsync"/> refuses it. Each entry carries the id a
+    /// token policy grants, the name the dashboard shows, a category, the scopes it applies to and whether
+    /// the caller may select it at all. The id is a 32 character hex string and is <i>not</i> the short key
+    /// the dashboard's token-creation URL takes in <c>permissionGroupKeys</c>, so this answers "what may be
+    /// granted, and what is it called" rather than "how do I pre-fill a link".
+    /// </remarks>
+    Task<CloudflarePage<CloudflarePermissionGroup>> ListPermissionGroupsAsync(
+        string? name = null,
+        string? scope = null,
+        CancellationToken cancellationToken = default);
+
     /// <summary>Fetches the authenticated user via <c>GET /user</c>.</summary>
     /// <param name="cancellationToken">Cancellation token.</param>
     Task<CloudflareUser> GetAsync(CancellationToken cancellationToken = default);
@@ -75,6 +95,21 @@ public sealed class UserService : CloudflareService, IUserService
 
         var response = await Transport.SendAsync<CloudflareTokenVerification>(request, cancellationToken).ConfigureAwait(false);
         return response.Result ?? new CloudflareTokenVerification();
+    }
+
+    /// <inheritdoc />
+    public async Task<CloudflarePage<CloudflarePermissionGroup>> ListPermissionGroupsAsync(
+        string? name = null,
+        string? scope = null,
+        CancellationToken cancellationToken = default)
+    {
+        var request = CloudflareRequest.Get("user/tokens/permission_groups");
+        request.OperationName = "List Token Permission Groups";
+        request.Query.AddIfNotEmpty("name", name);
+        request.Query.AddIfNotEmpty("scope", scope);
+
+        var response = await Transport.SendAsync<List<CloudflarePermissionGroup>>(request, cancellationToken).ConfigureAwait(false);
+        return response.ToPage();
     }
 
     /// <inheritdoc />

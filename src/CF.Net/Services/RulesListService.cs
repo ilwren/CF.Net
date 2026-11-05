@@ -467,10 +467,12 @@ public sealed class RulesListService : CloudflareService, IRulesListService
         var toSend = items.ToList();
         var problems = new List<string>();
 
-        if (toSend.Count == 0)
+        // An empty PUT is how a list gets cleared, so only the POST that adds items refuses one: it would
+        // be a call that asks Cloudflare to add nothing.
+        if (toSend.Count == 0 && method == HttpMethod.Post)
         {
-            problems.Add($"{operationName} was given no items. A PUT with none clears the list, which is " +
-                "ReplaceItemsAsync's job, so nothing is sent here.");
+            problems.Add($"{operationName} was given no items, so there is nothing to add. Clearing a list " +
+                "is ReplaceItemsAsync with none, which is the one call that sends an empty array.");
         }
 
         var empty = toSend.Count(item => item.ValueKind is null);

@@ -184,7 +184,8 @@ public sealed class RulesListItem
     public override string ToString() => ValueKind switch
     {
         RulesListKind.Ip => Ip!,
-        RulesListKind.Hostname => Hostname!.UrlHostname ?? "(hostname)",
+        // The hostname's own label, which is the one that says when the exact name is excluded.
+        RulesListKind.Hostname => Hostname!.ToString(),
         RulesListKind.Redirect => Redirect!.ToString(),
         RulesListKind.Asn => Asn!.Value.ToString(System.Globalization.CultureInfo.InvariantCulture),
         _ => "(empty)",

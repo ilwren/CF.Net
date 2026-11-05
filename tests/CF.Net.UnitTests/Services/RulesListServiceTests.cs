@@ -233,7 +233,7 @@ public class RulesListServiceTests
 
         Assert.Equal(RulesListKind.Hostname, items[0].ValueKind);
         Assert.Equal("example.com", items[0].Hostname!.UrlHostname);
-        Assert.True(items[0].Hostname.ExcludeExactHostname);
+        Assert.True(items[0].Hostname!.ExcludeExactHostname);
         // The exact hostname is excluded, which is what the label has to say.
         Assert.Equal("*.example.com (not example.com)", items[0].ToString());
 

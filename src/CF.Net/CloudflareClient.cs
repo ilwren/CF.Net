@@ -60,6 +60,7 @@ public sealed class CloudflareClient : ICloudflareClient, IDisposable
         D1 = new D1DatabaseService(transport);
         Kv = new KvService(transport);
         R2 = new R2Service(transport);
+        Lists = new RulesListService(transport);
     }
 
     /// <inheritdoc />
@@ -106,6 +107,9 @@ public sealed class CloudflareClient : ICloudflareClient, IDisposable
 
     /// <inheritdoc />
     public IR2Service R2 { get; }
+
+    /// <inheritdoc />
+    public IRulesListService Lists { get; }
 
     /// <inheritdoc />
     public Task<CloudflareConnectionCheck> CheckConnectionAsync(CancellationToken cancellationToken = default) =>

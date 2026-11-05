@@ -8,6 +8,7 @@ using CFNet.Models.Dns;
 using CFNet.Models.Kv;
 using CFNet.Models.Pages;
 using CFNet.Models.R2;
+using CFNet.Models.Rules;
 using CFNet.Models.Ssl;
 using CFNet.Models.Workers;
 using CFNet.Models.Zones;
@@ -92,6 +93,60 @@ public class ReadOnlyIntegrationTests : CloudflareIntegrationTest
 
         Assert.False(string.IsNullOrWhiteSpace(user.Id));
         Log($"user id={user.Id} email={user.Email}");
+    }
+
+    [Fact]
+    public async Task Rules_lists_can_be_listed()
+    {
+        if (!SkipWithoutCredentials() || !SkipWithoutAccount())
+        {
+            return;
+        }
+
+        // The endpoint answers with every list at once and no result_info, so there is no paging to check
+        // here - this is the whole catalogue. An account holding no lists is a legitimate answer, and the
+        // reachability probe has already said whether the permission itself is there.
+        var lists = await Client.Lists.ListAsync();
+
+        Log($"{lists.Count} list(s) in this account");
+        Assert.All(lists, list => Assert.False(string.IsNullOrEmpty(list.Id)));
+        Assert.All(lists, list =>
+        {
+            Assert.NotNull(list.Kind);
+            Assert.Contains(
+                list.Kind!,
+                new[] { RulesListKind.Ip, RulesListKind.Redirect, RulesListKind.Hostname, RulesListKind.Asn },
+                StringComparer.Ordinal);
+        });
+
+        // Reading a page of items is what proves the item model against whatever this account really holds,
+        // so it is done for the first few lists rather than for none. A list kind decides which one of the
+        // four value fields its items populate, and an item holding a different one would mean the model is
+        // reading the wrong shape rather than that Cloudflare stored something odd.
+        foreach (var list in lists.Take(3))
+        {
+            Log($"list {list.Name} kind={list.Kind} items={list.NumItems} referencing={list.NumReferencingFilters}");
+
+            var page = await Client.Lists.ListItemsAsync(list.Id!, new RulesListItemListParameters { PerPage = 5 });
+            Log($"{page.Items.Count} item(s) read back from {list.Name}");
+
+            foreach (var item in page.Items)
+            {
+                Assert.Equal(list.Kind, item.ValueKind);
+            }
+
+            if (page.Items.Count > 0 && page.Items[0].AdditionalData is { Count: > 0 } extra)
+            {
+                Warn($"GET /accounts/{{account_id}}/rules/lists/{list.Id}/items returned fields this library " +
+                     $"does not model, on item '{page.Items[0].Id}': {JsonSerializer.Serialize(extra)}.");
+            }
+        }
+
+        if (lists.FirstOrDefault(list => list.AdditionalData is { Count: > 0 }) is { } unexpected)
+        {
+            Warn($"GET /accounts/{{account_id}}/rules/lists returned fields this library does not model, on " +
+                 $"'{unexpected.Name}': {JsonSerializer.Serialize(unexpected.AdditionalData)}.");
+        }
     }
 
     [Fact]
@@ -887,6 +942,140 @@ public class WriteIntegrationTests : CloudflareIntegrationTest
         }
 
         Assert.Null(await Client.Kv.GetNamespaceAsync(namespaceId));
+    }
+
+    [Fact]
+    public async Task A_rules_list_can_be_created_filled_and_removed()
+    {
+        if (!SkipWithoutAccount() || !SkipWithoutWritePermission())
+        {
+            return;
+        }
+
+        // List names take lowercase letters, digits and underscores, so this avoids the hyphens
+        // UniqueSuffix puts in a name. The redirect sources below are hostnames, which is the opposite
+        // rule, so they get their own marker.
+        var name = $"cfnet_it_{DateTime.UtcNow:yyyyMMddHHmmss}_{Guid.NewGuid().ToString("N")[..8]}";
+        var marker = Guid.NewGuid().ToString("N")[..8];
+        var firstSource = $"cfnet-{marker}-one.example.com/old";
+        var secondSource = $"cfnet-{marker}-two.example.com/a";
+
+        // Created outside the try/finally on purpose: when the create is refused there is nothing to
+        // delete, and a second failure from the finally would hide the reason the first one happened.
+        RulesList created;
+        try
+        {
+            created = await Client.Lists.CreateAsync(new CreateRulesListRequest
+            {
+                Name = name,
+                Kind = RulesListKind.Redirect,
+                Description = "CF.Net integration test list",
+            });
+        }
+        catch (CloudflareApiException exception) when (exception.StatusCode == System.Net.HttpStatusCode.Forbidden)
+        {
+            // Reading lists only needs Account Rule Lists Read; changing them needs Write. Reported rather
+            // than failed, because it is the credential and not the library, and the read side of the same
+            // resource is exercised by Rules_lists_can_be_listed.
+            SkipUnless(
+                false,
+                "POST /accounts/{account_id}/rules/lists was refused, so this token can read Account Rule " +
+                "Lists but not write them. " + exception.Message);
+            return;
+        }
+
+        var listId = created.Id!;
+        Log($"created list {created.Name} id={listId} kind={created.Kind}");
+
+        try
+        {
+            Assert.Equal(name, created.Name);
+            Assert.Equal(RulesListKind.Redirect, created.Kind);
+            Assert.True(created.IsRedirectList);
+
+            // Item changes are asynchronous: Cloudflare answers with an operation id and applies them in
+            // the background, so reading straight after writing can still show the old contents. Waiting
+            // on the operation is what makes the assertions below mean anything.
+            var added = await Client.Lists.CreateItemsAsync(
+                listId,
+                new[]
+                {
+                    CreateRulesListItemRequest.ForRedirect(firstSource, "https://example.com/new", 301, "first"),
+                    CreateRulesListItemRequest.ForRedirect(secondSource, "https://example.com/b"),
+                });
+
+            Assert.False(string.IsNullOrEmpty(added.OperationId));
+            Log($"item create accepted as operation {added.OperationId}");
+
+            var operation = await Client.Lists.WaitForBulkOperationAsync(
+                added.OperationId!,
+                timeout: TimeSpan.FromSeconds(60),
+                pollInterval: TimeSpan.FromSeconds(2));
+
+            Log($"operation {operation.Id} ended as {operation.Status}");
+            Assert.True(operation.IsFinished, $"the item create never finished: {operation}");
+            Assert.False(operation.HasFailed, $"Cloudflare refused the items: {operation.Error}");
+
+            var items = await Client.Lists.ListItemsAsync(listId, new RulesListItemListParameters { PerPage = 10 });
+            Assert.Equal(2, items.Count);
+            Assert.Equal(2, items.Items.Count(item => item.ValueKind == RulesListKind.Redirect));
+            Assert.Contains(items.Items, item => item.Redirect!.SourceUrl == firstSource);
+            Assert.Contains(items.Items, item => item.Redirect!.SourceUrl == secondSource);
+
+            var first = items.Items.Single(item => item.Redirect!.SourceUrl == firstSource);
+            Assert.Equal("https://example.com/new", first.Redirect!.TargetUrl);
+            Assert.Equal(301, first.Redirect.StatusCode);
+            Assert.Equal("first", first.Comment);
+
+            // One item read on its own has to match the same item in the page.
+            var alone = await Client.Lists.GetItemAsync(listId, first.Id!);
+            Assert.NotNull(alone);
+            Assert.Equal(first.Redirect!.SourceUrl, alone!.Redirect!.SourceUrl);
+
+            var read = await Client.Lists.GetAsync(listId);
+            Assert.NotNull(read);
+            Log($"list {read!.Name} now reports {read.NumItems} item(s)");
+            if (read.NumItems != 2)
+            {
+                // The item endpoints are the authority here; num_items is a counter Cloudflare keeps
+                // beside the list and it is worth knowing when the two disagree.
+                Warn($"GET /accounts/{{account_id}}/rules/lists/{listId} reported num_items=" +
+                     $"{read.NumItems} after two items were added and the bulk operation completed.");
+            }
+
+            var updated = await Client.Lists.UpdateAsync(
+                listId,
+                new UpdateRulesListRequest { Description = "CF.Net integration test list, updated" });
+            Assert.Equal("CF.Net integration test list, updated", updated.Description);
+
+            // Removing items goes by id inside a body, and is asynchronous the same way adding is.
+            var removal = await Client.Lists.DeleteItemsAsync(
+                listId,
+                items.Items.Select(item => item.Id!).ToList());
+            var removed = await Client.Lists.WaitForBulkOperationAsync(
+                removal.OperationId!,
+                timeout: TimeSpan.FromSeconds(60),
+                pollInterval: TimeSpan.FromSeconds(2));
+
+            Log($"operation {removed.Id} ended as {removed.Status}");
+            Assert.False(removed.HasFailed, $"Cloudflare refused the removal: {removed.Error}");
+            Assert.True(removed.IsFinished, $"the removal never finished: {removed}");
+            Assert.Equal(0, (await Client.Lists.ListItemsAsync(listId)).Count);
+        }
+        finally
+        {
+            try
+            {
+                var deletedId = await Client.Lists.DeleteAsync(listId);
+                Log($"deleted list {deletedId}");
+            }
+            catch (CloudflareApiException exception) when (exception.IsNotFound)
+            {
+                Log("list was already gone");
+            }
+        }
+
+        Assert.Null(await Client.Lists.GetAsync(listId));
     }
 
     [Fact]

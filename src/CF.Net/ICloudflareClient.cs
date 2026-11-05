@@ -76,6 +76,12 @@ public interface ICloudflareClient : IDisposable
     IR2Service R2 { get; }
 
     /// <summary>
+    /// Account Lists: the named sets of IPs, hostnames, ASNs and redirect entries that rules match
+    /// against, plus the bulk operations that change their items.
+    /// </summary>
+    IRulesListService Lists { get; }
+
+    /// <summary>
     /// Cheap connectivity check that never throws: verifies the credentials using whichever scheme is
     /// configured and reports the outcome.
     /// </summary>

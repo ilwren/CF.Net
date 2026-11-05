@@ -686,6 +686,42 @@ catalog.
 
 ---
 
+## Lists (account rule lists)
+
+`IRulesListService` — `client.Lists`
+
+Lists are the account-scoped sets of values that rules match against: IPs, hostnames, ASNs, and the
+source/target URL pairs behind Bulk Redirects. A list's `kind` is fixed when it is created and decides
+which one value field its items populate; `RulesListItem` declares all four, so a mixed account can be read
+with one model and `ValueKind` says which one is populated.
+
+| Method | Endpoint | Notes |
+| --- | --- | --- |
+| `ListAsync(accountId)` | `GET /accounts/{account_id}/rules/lists` | the whole set at once - no `result_info`, so there is nothing to page. Each row carries `num_items` and `num_referencing_filters`, the latter being how many rules refer to the list by name |
+| `GetAsync(listId, accountId)` | `GET …/rules/lists/{list_id}` | `null` on 404 |
+| `CreateAsync(CreateRulesListRequest, accountId)` | `POST …/rules/lists` | body is `name`, `kind`, `description`. A missing name or kind is refused locally, because the kind cannot be changed afterwards |
+| `UpdateAsync(listId, UpdateRulesListRequest, accountId)` | `PUT …/rules/lists/{list_id}` | a **PUT**, not a PATCH, and the description is the whole of what it accepts |
+| `DeleteAsync(listId, accountId)` | `DELETE …/rules/lists/{list_id}` | takes every item with it and returns the id Cloudflare echoes. A list a rule still refers to is refused rather than deleted |
+| `ListItemsAsync(listId, RulesListItemListParameters?, accountId)` | `GET …/rules/lists/{list_id}/items` | cursor paged: `after`, `per_page`, `search`. `NextCursor` is what the next call takes; the response's cursors also carry a `before`, which the endpoint does not accept |
+| `GetItemAsync(listId, itemId, accountId)` | `GET …/rules/lists/{list_id}/items/{item_id}` | `null` on 404 |
+| `CreateItemsAsync(listId, items, accountId)` | `POST …/rules/lists/{list_id}/items` | a **bare JSON array** body, answered with `{"operation_id": …}`. Refused locally for an empty batch, an item carrying no value, or a batch mixing kinds |
+| `ReplaceItemsAsync(listId, items, accountId)` | `PUT …/rules/lists/{list_id}/items` | replaces the whole set; an empty array clears the list, which is the one call allowed to send one |
+| `DeleteItemsAsync(listId, itemIds, accountId)` | `DELETE …/rules/lists/{list_id}/items` | a DELETE **with a body**: `{"items":[{"id":…}]}`, ids trimmed and de-duplicated. Refused locally with no ids, and the message points at `ReplaceItemsAsync` for clearing |
+| `GetBulkOperationAsync(operationId, accountId)` | `GET …/rules/lists/bulk_operations/{operation_id}` | `null` on 404, which is also what an operation that has aged out looks like. One model reads all three shapes: pending/running, completed (adds `completed`), failed (adds `error`) |
+| `WaitForBulkOperationAsync(operationId, timeout?, pollInterval?, accountId)` | the same endpoint, polled | stops as soon as `IsFinished`, a failure included, and returns the last state rather than throwing when the time runs out. An unknown id raises instead of polling until the timeout |
+
+Redirect entries (`RulesListRedirect`) carry `source_url`, `target_url`, `status_code` (301, 302, 307 or
+308) and the four flags the dashboard shows as toggles - `include_subdomains`, `preserve_query_string`,
+`preserve_path_suffix`, `subpath_matching`. Each flag is nullable and omitted when unset, so Cloudflare's
+own default applies instead of a `false` this library invented. Hostname entries carry `url_hostname` and
+`exclude_exact_hostname`, which matches subdomains but not the name itself.
+
+⛔ Not wrapped yet: the ruleset rule that turns a redirect list into actual redirects
+(`POST /accounts/{account_id}/rulesets` with `phase: http_request_redirect` and a `from_list` action
+parameter). This section is the data half of Bulk Redirects; the ruleset half is next.
+
+---
+
 ## Cross-cutting behaviour
 
 | Concern | Where |

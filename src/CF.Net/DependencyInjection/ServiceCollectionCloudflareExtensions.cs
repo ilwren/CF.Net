@@ -272,6 +272,7 @@ public static class ServiceCollectionCloudflareExtensions
         services.TryAddSingleton<ID1DatabaseService>(provider => provider.GetRequiredService<ICloudflareClient>().D1);
         services.TryAddSingleton<IKvService>(provider => provider.GetRequiredService<ICloudflareClient>().Kv);
         services.TryAddSingleton<IR2Service>(provider => provider.GetRequiredService<ICloudflareClient>().R2);
+        services.TryAddSingleton<IRulesListService>(provider => provider.GetRequiredService<ICloudflareClient>().Lists);
     }
 
     /// <summary>

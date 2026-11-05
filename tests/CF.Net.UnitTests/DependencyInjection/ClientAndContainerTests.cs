@@ -1,9 +1,11 @@
 using System.Net;
+using System.Text.Json;
 using CFNet.Configuration;
 using CFNet.DependencyInjection;
 using CFNet.Exceptions;
 using CFNet.Http;
 using CFNet.Models.Common;
+using CFNet.Serialization;
 using CFNet.Services;
 using CFNet.UnitTests.Testing;
 using Microsoft.Extensions.Configuration;
@@ -1045,5 +1047,53 @@ public class AccountPermissionGroupTests
 
         Assert.NotEmpty(exception.Problems);
         Assert.Equal(0, harness.RequestCount);
+    }
+}
+
+/// <summary>
+/// Fields and scopes the live account catalogue turned up that the published one does not carry: they are
+/// declared here so a run stops reporting them as unmodelled.
+/// </summary>
+public class PermissionGroupLiveShapeTests
+{
+    [Fact]
+    public void A_group_reads_its_description()
+    {
+        // Observed live on 'AI Audit Read': {"description":"Grants access to reading AI Audit"}.
+        var group = JsonSerializer.Deserialize<CloudflarePermissionGroup>(
+            """{"id":"abc","name":"AI Audit Read","category":"analytics_and_logs","description":"Grants access to reading AI Audit"}""",
+            CloudflareJson.Default)!;
+
+        Assert.Equal("Grants access to reading AI Audit", group.Description);
+        // Now that it is declared, it is no longer an uncaptured field.
+        Assert.True(group.AdditionalData is null or { Count: 0 });
+    }
+
+    [Fact]
+    public void A_group_can_be_scoped_to_one_worker_script()
+    {
+        // The 'Individual Workers …' groups grant a single script, which is a fourth kind of resource
+        // question the three Is*Scoped helpers do not answer.
+        var script = new CloudflarePermissionGroup
+        {
+            Scopes = new List<string> { CloudflarePermissionScopes.WorkerScript },
+        };
+
+        Assert.Equal("com.cloudflare.edge.worker.script", CloudflarePermissionScopes.WorkerScript);
+        Assert.False(script.IsAccountScoped);
+        Assert.False(script.IsZoneScoped);
+        Assert.False(script.IsUserScoped);
+    }
+
+    [Fact]
+    public void A_group_can_be_scoped_to_one_flagship_app()
+    {
+        Assert.Equal(
+            "com.cloudflare.api.account.flagship.app",
+            CloudflarePermissionScopes.FlagshipApp);
+        Assert.False(new CloudflarePermissionGroup
+        {
+            Scopes = new List<string> { CloudflarePermissionScopes.FlagshipApp },
+        }.IsAccountScoped);
     }
 }

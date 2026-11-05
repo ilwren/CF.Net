@@ -31,12 +31,24 @@ public sealed class CloudflarePermissionGroup
     [JsonPropertyName("name")]
     public string? Name { get; set; }
 
+    /// <summary>
+    /// One sentence on what the group grants, e.g. <c>Grants access to reading AI Audit</c>.
+    /// </summary>
+    /// <remarks>
+    /// Returned by <c>GET /accounts/{account_id}/tokens/permission_groups</c> but not by the published
+    /// permission-group catalogue, so it arrived as an uncaptured field on a live run before it was
+    /// declared here. Absent from some rows; never invent a value from <see cref="Name"/>.
+    /// </remarks>
+    [JsonPropertyName("description")]
+    public string? Description { get; set; }
+
     /// <summary>Product category. One of the <see cref="CloudflarePermissionCategories"/> values.</summary>
     [JsonPropertyName("category")]
     public string? Category { get; set; }
 
     /// <summary>
-    /// What the group can be scoped to - account, zone, user or an R2 bucket. One of the
+    /// What the group can be scoped to: an account, a zone, the signed-in user, or a single resource
+    /// such as one R2 bucket or one Worker script. One or more of the
     /// <see cref="CloudflarePermissionScopes"/> values.
     /// </summary>
     [JsonPropertyName("scopes")]
@@ -114,7 +126,7 @@ public static class CloudflarePermissionCategories
     public const string Other = "other";
 }
 
-/// <summary>The four resource scopes a permission group can apply to.</summary>
+/// <summary>The six resource scopes a permission group can apply to.</summary>
 public static class CloudflarePermissionScopes
 {
     /// <summary>Granted on an account.</summary>
@@ -128,4 +140,21 @@ public static class CloudflarePermissionScopes
 
     /// <summary>Granted on a single R2 bucket.</summary>
     public const string R2Bucket = "com.cloudflare.edge.r2.bucket";
+
+    /// <summary>
+    /// Granted on a single Worker script rather than on every script in the account.
+    /// </summary>
+    /// <remarks>
+    /// Carried by the groups that name one script: <c>Individual Workers Editor</c>,
+    /// <c>Individual Workers Admin</c>, <c>Individual Workers Content Read-Only</c>,
+    /// <c>Individual Workers Metadata Read-Only</c> and <c>Granular Workers Scripts Read</c>.
+    /// </remarks>
+    public const string WorkerScript = "com.cloudflare.edge.worker.script";
+
+    /// <summary>Granted on a single Flagship (feature flag) application.</summary>
+    /// <remarks>
+    /// Carried by <c>Flagship App Read</c>, <c>Flagship App Write</c>, <c>Flagship App Bind</c> and
+    /// <c>Flagship App Evaluate</c>.
+    /// </remarks>
+    public const string FlagshipApp = "com.cloudflare.api.account.flagship.app";
 }

@@ -274,9 +274,12 @@ list, and the URL a reader copies afterwards already carries it.
 Ids are the same values `GET /accounts/{account_id}/tokens/permission_groups` returns, that `POST
 /user/tokens` takes and that the Terraform provider uses, so they are stable rather than guessed — and on
 any run whose token can read that endpoint, the step cross-checks the list against the live catalogue and
-reports drift as a notice. This account's token cannot read it: an account-owned token is refused with
-`9109` there even holding *Account API Tokens — Read*, which is why the cross-check usually reports that it
-could not run. A user token, or *Account API Tokens — Write*, would change that.
+reports drift as a notice. It does run against this account: the token answers with a catalogue of 415
+groups and the notice says all 51 ids are in it, names included. It did not always — a token holding only
+*Account API Tokens — Read* was refused here with `9109`, and the one holding *Write* as well answers,
+which is why the URL asks for Write. `User.ListAccountPermissionGroupsAsync` wraps the same endpoint, and
+its integration test checks the live catalogue against the categories and scopes this library publishes as
+constants, so a group Cloudflare adds in a new category is reported rather than quietly read as `other`.
 
 Two things no URL can pre-fill: **Account Resources** and **Zone Resources**. The zone-scoped groups — Zone,
 DNS, Zone Settings, SSL and Certificates, Cache Purge, Analytics, Firewall Services, Page Rules, Dynamic URL

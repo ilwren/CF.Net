@@ -384,8 +384,8 @@ jobs:
               ('account', 'GET /accounts/{account_id}', 'Account Settings - Read', 'account_settings', 'read', ''),
               ('permission_groups', 'GET /accounts/{account_id}/tokens/permission_groups',
                'Account API Tokens - Read', 'account_api_tokens', 'read',
-               'an account-owned token (cfat_) is refused here even with Account API Tokens read, the way '
-               'it is refused at GET /user; enumerating permission groups needs a user token (cfut_)'),
+               'refused with 9109 for a token holding only Account API Tokens read; one holding write as '
+               'well answers with the whole catalogue, which is what the id cross-check below reads'),
               ('workers_scripts', 'GET /accounts/{account_id}/workers/scripts', 'Workers Scripts - Read',
                'workers_scripts', 'read', ''),
               ('workers_domains', 'GET /accounts/{account_id}/workers/domains', 'Workers Scripts - Read',
@@ -418,8 +418,8 @@ jobs:
                'a92d2450e05d4e7bb7d0a64968f83d11', 'read', ''),
               ('tokens', 'GET /accounts/{account_id}/tokens', 'Account API Tokens - Read',
                'account_api_tokens', 'read',
-               'tokens/permission_groups has been refused with 9109 for an account-owned token holding this '
-               'group, so listing the tokens themselves is what says whether the group is really there'),
+               'tokens/permission_groups was refused with 9109 while a token held only Read, so listing the '
+               'tokens themselves is the plainer answer to whether this group is there'),
           ]
 
           WRITE_LEVELS = {

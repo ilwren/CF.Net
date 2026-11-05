@@ -963,3 +963,87 @@ public class PermissionGroupTests
         }.ToString());
     }
 }
+
+/// <summary>
+/// The account-scoped catalogue: the one an account-owned token can read, and the one a token-creation URL
+/// for such a token has to be built from, because the id each row carries is the key that URL takes.
+/// </summary>
+public class AccountPermissionGroupTests
+{
+    /// <summary>
+    /// Two rows shaped like the live ones. <c>Workers Scripts Write</c> is the group this suite uploads
+    /// with, and <c>Mass URL Redirects Write</c> is one of the groups that has no short key at all, so the
+    /// only way to ask for it in a URL is by this id.
+    /// </summary>
+    private const string AccountRows = """
+        [
+          {"id":"e086da7e2179491d91ee5f35b3ca210a","category":"developer_platform","is_selectable":true,"name":"Workers Scripts Write","scopes":["com.cloudflare.api.account"]},
+          {"id":"abe78e2276664f4db588c1f675a77486","category":"rules_and_configuration","is_selectable":true,"name":"Mass URL Redirects Write","scopes":["com.cloudflare.api.account"]}
+        ]
+        """;
+
+    [Fact]
+    public async Task ListAccountPermissionGroupsAsync_reads_the_account_catalogue()
+    {
+        using var harness = CloudflareHarness.Create();
+        harness.RespondWithPage(AccountRows, page: 1, totalPages: 1, count: 2, totalCount: 415);
+
+        var groups = await harness.Client.User.ListAccountPermissionGroupsAsync();
+
+        Assert.EndsWith(
+            "/accounts/acct-1234/tokens/permission_groups",
+            harness.LastRequest.Path,
+            StringComparison.Ordinal);
+        Assert.Equal(string.Empty, harness.LastRequest.Query);
+        Assert.Equal(2, groups.Count);
+        Assert.Equal(415, groups.TotalCount);
+
+        Assert.Equal("e086da7e2179491d91ee5f35b3ca210a", groups.Items[0].Id);
+        Assert.Equal("Workers Scripts Write", groups.Items[0].Name);
+        Assert.True(groups.Items[0].IsAccountScoped);
+
+        // The rows are the same shape the user-scoped endpoint documents, so the same model reads both.
+        Assert.Equal(CloudflarePermissionCategories.RulesAndConfiguration, groups.Items[1].Category);
+        Assert.Equal("Mass URL Redirects Write (rules_and_configuration)", groups.Items[1].ToString());
+    }
+
+    [Fact]
+    public async Task ListAccountPermissionGroupsAsync_filters_by_name_and_scope()
+    {
+        using var harness = CloudflareHarness.Create();
+        harness.RespondWithPage(AccountRows, page: 1, totalPages: 1, count: 2, totalCount: 2);
+
+        await harness.Client.User.ListAccountPermissionGroupsAsync(
+            name: "Workers",
+            scope: CloudflarePermissionScopes.Account);
+
+        Assert.Equal(
+            "?name=Workers&scope=com.cloudflare.api.account",
+            harness.LastRequest.Query);
+    }
+
+    [Fact]
+    public async Task ListAccountPermissionGroupsAsync_takes_an_explicit_account()
+    {
+        using var harness = CloudflareHarness.Create();
+        harness.RespondWithPage(AccountRows, page: 1, totalPages: 1, count: 2, totalCount: 2);
+
+        await harness.Client.User.ListAccountPermissionGroupsAsync(accountId: "acct-9999");
+
+        Assert.Contains("/accounts/acct-9999/tokens/permission_groups", harness.LastRequest.Path, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task ListAccountPermissionGroupsAsync_needs_an_account_to_ask()
+    {
+        // No account id is configured and none was passed, so there is no catalogue to read: the call is
+        // refused locally rather than sent to a URL with a hole in it.
+        using var harness = CloudflareHarness.Create(options => options.AccountId = null);
+
+        var exception = await Assert.ThrowsAsync<CloudflareConfigurationException>(
+            () => harness.Client.User.ListAccountPermissionGroupsAsync());
+
+        Assert.NotEmpty(exception.Problems);
+        Assert.Equal(0, harness.RequestCount);
+    }
+}

@@ -54,6 +54,30 @@ public interface IUserService
         string? scope = null,
         CancellationToken cancellationToken = default);
 
+    /// <summary>Lists the permission groups an account-owned API token can be granted.</summary>
+    /// <param name="name">Filters by group name. Cloudflare asks for the value URL-encoded, which the query builder does.</param>
+    /// <param name="scope">
+    /// Filters by scope, e.g. <see cref="CloudflarePermissionScopes.Account"/> or
+    /// <see cref="CloudflarePermissionScopes.Zone"/>.
+    /// </param>
+    /// <param name="accountId">The account whose catalogue to read; defaults to the configured account id.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <remarks>
+    /// <c>GET /accounts/{account_id}/tokens/permission_groups</c> is the account-scoped sibling of
+    /// <see cref="ListPermissionGroupsAsync"/>, and the one an account-owned token (<c>cfat_…</c>) can
+    /// actually answer: observed live answering 200 with 415 groups where the user-scoped endpoint refuses
+    /// the same token with <c>9109</c>. The two catalogues are not the same list - this one holds the
+    /// groups that account can grant, which is what a token-creation URL for an account token has to be
+    /// built from, because the <c>id</c> each row carries is the key that URL takes. Cloudflare documents
+    /// <c>API Tokens Read</c> as enough for the call, but a token holding only that was refused with
+    /// <c>9109</c>; the token holding <c>API Tokens Write</c> as well answers it.
+    /// </remarks>
+    Task<CloudflarePage<CloudflarePermissionGroup>> ListAccountPermissionGroupsAsync(
+        string? name = null,
+        string? scope = null,
+        string? accountId = null,
+        CancellationToken cancellationToken = default);
+
     /// <summary>Fetches the authenticated user via <c>GET /user</c>.</summary>
     /// <param name="cancellationToken">Cancellation token.</param>
     Task<CloudflareUser> GetAsync(CancellationToken cancellationToken = default);
@@ -105,6 +129,22 @@ public sealed class UserService : CloudflareService, IUserService
     {
         var request = CloudflareRequest.Get("user/tokens/permission_groups");
         request.OperationName = "List Token Permission Groups";
+        request.Query.AddIfNotEmpty("name", name);
+        request.Query.AddIfNotEmpty("scope", scope);
+
+        var response = await Transport.SendAsync<List<CloudflarePermissionGroup>>(request, cancellationToken).ConfigureAwait(false);
+        return response.ToPage();
+    }
+
+    /// <inheritdoc />
+    public async Task<CloudflarePage<CloudflarePermissionGroup>> ListAccountPermissionGroupsAsync(
+        string? name = null,
+        string? scope = null,
+        string? accountId = null,
+        CancellationToken cancellationToken = default)
+    {
+        var request = CloudflareRequest.Get($"{AccountPath(ResolveAccountId(accountId))}/tokens/permission_groups");
+        request.OperationName = "List Account Token Permission Groups";
         request.Query.AddIfNotEmpty("name", name);
         request.Query.AddIfNotEmpty("scope", scope);
 

@@ -95,6 +95,92 @@ public class ReadOnlyIntegrationTests : CloudflareIntegrationTest
     }
 
     [Fact]
+    public async Task Account_token_permission_groups_can_be_listed()
+    {
+        if (!SkipWithoutCredentials() || !SkipWithoutAccount())
+        {
+            return;
+        }
+
+        CloudflarePage<CloudflarePermissionGroup> groups;
+        try
+        {
+            // Observed live: 200 with this account's whole catalogue, 415 groups, where the user-scoped
+            // endpoint below refuses the same token with 9109. This is also the endpoint a token-creation
+            // URL for an account token has to be built from: the id each row carries is the key that URL
+            // takes, and the workflow cross-checks its own list of them against this answer.
+            groups = await Client.User.ListAccountPermissionGroupsAsync();
+        }
+        catch (CloudflareApiException exception) when (exception.HasErrorCode(9109))
+        {
+            // Cloudflare documents API Tokens Read as enough for this call, and a token holding only that
+            // was refused here once. Reported rather than failed, because it is the credential and not the
+            // library: the same token reads every other account-scoped endpoint this suite probes.
+            SkipUnless(
+                false,
+                "GET /accounts/{account_id}/tokens/permission_groups was refused with 9109, which is what " +
+                "an account-owned token holding only Account API Tokens Read got here once. The token that " +
+                "holds Account API Tokens Write as well answers with the whole catalogue. " +
+                exception.Message);
+            return;
+        }
+
+        Assert.NotEmpty(groups.Items);
+        Log($"{groups.Count} permission group(s) in this account's catalogue, {groups.TotalCount} reported");
+
+        // Every id is a 32 character hex string: that is what a token policy grants and what a
+        // token-creation URL takes as its key, so a row that does not look like one is worth stopping on.
+        Assert.All(groups.Items, group => Assert.Matches("^[0-9a-f]{32}$", group.Id ?? string.Empty));
+        Assert.Contains(groups.Items, group => group.IsSelectable is true);
+        Assert.Contains(groups.Items, group => group.IsAccountScoped);
+        Assert.Contains(groups.Items, group => group.IsZoneScoped);
+
+        // Four hundred rows would make a per-row report useless, so the two lists this library publishes
+        // as constants - categories and scopes - are checked against the whole catalogue at once and
+        // anything live that is not in them is reported as one set.
+        var knownCategories = ConstantValues(typeof(CloudflarePermissionCategories));
+        var knownScopes = ConstantValues(typeof(CloudflarePermissionScopes));
+        var unknownCategories = groups.Items
+            .Select(group => group.Category)
+            .Where(category => category is { Length: > 0 } && !knownCategories.Contains(category))
+            .Distinct(StringComparer.Ordinal)
+            .OrderBy(value => value, StringComparer.Ordinal)
+            .ToList();
+        var unknownScopes = groups.Items
+            .SelectMany(group => group.Scopes ?? new List<string>())
+            .Where(scope => !knownScopes.Contains(scope))
+            .Distinct(StringComparer.Ordinal)
+            .OrderBy(value => value, StringComparer.Ordinal)
+            .ToList();
+
+        if (unknownCategories.Count > 0 || unknownScopes.Count > 0)
+        {
+            Warn($"GET /accounts/{{account_id}}/tokens/permission_groups reported values this library does " +
+                 $"not list as constants - categories: {string.Join(", ", unknownCategories)}; scopes: " +
+                 $"{string.Join(", ", unknownScopes)}. CloudflarePermissionCategories and " +
+                 "CloudflarePermissionScopes are behind.");
+        }
+
+        if (groups.Items.FirstOrDefault(group => group.AdditionalData is { Count: > 0 }) is { } unexpected)
+        {
+            Warn($"GET /accounts/{{account_id}}/tokens/permission_groups returned fields this library does " +
+                 $"not model yet, on '{unexpected.Name}': " +
+                 $"{JsonSerializer.Serialize(unexpected.AdditionalData)}.");
+        }
+    }
+
+    /// <summary>The string constants a catalogue class publishes, as a set.</summary>
+    /// <param name="constants">The class to read.</param>
+    /// <returns>Every public constant string it declares.</returns>
+    private static HashSet<string> ConstantValues(Type constants) =>
+        constants
+            .GetFields(BindingFlags.Public | BindingFlags.Static | BindingFlags.FlattenHierarchy)
+            .Where(field => field.IsLiteral && field.FieldType == typeof(string))
+            .Select(field => (string?)field.GetRawConstantValue())
+            .OfType<string>()
+            .ToHashSet(StringComparer.Ordinal);
+
+    [Fact]
     public async Task Token_permission_groups_can_be_listed_by_a_user_token()
     {
         if (!SkipWithoutCredentials())
@@ -104,7 +190,7 @@ public class ReadOnlyIntegrationTests : CloudflareIntegrationTest
 
         if (!SkipUnless(
                 !IsAccountOwnedToken,
-                "GET /user/tokens/permission_groups is user-scoped, so an account-owned token (cfat_) is refused with 9109, the same refusal GET /user gets. A user token (cfut_) would list every permission group this account can grant - the id a token policy uses, the name the dashboard shows, its category and whether the caller may select it - which is how a refusal gets traced to a group instead of guessed at."))
+                "GET /user/tokens/permission_groups is user-scoped, so an account-owned token (cfat_) is refused with 9109, the same refusal GET /user gets. A user token (cfut_) would answer it. The account-scoped catalogue, which this token can read, is listed by Account_token_permission_groups_can_be_listed."))
         {
             return;
         }

@@ -664,7 +664,7 @@ public class PagesProjectsServiceTests
           },
           "created_on": "2024-01-01T00:00:00Z",
           "modified_on": "2024-02-01T00:00:00Z",
-          "latest_deployment": { "id": "d-1", "environment": "preview", "latest_stage": { "name": "deploy", "status": "success" } }
+          "latest_deployment": { "id": "d-1", "environment": "preview", "latest_stage": { "name": "deploy", "status": "success" }, "deployment_trigger": { "type": "github:push", "metadata": { "commit_hash": "abc123" } }, "source": { "type": "github", "config": { "owner": "example", "owner_id": "7", "repo_name": "site", "repo_id": "99", "production_branch": "main", "path_includes": ["src/**"], "production_deployments_enabled": true } } }
         }
         """);
 
@@ -700,6 +700,23 @@ public class PagesProjectsServiceTests
 
         Assert.NotNull(project.LatestDeployment);
         Assert.Equal(PagesDeploymentStatusValues.Success, project.LatestDeployment!.Status);
+
+        // A project connected to a repository carries its source control on the deployment too, as an
+        // object rather than the string this library once modelled: that string made a live list of
+        // projects unreadable, and every Pages test failed on the same message.
+        var deploymentSource = project.LatestDeployment!.Source;
+        Assert.Equal("github", deploymentSource!.Type);
+        Assert.Equal("example", deploymentSource.Config!.Owner);
+        Assert.Equal("7", deploymentSource.Config.OwnerId);
+        Assert.Equal("site", deploymentSource.Config.RepoName);
+        Assert.Equal("99", deploymentSource.Config.RepoId);
+        Assert.Equal("src/**", Assert.Single(deploymentSource.Config.PathIncludes!));
+        Assert.True(deploymentSource.Config.ProductionDeploymentsEnabled);
+
+        Assert.Equal("github:push", project.LatestDeployment.DeploymentTrigger!.Type);
+        Assert.Equal(
+            "abc123",
+            project.LatestDeployment.DeploymentTrigger.Metadata!.Value.GetProperty("commit_hash").GetString());
     }
 
     [Fact]

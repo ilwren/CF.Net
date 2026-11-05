@@ -569,7 +569,9 @@ public sealed class CloudflareTransport : ICloudflareTransport, IDisposable
     /// mismatch a reader can act on: the message names the property, this shows what Cloudflare sent
     /// for it. The line before and after are included because <see cref="JsonException.LineNumber"/>
     /// indexes the body's lines from zero, and a value that opens on the previous line is usually what
-    /// explains the complaint.
+    /// explains the complaint. When the failing line only opens an object or an array the quotation keeps
+    /// going down while the budget lasts, because a brace on its own says nothing - that is what a live
+    /// <c>latest_deployment.source</c> needed to be recognisable as an object.
     /// </summary>
     /// <param name="body">The body Cloudflare sent, when it was read as text.</param>
     /// <param name="parseFailure">What the parser reported about it.</param>
@@ -585,8 +587,11 @@ public sealed class CloudflareTransport : ICloudflareTransport, IDisposable
         if (parseFailure.LineNumber is { } number && number >= 0 && number < lines.Length)
         {
             var failing = (int)number;
+            var opens = lines[failing].TrimEnd().EndsWith('{') || lines[failing].TrimEnd().EndsWith('[');
+            var last = Math.Min(lines.Length - 1, failing + (opens ? 12 : 1));
+
             var window = new StringBuilder();
-            for (var line = Math.Max(0, failing - 1); line <= Math.Min(lines.Length - 1, failing + 1); line++)
+            for (var line = Math.Max(0, failing - 1); line <= last; line++)
             {
                 var text = lines[line].Trim();
                 if (text.Length == 0)
@@ -594,15 +599,16 @@ public sealed class CloudflareTransport : ICloudflareTransport, IDisposable
                     continue;
                 }
 
-                if (window.Length > 0)
+                var separator = window.Length > 0 ? " / " : string.Empty;
+                if (window.Length + separator.Length + text.Length > 600)
                 {
-                    window.Append(" / ");
+                    break;
                 }
 
-                window.Append(line == failing ? ">> " : string.Empty).Append(text);
+                window.Append(separator).Append(line == failing ? ">> " : string.Empty).Append(text);
             }
 
-            if (window.Length > 0 && window.Length <= 400)
+            if (window.Length > 0)
             {
                 return window.ToString();
             }

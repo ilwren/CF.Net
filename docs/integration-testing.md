@@ -486,7 +486,10 @@ also publishes the quotation through `Warn()` — the channel whose text reaches
 full, where a skip reason is cut to 280 characters and only the first five are kept. It was written for a
 real case: `GET …/pages/projects` answered 200 with a `latest_deployment.source` that was not a string,
 which failed three Pages tests at once with the same 300-character message and no clue what the value
-was. Blank strings are partly handled: Cloudflare spells "no value" as `""` in places, and
+was. Quoted, the value turned out to be `"source": { "type": "github",` — a project connected to a
+repository, where a Direct Upload project has no source at all — and `PagesDeployment.Source` now reads
+the `PagesProjectSource` object Cloudflare sends. That is the whole loop in one paragraph: a strict
+parser notices, the message quotes, the model is corrected, and the tests that skipped start verifying. Blank strings are partly handled: Cloudflare spells "no value" as `""` in places, and
 `BlankStringAsNullConverterFactory` reads those as null for the nullable date, time and GUID types.
 Numbers and booleans are deliberately left out, because a custom converter for them would disable
 `JsonNumberHandling.AllowReadingFromString`, which is what reads the numbers Cloudflare sends as strings

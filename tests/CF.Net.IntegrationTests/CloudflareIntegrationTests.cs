@@ -355,6 +355,28 @@ public class ReadOnlyIntegrationTests : CloudflareIntegrationTest
         foreach (var project in projects.Items)
         {
             Log($"  {project.Name} branch={project.ProductionBranch} subdomain={project.Subdomain} latest={project.LatestDeployment?.Status}");
+
+            // A project connected to a repository carries its source control on the deployment, which is
+            // the field this library read as a string until a live run quoted the object Cloudflare
+            // actually sent. Anything still unmodelled is reported rather than left to accumulate in
+            // AdditionalData unnoticed, and each line stops by itself once the fields are typed.
+            var deployment = project.LatestDeployment;
+            if (deployment?.Source is { } source &&
+                (source.AdditionalData is { Count: > 0 } || source.Config?.AdditionalData is { Count: > 0 }))
+            {
+                Warn($"GET /accounts/{{account_id}}/pages/projects returned a latest_deployment.source for " +
+                     $"'{project.Name}' holding fields this library does not model: " +
+                     $"{JsonSerializer.Serialize(source)}.");
+            }
+
+            if (deployment?.DeploymentTrigger is { } trigger &&
+                (trigger.Metadata is not null || trigger.AdditionalData is { Count: > 0 }))
+            {
+                Warn($"GET /accounts/{{account_id}}/pages/projects returned latest_deployment.deployment_trigger " +
+                     $"for '{project.Name}' as {JsonSerializer.Serialize(trigger)}. The trigger type is modelled " +
+                     "and metadata is read as raw JSON, because its contents differ per trigger type; this " +
+                     "line is the evidence for typing it.");
+            }
         }
     }
 

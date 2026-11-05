@@ -109,13 +109,36 @@ public sealed class PagesSourceConfig
     [JsonPropertyName("production_branch")]
     public string? ProductionBranch { get; set; }
 
-    /// <summary>Branch patterns that should not be deployed.</summary>
+    /// <summary>Whether Pages comments on the repository's pull requests.</summary>
     [JsonPropertyName("pr_comments_enabled")]
     public bool? PrCommentsEnabled { get; set; }
 
-    /// <summary>Whether deployments are created on push.</summary>
+    /// <summary>
+    /// Whether pushing to the repository deploys automatically. Deprecated by Cloudflare in favour of
+    /// <see cref="ProductionDeploymentsEnabled"/> and the preview settings; still sent, so still read.
+    /// </summary>
     [JsonPropertyName("deployments_enabled")]
     public bool? DeploymentsEnabled { get; set; }
+
+    /// <summary>Whether a push to the production branch deploys to production.</summary>
+    [JsonPropertyName("production_deployments_enabled")]
+    public bool? ProductionDeploymentsEnabled { get; set; }
+
+    /// <summary>Identifier of the repository owner.</summary>
+    [JsonPropertyName("owner_id")]
+    public string? OwnerId { get; set; }
+
+    /// <summary>Identifier of the repository.</summary>
+    [JsonPropertyName("repo_id")]
+    public string? RepoId { get; set; }
+
+    /// <summary>Paths watched for changes, in wildcard syntax. Empty means the whole repository.</summary>
+    [JsonPropertyName("path_includes")]
+    public List<string>? PathIncludes { get; set; }
+
+    /// <summary>Paths that never trigger a preview deployment, in wildcard syntax.</summary>
+    [JsonPropertyName("path_excludes")]
+    public List<string>? PathExcludes { get; set; }
 
     /// <summary>Branches excluded from preview deployments.</summary>
     [JsonPropertyName("preview_branch_excludes")]

@@ -486,7 +486,7 @@ observability configuration, and Workers AI.
 
 | Method | Endpoint | Notes |
 | --- | --- | --- |
-| `ListAsync(PagesProjectListParameters?, accountId)` | `GET /accounts/{account_id}/pages/projects` | sends `page`, `per_page` (always paired — Pages answers a bare page size with `8000024`) and `search`; retries once with no query at all when Cloudflare answers `8000024 Invalid list options provided`, which it does for some accounts even though the schema documents both paging parameters. `search` is not in the published schema and is only sent when set |
+| `ListAsync(PagesProjectListParameters?, accountId)` | `GET /accounts/{account_id}/pages/projects` | sends `page`, `per_page` (always paired — Pages answers a bare page size with `8000024`) and `search`; retries once with no query at all when Cloudflare answers `8000024 Invalid list options provided`, which it does for some accounts even though the schema documents both paging parameters. `search` is not in the published schema and is only sent when set. **A project connected to a repository is what makes this endpoint dangerous to model**: its `latest_deployment` carries `source` as an object (`{"type":"github","config":{…}}`) and `deployment_trigger` as an object (`{"type":"github:push","metadata":{…}}`). A live run caught `source` being read as a string, which failed the whole list - and so every Pages test - on one field of one project. Only visible on an account that has such a project: a Direct Upload project has neither |
 | `ListAllAsync(...)` | `GET …/pages/projects` | walks every page |
 | `GetAsync(projectName, accountId)` | `GET …/pages/projects/{project_name}` | `null` on 404 |
 | `CreateAsync(string projectName, string productionBranch, accountId)` | `POST …/pages/projects` | |
@@ -509,8 +509,13 @@ observability configuration, and Workers AI.
 | `DeleteDomainAsync(projectName, domainName, accountId)` | `DELETE …/domains/{domain}` | |
 
 `PagesBuildConfig`, `PagesDeploymentConfigs` (`preview` + `production`, ~21 fields each),
-`PagesProjectSource`, `PagesEnvVar` and the Pages binding dictionaries are modelled; anything
-Cloudflare adds later is preserved in `AdditionalData`.
+`PagesProjectSource` (with its `PagesSourceConfig` repository details), `PagesDeploymentTrigger`,
+`PagesEnvVar` and the Pages binding dictionaries are modelled; anything Cloudflare adds later is
+preserved in `AdditionalData`. Two deliberate exceptions: `deployment_trigger.metadata` stays raw JSON,
+because its contents differ per trigger type and nobody has read a live one yet, and
+`PagesDeployment.TriggerSource` is kept although the published schema does not carry it - a property
+Cloudflare never sends stays null and costs nothing, whereas dropping one it does send loses data. The
+integration run reports both whenever a project turns up that exercises them.
 
 **Pushing the assets themselves is deliberately not wrapped, and the reason matters.** Direct Upload is four
 calls: `GET …/upload-token` for a short-lived JWT, then `POST /client/v4/pages/assets/check-missing`,

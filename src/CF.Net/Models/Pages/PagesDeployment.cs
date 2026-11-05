@@ -34,13 +34,35 @@ public sealed class PagesDeployment
     [JsonPropertyName("environment")]
     public string? Environment { get; set; }
 
-    /// <summary>What triggered the deployment, e.g. <c>api</c>, <c>git</c>.</summary>
+    /// <summary>
+    /// What triggered the deployment, in the flat spelling an early reading of the docs suggested. The
+    /// published schema for a deployment carries <see cref="DeploymentTrigger"/> instead, so this stays
+    /// null against the live API; a property Cloudflare never sends costs nothing to keep.
+    /// </summary>
     [JsonPropertyName("trigger_source")]
     public string? TriggerSource { get; set; }
 
-    /// <summary>Legacy spelling of <see cref="TriggerSource"/>.</summary>
+    /// <summary>
+    /// What caused the deployment: <c>github:push</c>, <c>ad_hoc</c> or <c>deploy_hook</c>, with the
+    /// provider's details in <c>metadata</c>.
+    /// </summary>
+    [JsonPropertyName("deployment_trigger")]
+    public PagesDeploymentTrigger? DeploymentTrigger { get; set; }
+
+    /// <summary>
+    /// The source control this deployment was built from, in the same shape a project carries:
+    /// <c>{"type":"github","config":{…}}</c>. Null for a Direct Upload project, which has no repository.
+    /// </summary>
+    /// <remarks>
+    /// Observed live on <c>GET /accounts/{account_id}/pages/projects</c>: a project connected to a GitHub
+    /// repository answered <c>latest_deployment.source</c> as an object, and this property was a string,
+    /// which made the whole list unreadable and every Pages test share one failure. The published schema
+    /// agrees - <c>source</c> is <c>type</c> plus a read-only <c>config</c> - so the object is what is
+    /// modelled, and a bare string arriving here is a shape this library should be told about rather than
+    /// one it should quietly absorb.
+    /// </remarks>
     [JsonPropertyName("source")]
-    public string? Source { get; set; }
+    public PagesProjectSource? Source { get; set; }
 
     /// <summary>The branch this deployment was built from.</summary>
     [JsonPropertyName("branch")]
@@ -445,4 +467,32 @@ public sealed class AddPagesDomainRequest
 /// <summary>Query filters for the Pages domains list endpoint.</summary>
 public sealed class PagesDomainListParameters : CloudflarePagedParameters
 {
+}
+
+/// <summary>
+/// What caused a Pages deployment.
+/// </summary>
+/// <remarks>
+/// <c>type</c> is one of <c>github:push</c>, <c>ad_hoc</c> or <c>deploy_hook</c>. <c>metadata</c> holds
+/// the provider's details - for a GitHub push, the commit - and is left as raw JSON: its contents differ
+/// per trigger type, and modelling a shape nobody has read yet is how this library came to read
+/// <c>source</c> as a string.
+/// </remarks>
+public sealed class PagesDeploymentTrigger
+{
+    /// <summary>What caused the deployment, e.g. <c>github:push</c>.</summary>
+    [JsonPropertyName("type")]
+    public string? Type { get; set; }
+
+    /// <summary>Provider specific details, such as the commit a GitHub push deployed.</summary>
+    [JsonPropertyName("metadata")]
+    public JsonElement? Metadata { get; set; }
+
+    /// <summary>Captures any field Cloudflare adds in the future.</summary>
+    [JsonExtensionData]
+    public IDictionary<string, JsonElement>? AdditionalData { get; set; }
+
+    /// <summary>Describes the trigger by the one part that is always present.</summary>
+    /// <returns>The trigger type, or a placeholder when Cloudflare sent none.</returns>
+    public override string ToString() => Type ?? "no trigger type";
 }

@@ -484,9 +484,9 @@ public sealed class PagesDeploymentTrigger
     [JsonPropertyName("type")]
     public string? Type { get; set; }
 
-    /// <summary>Provider specific details, such as the commit a GitHub push deployed.</summary>
+    /// <summary>The commit this trigger deployed, when the trigger carries one.</summary>
     [JsonPropertyName("metadata")]
-    public JsonElement? Metadata { get; set; }
+    public PagesDeploymentTriggerMetadata? Metadata { get; set; }
 
     /// <summary>Captures any field Cloudflare adds in the future.</summary>
     [JsonExtensionData]
@@ -495,4 +495,44 @@ public sealed class PagesDeploymentTrigger
     /// <summary>Describes the trigger by the one part that is always present.</summary>
     /// <returns>The trigger type, or a placeholder when Cloudflare sent none.</returns>
     public override string ToString() => Type ?? "no trigger type";
+}
+
+/// <summary>
+/// The commit a Pages deployment trigger built.
+/// </summary>
+/// <remarks>
+/// Observed live on an <c>ad_hoc</c> trigger - a deployment wrangler pushed from a working copy of a
+/// connected repository - where Cloudflare sent <c>branch</c>, <c>commit_hash</c>, <c>commit_message</c>
+/// and <c>commit_dirty</c>. A <c>github:push</c> or <c>deploy_hook</c> trigger may carry more, and the
+/// integration run reports whatever does rather than letting it sit in <see cref="AdditionalData"/>
+/// unnoticed.
+/// </remarks>
+public sealed class PagesDeploymentTriggerMetadata
+{
+    /// <summary>Branch the commit came from.</summary>
+    [JsonPropertyName("branch")]
+    public string? Branch { get; set; }
+
+    /// <summary>Full hash of the commit that was deployed.</summary>
+    [JsonPropertyName("commit_hash")]
+    public string? CommitHash { get; set; }
+
+    /// <summary>Commit message, as Cloudflare received it.</summary>
+    [JsonPropertyName("commit_message")]
+    public string? CommitMessage { get; set; }
+
+    /// <summary>Whether the working copy had uncommitted changes when the deployment was pushed.</summary>
+    [JsonPropertyName("commit_dirty")]
+    public bool? CommitDirty { get; set; }
+
+    /// <summary>Captures any field Cloudflare adds in the future.</summary>
+    [JsonExtensionData]
+    public IDictionary<string, JsonElement>? AdditionalData { get; set; }
+
+    /// <summary>Describes the commit the way a log line would.</summary>
+    /// <returns>The branch and a short hash, or whichever of the two Cloudflare sent.</returns>
+    public override string ToString() =>
+        CommitHash is { Length: > 0 } hash
+            ? $"{Branch ?? "no branch"} @ {hash[..Math.Min(12, hash.Length)]}"
+            : Branch ?? "no commit";
 }

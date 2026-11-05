@@ -664,7 +664,7 @@ public class PagesProjectsServiceTests
           },
           "created_on": "2024-01-01T00:00:00Z",
           "modified_on": "2024-02-01T00:00:00Z",
-          "latest_deployment": { "id": "d-1", "environment": "preview", "latest_stage": { "name": "deploy", "status": "success" }, "deployment_trigger": { "type": "github:push", "metadata": { "commit_hash": "abc123" } }, "source": { "type": "github", "config": { "owner": "example", "owner_id": "7", "repo_name": "site", "repo_id": "99", "production_branch": "main", "path_includes": ["src/**"], "production_deployments_enabled": true } } }
+          "latest_deployment": { "id": "d-1", "environment": "preview", "latest_stage": { "name": "deploy", "status": "success" }, "deployment_trigger": { "type": "github:push", "metadata": { "branch": "main", "commit_hash": "abc123", "commit_message": "fix the thing", "commit_dirty": true } }, "source": { "type": "github", "config": { "owner": "example", "owner_id": "7", "repo_name": "site", "repo_id": "99", "production_branch": "main", "path_includes": ["src/**"], "production_deployments_enabled": true } } }
         }
         """);
 
@@ -714,9 +714,11 @@ public class PagesProjectsServiceTests
         Assert.True(deploymentSource.Config.ProductionDeploymentsEnabled);
 
         Assert.Equal("github:push", project.LatestDeployment.DeploymentTrigger!.Type);
-        Assert.Equal(
-            "abc123",
-            project.LatestDeployment.DeploymentTrigger.Metadata!.Value.GetProperty("commit_hash").GetString());
+        Assert.Equal("abc123", project.LatestDeployment.DeploymentTrigger.Metadata!.CommitHash);
+        Assert.Equal("main", project.LatestDeployment.DeploymentTrigger.Metadata.Branch);
+        Assert.True(project.LatestDeployment.DeploymentTrigger.Metadata.CommitDirty);
+        Assert.Equal("main @ abc123", project.LatestDeployment.DeploymentTrigger.Metadata.ToString());
+        Assert.Null(project.LatestDeployment.DeploymentTrigger.Metadata.AdditionalData);
     }
 
     [Fact]

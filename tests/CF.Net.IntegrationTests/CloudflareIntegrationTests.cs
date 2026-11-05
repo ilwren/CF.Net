@@ -370,12 +370,14 @@ public class ReadOnlyIntegrationTests : CloudflareIntegrationTest
             }
 
             if (deployment?.DeploymentTrigger is { } trigger &&
-                (trigger.Metadata is not null || trigger.AdditionalData is { Count: > 0 }))
+                (trigger.AdditionalData is { Count: > 0 } || trigger.Metadata?.AdditionalData is { Count: > 0 }))
             {
+                // The four metadata fields this library models were observed on an ad_hoc trigger, a
+                // deployment wrangler pushed from a working copy. A github:push or deploy_hook trigger may
+                // carry others, and this is the line that says so.
                 Warn($"GET /accounts/{{account_id}}/pages/projects returned latest_deployment.deployment_trigger " +
-                     $"for '{project.Name}' as {JsonSerializer.Serialize(trigger)}. The trigger type is modelled " +
-                     "and metadata is read as raw JSON, because its contents differ per trigger type; this " +
-                     "line is the evidence for typing it.");
+                     $"for '{project.Name}' holding fields this library does not model: " +
+                     $"{JsonSerializer.Serialize(trigger)}.");
             }
         }
     }
@@ -1275,6 +1277,8 @@ public class WriteIntegrationTests : CloudflareIntegrationTest
             return;
         }
 
+        // Every call below only reads, so the account's own projects are fair game here - unlike the
+        // build-cache purge, which creates a project of its own rather than writing to somebody's site.
         var project = projects.Items.FirstOrDefault();
         if (project?.Name is null)
         {
@@ -1332,23 +1336,32 @@ public class WriteIntegrationTests : CloudflareIntegrationTest
             return;
         }
 
-        var projects = await ReadablePagesProjectsAsync();
-        if (projects is null)
-        {
-            return;
-        }
+        // Purging only throws away cached build artefacts: the next build is slower and nothing is
+        // deleted. It is a write all the same, so it goes to a project this test creates rather than to
+        // whatever the account happens to list first - an account that is actually in use has real
+        // projects on it, and "the first one" is somebody's site. This test used to purge that, and only
+        // stopped being harmless-looking by accident. Retrying a deployment is deliberately not
+        // exercised here, because that starts a real build.
+        var name = $"cfnet-it-{Guid.NewGuid().ToString("N")[..10]}";
 
-        var project = projects.Items.FirstOrDefault();
-        if (project?.Name is null)
+        try
         {
-            SkipUnless(false, "This account has no Pages project whose build cache could be purged.");
-            return;
+            var created = await Client.Pages.CreateAsync(name, "main");
+            await Client.Pages.PurgeBuildCacheAsync(created.Name);
+            Log($"purged the build cache of {created.Name}, the project this test created");
         }
-
-        // Purging only throws away cached build artefacts: the next build is slower, nothing is deleted.
-        // Retrying a deployment is deliberately not exercised here, because that starts a real build.
-        await Client.Pages.PurgeBuildCacheAsync(project.Name);
-        Log($"purged the build cache of {project.Name}");
+        finally
+        {
+            try
+            {
+                await Client.Pages.DeleteAsync(name);
+                Log($"deleted project {name}");
+            }
+            catch (CloudflareApiException exception) when (exception.IsNotFound)
+            {
+                Log("project was already gone");
+            }
+        }
     }
 
     [Fact]

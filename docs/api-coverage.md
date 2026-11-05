@@ -511,11 +511,12 @@ observability configuration, and Workers AI.
 `PagesBuildConfig`, `PagesDeploymentConfigs` (`preview` + `production`, ~21 fields each),
 `PagesProjectSource` (with its `PagesSourceConfig` repository details), `PagesDeploymentTrigger`,
 `PagesEnvVar` and the Pages binding dictionaries are modelled; anything Cloudflare adds later is
-preserved in `AdditionalData`. Two deliberate exceptions: `deployment_trigger.metadata` stays raw JSON,
-because its contents differ per trigger type and nobody has read a live one yet, and
-`PagesDeployment.TriggerSource` is kept although the published schema does not carry it - a property
-Cloudflare never sends stays null and costs nothing, whereas dropping one it does send loses data. The
-integration run reports both whenever a project turns up that exercises them.
+preserved in `AdditionalData`. `deployment_trigger.metadata` is typed from a live payload - an `ad_hoc`
+trigger sent `branch`, `commit_hash`, `commit_message` and `commit_dirty` - so a `github:push` or
+`deploy_hook` trigger carrying more is reported by the integration run rather than silently kept. One
+deliberate leftover: `PagesDeployment.TriggerSource` is kept although the published schema does not carry
+it, because a property Cloudflare never sends stays null and costs nothing, whereas dropping one it does
+send loses data.
 
 **Pushing the assets themselves is deliberately not wrapped, and the reason matters.** Direct Upload is four
 calls: `GET …/upload-token` for a short-lived JWT, then `POST /client/v4/pages/assets/check-missing`,

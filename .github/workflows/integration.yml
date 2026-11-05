@@ -561,6 +561,79 @@ jobs:
                   json.dumps([{'key': key, 'type': ptype} for key, ptype in permissions],
                              separators=(',', ':')), safe='')
 
+          # Every permission group this suite wants, now or next, by permission group id.
+          #
+          # Ids are the reliable form for an account token URL: Cloudflare documents that an id names
+          # exactly one group, that the type beside it is then ignored, and that a key the dashboard
+          # cannot resolve is reported in the form rather than dropped. Short keys exist for only about
+          # twenty-eight groups and cover none of the Rulesets, Rule Lists, redirect, tail, observability,
+          # Workers AI, Turnstile, waiting room or load balancing ones, so a key based URL could never
+          # carry the lot - and two of the keys it could carry do not match their dashboard labels.
+          #
+          # These are the ids GET /accounts/{account_id}/tokens/permission_groups returns, that the Create
+          # token endpoint takes and that the Terraform provider uses. The cross-check below confirms them
+          # against the live catalogue on any run whose token can read it, so a stale id surfaces as a
+          # notice instead of as a permission that silently never arrives.
+          WANTED_GROUPS = [
+              ('c8fed203ed3043cba015a93ad1616f1f', 'Zone Read', 'zone', 'read'),
+              ('e6d2666161e84845a636613608cee8d5', 'Zone Write', 'zone', 'edit'),
+              ('82e64a83756745bbbb1c9c2701bf816b', 'DNS Read', 'zone', 'read'),
+              ('4755a26eedb94da69e1066d98aa820be', 'DNS Write', 'zone', 'edit'),
+              ('517b21aee92c4d89936c976ba6e4be55', 'Zone Settings Read', 'zone', 'read'),
+              ('3030687196b94b638145a3953da2b699', 'Zone Settings Write', 'zone', 'edit'),
+              ('7b7216b327b04b8fbc8f524e1f9b7531', 'SSL and Certificates Read', 'zone', 'read'),
+              ('c03055bc037c4ea9afb9a9f104b7b721', 'SSL and Certificates Write', 'zone', 'edit'),
+              ('e17beae8b8cb423a99b1730f21238bed', 'Cache Purge', 'zone', 'purge'),
+              ('9c88f9c5bce24ce7af9a958ba9c504db', 'Analytics Read', 'zone', 'read'),
+              ('4ec32dfcb35641c5bb32d5ef1ab963b4', 'Firewall Services Read', 'zone', 'read'),
+              ('43137f8d07884d3198dc0ee77ca6e79b', 'Firewall Services Write', 'zone', 'edit'),
+              ('b415b70a4fd1412886f164451f20405c', 'Page Rules Read', 'zone', 'read'),
+              ('ed07f6c337da4195b4e72a1fb2c6bcae', 'Page Rules Write', 'zone', 'edit'),
+              ('d8e12db741544d1586ec1d6f5d3c7786', 'Dynamic URL Redirects Read', 'zone', 'read'),
+              ('74e1036f577a48528b78d2413b40538d', 'Dynamic URL Redirects Write', 'zone', 'edit'),
+              ('cab5202d07ef47beae788e6bc95cb6fe', 'Waiting Rooms Read', 'zone', 'read'),
+              ('24fc124dc8254e0db468e60bf410c800', 'Waiting Rooms Write', 'zone', 'edit'),
+              ('c1fde68c7bcc44588cbb6ddbc16d6480', 'Account Settings Read', 'account', 'read'),
+              ('eb56a6953c034b9d97dd838155666f06', 'Account API Tokens Read', 'account', 'read'),
+              ('5bc3f8b21c554832afc660159ab75fa4', 'Account API Tokens Write', 'account', 'edit'),
+              ('1a71c399035b4950a1bd1466bbe4f420', 'Workers Scripts Read', 'account', 'read'),
+              ('e086da7e2179491d91ee5f35b3ca210a', 'Workers Scripts Write', 'account', 'edit'),
+              ('8b47d2786a534c08a1f94ee8f9f599ef', 'Workers KV Storage Read', 'account', 'read'),
+              ('f7f0eda5697f475c90846e879bab8666', 'Workers KV Storage Write', 'account', 'edit'),
+              ('b4992e1108244f5d8bfbd5744320c2e1', 'Workers R2 Storage Read', 'account', 'read'),
+              ('bf7481a1826f439697cb59a20b22293e', 'Workers R2 Storage Write', 'account', 'edit'),
+              ('192192df92ee43ac90f2aeeffce67e35', 'D1 Read', 'account', 'read'),
+              ('09b2857d1c31407795e75e3fed8617a1', 'D1 Write', 'account', 'edit'),
+              ('84a7755d54c646ca87cd50682a34bf7c', 'Queues Read', 'account', 'read'),
+              ('366f57075ffc42689627bcf8242a1b6d', 'Queues Write', 'account', 'edit'),
+              ('e247aedd66bd41cc9193af0213416666', 'Pages Read', 'account', 'read'),
+              ('8d28297797f24fb8a0c332fe0866ec89', 'Pages Write', 'account', 'edit'),
+              ('2072033d694d415a936eaeb94e6405b8', 'Workers Routes Read', 'account', 'read'),
+              ('28f4b596e7d643029c524985477ae49a', 'Workers Routes Write', 'account', 'edit'),
+              ('fb39996ee9044d2a8725921e02744b39', 'Account Rulesets Read', 'account', 'read'),
+              ('56907406c3d548ed902070ec4df0e328', 'Account Rulesets Write', 'account', 'edit'),
+              ('4f1071168de8466e9808de86febfc516', 'Account Rule Lists Read', 'account', 'read'),
+              ('2edbf20661fd4661b0fe10e9e12f485c', 'Account Rule Lists Write', 'account', 'edit'),
+              ('429a068902904c5a9ed9fc267c67da9a', 'Mass URL Redirects Read', 'account', 'read'),
+              ('abe78e2276664f4db588c1f675a77486', 'Mass URL Redirects Write', 'account', 'edit'),
+              ('05880cd1bdc24d8bae0be2136972816b', 'Workers Tail Read', 'account', 'read'),
+              ('66c1ed49f4ed46098b75696a6d4ee3c9', 'Workers Observability Read', 'account', 'read'),
+              ('82c075da3f4647a2a03becd0fe240f8a', 'Workers Observability Write', 'account', 'edit'),
+              ('a92d2450e05d4e7bb7d0a64968f83d11', 'Workers AI Read', 'account', 'read'),
+              ('5d78fd7895974fd0bdbbbb079482721b', 'Turnstile Sites Read', 'account', 'read'),
+              ('755c05aa014b4f9ab263aa80b8167bd8', 'Turnstile Sites Write', 'account', 'edit'),
+              ('3e4e20ee40b9475dae22201c468fdb70', 'Account Waiting Rooms Read', 'account', 'read'),
+              ('9d24387c6e8544e2bc4024a03991339f', 'Load Balancing: Monitors and Pools Read', 'account', 'read'),
+              ('d2a1802cc9a34e30852f8b33869b2f3c', 'Load Balancing: Monitors and Pools Write', 'account', 'edit'),
+              ('b89a480218d04ceb98b4fe57ca29dc1f', 'Account Analytics Read', 'account', 'read'),
+          ]
+
+          wanted_full = [(gid, ptype) for gid, _, _, ptype in WANTED_GROUPS]
+          # The read-only URL keeps Cache Purge for the same reason the probe does: it reads that
+          # permission with a body Cloudflare refuses, so nothing is purged by having it.
+          wanted_read = [(gid, ptype) for gid, wanted, _, ptype in WANTED_GROUPS
+                         if ptype == 'read' or wanted == 'Cache Purge']
+
           seen = []
           for _, _, _, key, ptype, _ in AREAS:
               if (key, ptype) not in seen:
@@ -572,13 +645,36 @@ jobs:
           name = urllib.parse.quote('CF.Net integration')
 
           account_full = ('https://dash.cloudflare.com/?to=/:account/api-tokens'
-                          f'&permissionGroupKeys={encode(full)}&name={name}')
+                          f'&permissionGroupKeys={encode(wanted_full)}&name={name}')
           account_read = ('https://dash.cloudflare.com/?to=/:account/api-tokens'
-                          f'&permissionGroupKeys={encode(seen)}&name={name}')
-          # The account-token base already carries a '?', the profile one does not - forgetting it here
+                          f'&permissionGroupKeys={encode(wanted_read)}&name={name}')
+          # User token URLs take short keys only, drop anything unmatched without a word, and have no key
+          # for most of the groups above, so this one stays key based and covers the probe list. The
+          # account-token base already carries a '?', the profile one does not - forgetting it here
           # produces a URL that opens a 404 instead of the token form.
           user_full = ('https://dash.cloudflare.com/profile/api-tokens?'
                        f'permissionGroupKeys={encode(full)}&accountId=%2A&zoneId=all&name={name}')
+
+          if groups:
+              live = {entry.get('id'): entry.get('name') for entry in groups if isinstance(entry, dict)}
+              # An id the live catalogue no longer carries is a group Cloudflare retired, which would
+              # grant nothing; an id whose name moved is cosmetic, and is reported as such.
+              gone = [wanted for gid, wanted, _, _ in WANTED_GROUPS if gid not in live]
+              moved = [f'{live[gid]} (this list calls it {wanted})'
+                       for gid, wanted, _, _ in WANTED_GROUPS if gid in live and live[gid] != wanted]
+              if gone or moved:
+                  print('::notice::Permission group catalogue drift: ' +
+                        '; '.join(['no live group is named ' + n for n in gone] +
+                                  ['id now reads ' + m for m in moved])[:1200] +
+                        '. The URL is built from ids, so a renamed group still grants the right thing; a '
+                        'group Cloudflare retired would not, and this line is the warning.')
+              else:
+                  print(f'::notice::All {len(WANTED_GROUPS)} permission group ids behind the token URL were '
+                        "confirmed against this account's live catalogue.")
+          else:
+              print('::notice::The token URL carries ' + str(len(WANTED_GROUPS)) + ' permission groups by '
+                    'id. It could not be cross-checked against the live catalogue, because reading '
+                    'GET /accounts/{account_id}/tokens/permission_groups was refused for this token.')
 
           lines += [
               '#### Create the token without ticking boxes',
@@ -592,10 +688,22 @@ jobs:
               f'- User-owned (`cfut_`), full suite - also the only kind that can answer '
               f'`GET /user/tokens/verify`: {user_full}',
               '',
-              "Keys are Cloudflare's own and two of them do not match their dashboard labels: Pages is "
-              '`page`, R2 is `workers_r2`. The read-only URL still carries `cache: purge`, because the probe '
-              'above reads that permission with a body Cloudflare refuses; only the write tests purge '
-              'anything, so drop it if you want the strict minimum.',
+              'The two account URLs carry **' + str(len(WANTED_GROUPS)) + ' permission groups by id**: '
+              'every group this suite touches now, plus the ones the next modules need - Rulesets, Rule '
+              'Lists and Mass/Dynamic URL Redirects for Bulk Redirects, Workers Tail, Workers '
+              'Observability, Workers AI, Turnstile, Waiting Rooms, and Load Balancing monitors and pools. '
+              'Creating a token from one of them and replacing the secret is the whole job: there is no box '
+              'to tick, and if Cloudflare ever stops resolving an id the form says so by name.',
+              '',
+              'What no URL can pre-fill is **Account Resources** and **Zone Resources**. The zone-scoped '
+              'groups - Zone, DNS, Zone Settings, SSL and Certificates, Cache Purge, Analytics, Firewall '
+              'Services, Page Rules, Dynamic URL Redirects, Waiting Rooms, Workers Routes - grant nothing '
+              'until the form lists the zone, and a zone missing from Zone Resources is the `10007 Route not '
+              'found` that skips every zone test.',
+              '',
+              'The user-owned URL is the odd one out: Cloudflare resolves those by short key, drops '
+              'unmatched entries silently, and has no short key for most of the groups above, so it carries '
+              'the probe list and nothing more.',
               '']
 
           body = '\n'.join(lines)

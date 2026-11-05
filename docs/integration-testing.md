@@ -231,31 +231,59 @@ built for "just DNS" skips every one of them with a 403 that reads like a bug in
 
 ### Creating that token from a URL
 
-Cloudflare pre-fills the token form from a query string, so the whole table above can be applied in one
-click instead of twelve. `permissionGroupKeys` is a URL-encoded JSON array of `{"key": …, "type": …}`
-objects, where `type` is `read`, `edit`, `purge`, `run` or `revoke`.
+Cloudflare pre-fills the token form from a query string, so the whole table above is one click rather than
+fifty. `permissionGroupKeys` is a URL-encoded JSON array of `{"key": …, "type": …}` objects, where `type` is
+`read`, `edit`, `purge`, `run` or `revoke`:
 
-- **Account-owned (`cfat_`), full suite including writes**
+```txt
+https://dash.cloudflare.com/?to=/:account/api-tokens&permissionGroupKeys=%5B%7B%22key%22%3A%22dns%22%2C%22type%22%3A%22edit%22%7D%5D&name=CF.Net%20integration
+```
 
-  `https://dash.cloudflare.com/?to=/:account/api-tokens&permissionGroupKeys=%5B%7B%22key%22%3A%22zone%22%2C%22type%22%3A%22edit%22%7D%2C%7B%22key%22%3A%22dns%22%2C%22type%22%3A%22edit%22%7D%2C%7B%22key%22%3A%22zone_settings%22%2C%22type%22%3A%22edit%22%7D%2C%7B%22key%22%3A%22ssl_and_certificates%22%2C%22type%22%3A%22edit%22%7D%2C%7B%22key%22%3A%22cache%22%2C%22type%22%3A%22purge%22%7D%2C%7B%22key%22%3A%22account_settings%22%2C%22type%22%3A%22read%22%7D%2C%7B%22key%22%3A%22workers_scripts%22%2C%22type%22%3A%22edit%22%7D%2C%7B%22key%22%3A%22page%22%2C%22type%22%3A%22edit%22%7D%2C%7B%22key%22%3A%22d1%22%2C%22type%22%3A%22edit%22%7D%2C%7B%22key%22%3A%22workers_kv_storage%22%2C%22type%22%3A%22edit%22%7D%2C%7B%22key%22%3A%22workers_r2%22%2C%22type%22%3A%22edit%22%7D%2C%7B%22key%22%3A%22account_api_tokens%22%2C%22type%22%3A%22read%22%7D%5D&name=CF.Net%20integration`
+Each `key` is either a **short key** or a **permission group id**, and the two behave differently:
 
-- **Account-owned (`cfat_`), read-only** — everything the Monday schedule needs
+| | Short key | Permission group id |
+| --- | --- | --- |
+| Account token URL | resolved; a key the dashboard cannot resolve is **named in a notice** in the form | resolved, and `type` is ignored because an id names exactly one group |
+| User token URL | resolved only when it matches a group name exactly; anything else is **dropped with no notice** | **not supported** |
+| Coverage | about 28 groups, two of them mislabelled against the dashboard: Pages is `page`, R2 is `workers_r2` | every group Cloudflare has |
 
-  `https://dash.cloudflare.com/?to=/:account/api-tokens&permissionGroupKeys=%5B%7B%22key%22%3A%22zone%22%2C%22type%22%3A%22read%22%7D%2C%7B%22key%22%3A%22dns%22%2C%22type%22%3A%22read%22%7D%2C%7B%22key%22%3A%22zone_settings%22%2C%22type%22%3A%22read%22%7D%2C%7B%22key%22%3A%22ssl_and_certificates%22%2C%22type%22%3A%22read%22%7D%2C%7B%22key%22%3A%22cache%22%2C%22type%22%3A%22purge%22%7D%2C%7B%22key%22%3A%22account_settings%22%2C%22type%22%3A%22read%22%7D%2C%7B%22key%22%3A%22workers_scripts%22%2C%22type%22%3A%22read%22%7D%2C%7B%22key%22%3A%22page%22%2C%22type%22%3A%22read%22%7D%2C%7B%22key%22%3A%22d1%22%2C%22type%22%3A%22read%22%7D%2C%7B%22key%22%3A%22workers_kv_storage%22%2C%22type%22%3A%22read%22%7D%2C%7B%22key%22%3A%22workers_r2%22%2C%22type%22%3A%22read%22%7D%2C%7B%22key%22%3A%22account_api_tokens%22%2C%22type%22%3A%22read%22%7D%5D&name=CF.Net%20integration`
+So the URLs this repository generates are built from **ids** — which is also the only way to carry the
+groups the next modules need, because none of them has a short key at all:
 
-- **User-owned (`cfut_`), full suite** — also the only kind that can answer `GET /user/tokens/verify`
+| Group | Scope | Id |
+| --- | --- | --- |
+| Account Rulesets Read / Write | account | `fb39996ee9044d2a8725921e02744b39` / `56907406c3d548ed902070ec4df0e328` |
+| Account Rule Lists Read / Write — the dashboard's *Filter Lists* | account | `4f1071168de8466e9808de86febfc516` / `2edbf20661fd4661b0fe10e9e12f485c` |
+| Mass URL Redirects Read / Write — *Bulk URL Redirects* | account | `429a068902904c5a9ed9fc267c67da9a` / `abe78e2276664f4db588c1f675a77486` |
+| Dynamic URL Redirects Read / Write | zone | `d8e12db741544d1586ec1d6f5d3c7786` / `74e1036f577a48528b78d2413b40538d` |
+| Workers Tail Read | account | `05880cd1bdc24d8bae0be2136972816b` |
+| Workers Observability Read / Write | account | `66c1ed49f4ed46098b75696a6d4ee3c9` / `82c075da3f4647a2a03becd0fe240f8a` |
+| Workers AI Read | account | `a92d2450e05d4e7bb7d0a64968f83d11` |
+| Turnstile Sites Read / Write | account | `5d78fd7895974fd0bdbbbb079482721b` / `755c05aa014b4f9ab263aa80b8167bd8` |
+| Waiting Rooms Read / Write | zone | `cab5202d07ef47beae788e6bc95cb6fe` / `24fc124dc8254e0db468e60bf410c800` |
+| Account Waiting Rooms Read | account | `3e4e20ee40b9475dae22201c468fdb70` |
+| Load Balancing: Monitors and Pools Read / Write | account | `9d24387c6e8544e2bc4024a03991339f` / `d2a1802cc9a34e30852f8b33869b2f3c` |
 
-  `https://dash.cloudflare.com/profile/api-tokens?permissionGroupKeys=%5B%7B%22key%22%3A%22zone%22%2C%22type%22%3A%22edit%22%7D%2C%7B%22key%22%3A%22dns%22%2C%22type%22%3A%22edit%22%7D%2C%7B%22key%22%3A%22zone_settings%22%2C%22type%22%3A%22edit%22%7D%2C%7B%22key%22%3A%22ssl_and_certificates%22%2C%22type%22%3A%22edit%22%7D%2C%7B%22key%22%3A%22cache%22%2C%22type%22%3A%22purge%22%7D%2C%7B%22key%22%3A%22account_settings%22%2C%22type%22%3A%22read%22%7D%2C%7B%22key%22%3A%22workers_scripts%22%2C%22type%22%3A%22edit%22%7D%2C%7B%22key%22%3A%22page%22%2C%22type%22%3A%22edit%22%7D%2C%7B%22key%22%3A%22d1%22%2C%22type%22%3A%22edit%22%7D%2C%7B%22key%22%3A%22workers_kv_storage%22%2C%22type%22%3A%22edit%22%7D%2C%7B%22key%22%3A%22workers_r2%22%2C%22type%22%3A%22edit%22%7D%2C%7B%22key%22%3A%22account_api_tokens%22%2C%22type%22%3A%22read%22%7D%5D&accountId=%2A&zoneId=all&name=CF.Net%20integration`
+The whole list — 51 groups, everything this suite touches today plus all of the above — is `WANTED_GROUPS`
+in `.github/workflows/integration.yml`. Every run builds both URLs from it and prints them in the step
+summary under *Create the token without ticking boxes*: one with every group, one with the read-only half
+(which still carries Cache Purge, because the reachability probe reads that permission with a body
+Cloudflare refuses, so nothing is purged by having it). Wrapping a new module means adding a line to that
+list, and the URL a reader copies afterwards already carries it.
 
-The keys are Cloudflare's own, and two of them do not match the label the dashboard shows: Pages is
-**`page`**, not `pages`, and R2 is **`workers_r2`**, not `workers_r2_storage`. `cache` is the Cache Purge
-group and its type is `purge`. The read-only URL still carries `cache: purge`, because the workflow's
-reachability check reads that permission with a body Cloudflare refuses — only the write tests purge
-anything — so drop it if you want the strict minimum.
+Ids are the same values `GET /accounts/{account_id}/tokens/permission_groups` returns, that `POST
+/user/tokens` takes and that the Terraform provider uses, so they are stable rather than guessed — and on
+any run whose token can read that endpoint, the step cross-checks the list against the live catalogue and
+reports drift as a notice. This account's token cannot read it: an account-owned token is refused with
+`9109` there even holding *Account API Tokens — Read*, which is why the cross-check usually reports that it
+could not run. A user token, or *Account API Tokens — Write*, would change that.
 
-An account-token URL pre-fills permissions only; **Zone Resources is still chosen in the form**, and that
-is the setting that decides whether the zone-scoped half of the suite runs at all. The user-token URL takes
-`accountId` and `zoneId` as well (`*` and `all` above), so it can pin both.
+Two things no URL can pre-fill: **Account Resources** and **Zone Resources**. The zone-scoped groups — Zone,
+DNS, Zone Settings, SSL and Certificates, Cache Purge, Analytics, Firewall Services, Page Rules, Dynamic URL
+Redirects, Waiting Rooms, Workers Routes — grant nothing until the form lists the zone, and a zone missing
+from Zone Resources is the `10007 Route not found` that skips every zone test. The user-token URL is the one
+that takes `accountId=*` and `zoneId=all`, and since it resolves short keys only, it can carry the probe
+list and none of the groups in the table above.
 
 The same URLs are printed by the *Check what the credentials can actually reach* step whenever it finds a
 permission missing, so a refused run tells you what to click.

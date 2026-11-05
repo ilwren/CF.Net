@@ -298,7 +298,7 @@ results when something is misconfigured. From it, three different refusals are t
 | `N probe(s) were refused, covering M missing permission(s)` | the permission really is absent. The step summary carries a token-creation URL that pre-fills every permission this suite needs, so the fix is one click rather than a form |
 | `N probe(s) refused while their permission group read fine elsewhere` | a paid feature that is not switched on, not a token problem. Observed live: `custom_hostnames` answers `1404 No quota has been allocated for this zone` while certificate packs and origin TLS settings in the same *SSL and Certificates* group read fine — that is SSL for SaaS not being enabled |
 | `R2 answered 403` | either the R2 permission is missing or R2 is not enabled on the account (`10042`). Reported as a notice, not an error, because the R2 tests skip with a reason by design |
-| `PUT …/schedules was refused with [10063]` | cron triggers need the account to have a `workers.dev` subdomain and this one does not — the same reason `GET …/workers/subdomain` answers 404 and the subdomain test skips with `10007`. Reported rather than asserted: the token's *Workers Scripts Write* is proved by the upload, version create and deployment read in that very test, so nothing about the credentials explains the refusal. Opening Workers & Pages in the dashboard once creates the subdomain, after which the step writes, reads back and clears two triggers for real |
+| `PUT …/schedules was refused with [10063]` | cron triggers need the account to have a `workers.dev` subdomain and this one does not — the same reason `GET …/workers/subdomain` answers 404 and the subdomain test skips with `10007`. Reported rather than asserted: the token's *Workers Scripts Write* is proved by the upload, version create and deployment read in that very test, so nothing about the credentials explains the refusal. Opening Workers & Pages in the dashboard once creates the subdomain, after which the step writes, reads back and clears two triggers for real. That is what the next run did: `GET …/workers/subdomain` answered 200, the `PUT` answered 200 with both triggers, and the cron flow is verified end to end |
 
 A probe that answers 4xx for a reason that is *not* a refusal still proves the permission is there: cache
 purge is probed with an empty body, so `400 [1012 Request must contain one of "purge_everything"…]` means
@@ -309,7 +309,9 @@ Four codes seen live mean *the account is missing something*, not that the token
 rather than failed, because a credential change would not fix any of them: **1404** (SSL for SaaS is not
 enabled, on `custom_hostnames`), **10042** (R2 is not enabled), **10007** (no `workers.dev` subdomain, on
 `workers/subdomain`) and **10063** (cron triggers, which need that same subdomain). The last two are one
-gap with two symptoms: opening Workers & Pages in the dashboard once clears both.
+gap with two symptoms, and opening Workers & Pages in the dashboard once clears both — which was then
+seen to happen: a later run read `workers/subdomain` as 200 and wrote cron triggers for real. **1404** and
+**10042** are still standing, because they need a paid feature switched on rather than a page opened.
 
 The step never fails the job — a repository with no credentials yet is still allowed to be green — so read
 the annotations rather than the conclusion. Only the annotations, in fact: the step writes its table and the
@@ -469,14 +471,22 @@ Three things keep a run readable without opening the raw log.
 
 **A response CF.Net cannot read.** One failure mode is neither a credential problem nor a Cloudflare
 error, and it is worth recognising because it used to hide: a 2xx whose body is shaped like an envelope but
-does not fit the model. The transport throws `CloudflareApiException` with the message *…answered 200 OK,
-but CF.Net could not read the body as the shape it models…* followed by the parser's own diagnosis — the
-failing JSON path, such as `$.result.activated_on` — and the body Cloudflare sent on `ResponseBody`. Before
+does not fit the model. The transport throws `CloudflareApiException` whose message puts the two things a
+reader can act on first — the failing JSON path, such as `$.result[0].latest_deployment.source`, and a
+quotation of the body around it, the failing line marked `>>` — and only then explains that a mismatch is
+reported as an error rather than as a `null` result. That order is deliberate: a CI run surfaces the
+message as a build annotation, which is cut short, and the explanation is the part that can afford to be
+lost. The body Cloudflare sent in full is on `ResponseBody`. Before
 that, the same situation produced a `null` result and a `Success` taken from the status code, so a zone that
 `curl` could read in full was reported by the suite as unreadable and every test that needed it skipped or
-failed on an assertion that said nothing. The zone-scoped helper in the fixture recognises this case
-(`InnerException is JsonException`) and reports it once as a skip reason rather than failing twenty tests
-the same way. Blank strings are partly handled: Cloudflare spells "no value" as `""` in places, and
+failed on an assertion that said nothing. Two helpers in the fixture recognise this case
+(`InnerException is JsonException`) and report it once instead of failing every test that shares the
+precondition the same way: the zone-scoped one, as a skip reason, and `ReadablePagesProjectsAsync`, which
+also publishes the quotation through `Warn()` — the channel whose text reaches a run's annotations in
+full, where a skip reason is cut to 280 characters and only the first five are kept. It was written for a
+real case: `GET …/pages/projects` answered 200 with a `latest_deployment.source` that was not a string,
+which failed three Pages tests at once with the same 300-character message and no clue what the value
+was. Blank strings are partly handled: Cloudflare spells "no value" as `""` in places, and
 `BlankStringAsNullConverterFactory` reads those as null for the nullable date, time and GUID types.
 Numbers and booleans are deliberately left out, because a custom converter for them would disable
 `JsonNumberHandling.AllowReadingFromString`, which is what reads the numbers Cloudflare sends as strings

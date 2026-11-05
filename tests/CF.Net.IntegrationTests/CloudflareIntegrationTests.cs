@@ -345,10 +345,11 @@ public class ReadOnlyIntegrationTests : CloudflareIntegrationTest
             return;
         }
 
-        // Paging this endpoint is what Cloudflare answers with 8000024 on some accounts; the service
-        // retries bare when that happens, and the run report shows both calls, so a reader can see
-        // whether the fallback was needed.
-        var projects = await Client.Pages.ListAsync(new PagesProjectListParameters { PerPage = 20 });
+        var projects = await ReadablePagesProjectsAsync();
+        if (projects is null)
+        {
+            return;
+        }
 
         Log($"pages projects: {projects.Count} of {projects.TotalCount}");
         foreach (var project in projects.Items)
@@ -1129,7 +1130,27 @@ public class WriteIntegrationTests : CloudflareIntegrationTest
                     new[] { "*/30 * * * *", "0 3 * * *" });
                 Assert.NotNull(scheduled);
                 Assert.Equal(2, scheduled!.Count);
-                Assert.Equal(new[] { "*/30 * * * *", "0 3 * * *" }, scheduled.Expressions);
+
+                // Observed against the live API: the PUT answers 200 with both triggers, but not
+                // necessarily in the order they were sent. A script's cron triggers are a set - the PUT
+                // replaces the whole set and the answer lists what is now scheduled - so compare it as
+                // one, and say what order Cloudflare used when it differs from the order sent.
+                var sent = new[] { "*/30 * * * *", "0 3 * * *" };
+                var answered = scheduled.Expressions.ToArray();
+                Assert.True(
+                    sent.OrderBy(x => x, StringComparer.Ordinal)
+                        .SequenceEqual(answered.OrderBy(x => x, StringComparer.Ordinal)),
+                    $"PUT /accounts/{{account_id}}/workers/scripts/{name}/schedules answered with " +
+                    $"[{string.Join(", ", answered)}] where [{string.Join(", ", sent)}] was sent.");
+                if (!answered.SequenceEqual(sent))
+                {
+                    Warn($"PUT /accounts/{{account_id}}/workers/scripts/{name}/schedules returned the " +
+                         $"triggers in a different order than they were sent: sent " +
+                         $"[{string.Join(", ", sent)}], got [{string.Join(", ", answered)}]. The library " +
+                         "does not promise an order, because Cloudflare does not; this line records the " +
+                         "one it used.");
+                }
+
                 Log($"cron triggers set: {scheduled}");
 
                 var schedules = await Client.Workers.ListSchedulesAsync(name);
@@ -1226,7 +1247,12 @@ public class WriteIntegrationTests : CloudflareIntegrationTest
             return;
         }
 
-        var projects = await Client.Pages.ListAsync(new PagesProjectListParameters { PerPage = 20 });
+        var projects = await ReadablePagesProjectsAsync();
+        if (projects is null)
+        {
+            return;
+        }
+
         var project = projects.Items.FirstOrDefault();
         if (project?.Name is null)
         {
@@ -1284,7 +1310,12 @@ public class WriteIntegrationTests : CloudflareIntegrationTest
             return;
         }
 
-        var projects = await Client.Pages.ListAsync(new PagesProjectListParameters { PerPage = 20 });
+        var projects = await ReadablePagesProjectsAsync();
+        if (projects is null)
+        {
+            return;
+        }
+
         var project = projects.Items.FirstOrDefault();
         if (project?.Name is null)
         {

@@ -768,6 +768,67 @@ public class CloudflareTransportParseFailureTests
     }
 
     [Fact]
+    public async Task The_mismatch_message_quotes_the_part_of_the_body_it_could_not_read()
+    {
+        using var harness = CloudflareHarness.Create();
+        // Cloudflare indents its envelopes, so the value the parser choked on sits on a line of its own.
+        // That line is the one thing a reader can act on, and a CI annotation is often all they get.
+        harness.Respond("""
+            {
+              "success": true,
+              "errors": [],
+              "messages": [],
+              "result": {
+                "id": "z-1",
+                "development_mode": "not a number"
+              }
+            }
+            """);
+
+        var exception = await Assert.ThrowsAsync<CloudflareApiException>(() =>
+            harness.Transport.SendAsync<Zone>(
+                CloudflareRequest.Get("zones/zone-5678"), CancellationToken.None));
+
+        Assert.Contains("$.result.development_mode", exception.Message, StringComparison.Ordinal);
+        Assert.Contains("\"development_mode\": \"not a number\"", exception.Message, StringComparison.Ordinal);
+        // The failing line of the window is the one marked, so a reader can tell Cloudflare's value from
+        // the two lines of context around it.
+        Assert.Contains(">> ", exception.Message, StringComparison.Ordinal);
+        // The parser's own position suffix is dropped: the path is reported separately, and the line and
+        // byte numbers mean nothing without the body, which is quoted instead.
+        Assert.DoesNotContain("BytePositionInLine", exception.Message, StringComparison.Ordinal);
+        Assert.DoesNotContain("LineNumber", exception.Message, StringComparison.Ordinal);
+        // The path comes before the explanation of why a 200 is reported as an error at all, because the
+        // explanation is what a truncated annotation can afford to lose.
+        Assert.True(
+            exception.Message.IndexOf("$.result.development_mode", StringComparison.Ordinal) <
+                exception.Message.IndexOf("not an empty result", StringComparison.Ordinal),
+            exception.Message);
+    }
+
+    [Fact]
+    public async Task A_mismatch_in_a_body_too_wide_to_quote_is_quoted_around_the_property_that_failed()
+    {
+        using var harness = CloudflareHarness.Create();
+        // A proxy, a cassette or a minifying gateway can hand back a body with no line breaks, where a
+        // line number points at everything: quoting the line would quote the whole response and say
+        // nothing. The property the parser named still locates the value.
+        var padding = new string('x', 600);
+        harness.Respond("{\"success\":true,\"errors\":[],\"messages\":[],\"result\":{\"id\":\"z-1\",\"name\":\"" +
+            padding + "\",\"development_mode\":\"not a number\"}}");
+
+        var exception = await Assert.ThrowsAsync<CloudflareApiException>(() =>
+            harness.Transport.SendAsync<Zone>(
+                CloudflareRequest.Get("zones/zone-5678"), CancellationToken.None));
+
+        Assert.Contains("$.result.development_mode", exception.Message, StringComparison.Ordinal);
+        Assert.Contains("\"development_mode\":\"not a number\"", exception.Message, StringComparison.Ordinal);
+        // No line window was quoted, because the only line there is was too wide to be worth quoting.
+        Assert.DoesNotContain(">> ", exception.Message, StringComparison.Ordinal);
+        Assert.DoesNotContain(padding, exception.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task A_success_that_is_not_an_envelope_is_left_alone()
     {
         using var harness = CloudflareHarness.Create();

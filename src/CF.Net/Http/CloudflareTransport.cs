@@ -390,7 +390,7 @@ public sealed class CloudflareTransport : ICloudflareTransport, IDisposable
         if (parseFailure is not null && raw.IsSuccessStatusCode && Options.ThrowOnApiError && HasEnvelopeRoot(body))
         {
             throw BuildApiException(
-                DescribeParseFailure(request, raw.StatusCode, parseFailure),
+                DescribeParseFailure(request, raw.StatusCode, parseFailure, body),
                 raw.StatusCode,
                 raw.RequestUri,
                 errors,
@@ -504,20 +504,143 @@ public sealed class CloudflareTransport : ICloudflareTransport, IDisposable
     private static string DescribeParseFailure(
         CloudflareRequest request,
         HttpStatusCode statusCode,
-        JsonException parseFailure)
+        JsonException parseFailure,
+        string? body)
     {
         var builder = new StringBuilder();
         builder.Append("Cloudflare API call '").Append(request.OperationName ?? request.Method.Method).Append(' ').Append(request.Path)
             .Append("' answered ").Append((int)statusCode).Append(' ').Append(statusCode)
-            .Append(", but CF.Net could not read the body as the shape it models: ").Append(parseFailure.Message);
+            .Append(", but CF.Net could not read the body as the shape it models.");
 
+        // The path and the value Cloudflare actually sent come first, because this message is often all
+        // a reader gets: CI surfaces it as a build annotation, which is cut short, and the explanation
+        // of why the failure is reported at all is the part that can afford to be lost.
         if (parseFailure.Path is { Length: > 0 } path)
         {
-            builder.Append(" The failing JSON path is ").Append(path).Append('.');
+            builder.Append(" At ").Append(path).Append(' ');
+        }
+        else
+        {
+            builder.Append(' ');
+        }
+
+        builder.Append(WithoutPositionSuffix(parseFailure.Message));
+
+        if (BodyAround(body, parseFailure) is { } excerpt)
+        {
+            builder.Append(" The body there read: ").Append(excerpt);
         }
 
         builder.Append(" This is a mismatch between the model and the live response, not an empty result, so it is reported as an error rather than as null; the body Cloudflare sent is on the exception's ResponseBody.");
         return builder.ToString();
+    }
+
+    /// <summary>
+    /// Drops the position suffix System.Text.Json appends to its own messages -
+    /// <c>Path: $.result[0].source | LineNumber: 122 | BytePositionInLine: 19</c> - because the path is
+    /// reported separately and the numbers mean nothing without the body, which
+    /// <c>BodyAround</c> quotes instead.
+    /// </summary>
+    /// <param name="message">The parser's message.</param>
+    /// <returns>The complaint on its own.</returns>
+    private static string WithoutPositionSuffix(string message)
+    {
+        var cut = message.Length;
+        foreach (var marker in new[] { " Path: ", " | LineNumber: ", " LineNumber: " })
+        {
+            var at = message.IndexOf(marker, StringComparison.Ordinal);
+            if (at >= 0 && at < cut)
+            {
+                cut = at;
+            }
+        }
+
+        if (cut == message.Length)
+        {
+            return message;
+        }
+
+        var complaint = message[..cut].TrimEnd();
+        return complaint.EndsWith('.') ? complaint : complaint + ".";
+    }
+
+    /// <summary>
+    /// Quotes the body around the point where the parser gave up, which is the one part of a shape
+    /// mismatch a reader can act on: the message names the property, this shows what Cloudflare sent
+    /// for it. The line before and after are included because <see cref="JsonException.LineNumber"/>
+    /// indexes the body's lines from zero, and a value that opens on the previous line is usually what
+    /// explains the complaint.
+    /// </summary>
+    /// <param name="body">The body Cloudflare sent, when it was read as text.</param>
+    /// <param name="parseFailure">What the parser reported about it.</param>
+    /// <returns>A short quotation, or <c>null</c> when the body cannot be located.</returns>
+    private static string? BodyAround(string? body, JsonException parseFailure)
+    {
+        if (string.IsNullOrWhiteSpace(body))
+        {
+            return null;
+        }
+
+        var lines = body!.Split('\n');
+        if (parseFailure.LineNumber is { } number && number >= 0 && number < lines.Length)
+        {
+            var failing = (int)number;
+            var window = new StringBuilder();
+            for (var line = Math.Max(0, failing - 1); line <= Math.Min(lines.Length - 1, failing + 1); line++)
+            {
+                var text = lines[line].Trim();
+                if (text.Length == 0)
+                {
+                    continue;
+                }
+
+                if (window.Length > 0)
+                {
+                    window.Append(" / ");
+                }
+
+                window.Append(line == failing ? ">> " : string.Empty).Append(text);
+            }
+
+            if (window.Length > 0 && window.Length <= 400)
+            {
+                return window.ToString();
+            }
+        }
+
+        // Either the body is one long line, where a line number points at everything, or the window is
+        // too wide to quote. Quote around the property the parser named instead.
+        return AroundProperty(body, parseFailure.Path);
+    }
+
+    /// <summary>Quotes a slice of a body around the last property a failing JSON path names.</summary>
+    /// <param name="body">The body Cloudflare sent.</param>
+    /// <param name="path">The path the parser failed on, such as <c>$.result[0].source</c>.</param>
+    /// <returns>A short quotation, or <c>null</c> when the path does not end in a property name.</returns>
+    private static string? AroundProperty(string body, string? path)
+    {
+        if (path is not { Length: > 0 })
+        {
+            return null;
+        }
+
+        var name = path[(path.LastIndexOf('.') + 1)..];
+        if (name.Length == 0 || name.Contains(']'))
+        {
+            return null;
+        }
+
+        var at = body.IndexOf('"' + name + '"', StringComparison.Ordinal);
+        if (at < 0)
+        {
+            return null;
+        }
+
+        var from = Math.Max(0, at - 20);
+        var length = Math.Min(body.Length - from, 240);
+        return (from > 0 ? "\u2026" : string.Empty) +
+            body.Substring(from, length).Replace('\r', ' ').Replace('\n', ' ') +
+            (from + length < body.Length ? "\u2026" : string.Empty);
     }
 
     private static CloudflareApiException BuildApiException(

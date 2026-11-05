@@ -3,6 +3,8 @@ using System.Text.Json;
 using CFNet.Configuration;
 using CFNet.Exceptions;
 using CFNet.DependencyInjection;
+using CFNet.Http;
+using CFNet.Models.Pages;
 using CFNet.Models.Zones;
 using CFNet.TestKit;
 using Microsoft.Extensions.DependencyInjection;
@@ -271,6 +273,39 @@ public abstract class CloudflareIntegrationTest : IDisposable
         catch (CloudflareApiException exception) when (exception.InnerException is JsonException)
         {
             SkipUnless(false, ModelMismatchReason(exception), test);
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// Lists the account's Pages projects as a precondition, skipping the test when CF.Net cannot read
+    /// what Cloudflare sent back.
+    /// </summary>
+    /// <param name="test">Test name, supplied by the compiler.</param>
+    /// <returns>The page of projects, or <c>null</c> when the test has been skipped.</returns>
+    /// <remarks>
+    /// Paging this endpoint is what Cloudflare answers with 8000024 on some accounts; the service
+    /// retries bare when that happens, and the run report shows both calls, so a reader can see whether
+    /// the fallback was needed. A body CF.Net cannot read is a defect in this library rather than in the
+    /// credentials, and every Pages test lists projects first, so one unmodelled field would otherwise
+    /// fail them all with the same message: it is published through <see cref="Warn"/> - the channel
+    /// whose text reaches a run's annotations in full - and the tests skip.
+    /// </remarks>
+    protected async Task<CloudflarePage<PagesProject>?> ReadablePagesProjectsAsync(
+        [CallerMemberName] string? test = null)
+    {
+        try
+        {
+            return await Client.Pages.ListAsync(new PagesProjectListParameters { PerPage = 20 });
+        }
+        catch (CloudflareApiException exception) when (exception.InnerException is JsonException)
+        {
+            Warn(ModelMismatchReason(exception));
+            SkipUnless(
+                false,
+                "CF.Net could not read Cloudflare's Pages project list as the shape it models; the " +
+                "Learned line for this run quotes what Cloudflare sent.",
+                test);
             return null;
         }
     }

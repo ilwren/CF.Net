@@ -1076,9 +1076,9 @@ public class WriteIntegrationTests : CloudflareIntegrationTest
         CFNet.Models.Workers.WorkerTail? tail = null;
         try
         {
-            // A script that has never been tailed answers with nothing rather than an error, and that is the
-            // state this one starts in.
-            Assert.Null(await Client.Workers.GetTailAsync(name));
+            // A script that has never been tailed answers 200 with an empty array, which is the state this one
+            // starts in.
+            Assert.Empty(await Client.Workers.ListTailsAsync(name));
 
             tail = await Client.Workers.CreateTailAsync(name);
             Log($"tail {tail}");
@@ -1095,17 +1095,19 @@ public class WriteIntegrationTests : CloudflareIntegrationTest
                 $"the tail url '{tail.Url}' is not an absolute URI");
             Log($"tail {tail.Id} is served at {tailUrl!.Scheme}://{tailUrl.Host}");
 
-            var read = await Client.Workers.GetTailAsync(name);
-            Assert.NotNull(read);
-            Assert.Equal(tail.Id, read!.Id);
-            Assert.Equal(tail.Url, read.Url);
+            // What a listed tail carries is not what creating one answers with, so the first listed item is
+            // reported in full before anything is asserted about its fields.
+            var listed = await Client.Workers.ListTailsAsync(name);
+            Assert.NotEmpty(listed);
+            Warn($"GET /accounts/{{account_id}}/workers/scripts/{name}/tails answered {listed.Count} item(s); the first was {CFNet.Serialization.CloudflareJson.ToIndentedJson(listed[0])}");
+            Assert.Contains(listed, item => item.Id == tail.Id);
 
             await Client.Workers.DeleteTailAsync(name, tail.Id!);
             Log($"stopped tail {tail.Id}");
             tail = null;
 
             // Stopped is the same as never started from the API's point of view.
-            Assert.Null(await Client.Workers.GetTailAsync(name));
+            Assert.Empty(await Client.Workers.ListTailsAsync(name));
 
             // Whether a script can hold more than one tail is not stated in the schema Cloudflare publishes,
             // and either answer is a real one, so it is probed and reported rather than asserted.
@@ -1114,8 +1116,8 @@ public class WriteIntegrationTests : CloudflareIntegrationTest
                 var second = await Client.Workers.CreateTailAsync(name);
                 tail = second;
 
-                var after = await Client.Workers.GetTailAsync(name);
-                Warn($"POST /accounts/{{account_id}}/workers/scripts/{name}/tails a second time answered 200 with tail {second.Id}, and the read that followed reported {(after is null ? "no tail" : $"tail {after.Id}")}. So a script does not reject a second create, and {(after?.Id == second.Id ? "the new tail replaced the first" : "which tail the script reports is worth knowing")}.");
+                var after = await Client.Workers.ListTailsAsync(name);
+                Warn($"POST /accounts/{{account_id}}/workers/scripts/{name}/tails a second time answered 200 with tail {second.Id}, and the list that followed reported {after.Count} tail(s): {string.Join(", ", after.Select(item => item.Id ?? "(no id)"))}. So a script does not reject a second create, and {(after.Count == 1 ? "the new tail replaced the first" : "a script can hold several at once")}.");
             }
             catch (CloudflareApiException exception)
             {

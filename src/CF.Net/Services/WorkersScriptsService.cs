@@ -215,7 +215,10 @@ public interface IWorkersScriptsService
     /// <param name="scriptName">The Worker to tail.</param>
     /// <param name="accountId">Account id; falls back to the configured default when null.</param>
     /// <param name="cancellationToken">Cancellation token.</param>
-    /// <returns>The tail, with the url a consumer connects to and when it expires.</returns>
+    /// <returns>
+    /// The tail, with the url a consumer connects to and when it expires. Listing the script's tails answers
+    /// differently - see <see cref="ListTailsAsync"/>.
+    /// </returns>
     /// <remarks>
     /// <c>POST /accounts/{account_id}/workers/scripts/{script_name}/tails</c> takes no body - the script in
     /// the path is the whole request. The events themselves arrive over the returned url rather than
@@ -226,19 +229,20 @@ public interface IWorkersScriptsService
         string? accountId = null,
         CancellationToken cancellationToken = default);
 
-    /// <summary>Reads the tail a Worker has.</summary>
+    /// <summary>Lists the tails a Worker has.</summary>
     /// <param name="scriptName">The Worker being tailed.</param>
     /// <param name="accountId">Account id; falls back to the configured default when null.</param>
     /// <param name="cancellationToken">Cancellation token.</param>
     /// <returns>
-    /// The tail, or <c>null</c> when the script is not being tailed - which is the normal state, and what
-    /// an expired tail reads as too.
+    /// The script's tails, empty when it is not being tailed - which is the normal state, and what an expired
+    /// tail reads as too.
     /// </returns>
     /// <remarks>
-    /// Cloudflare answers with a single tail rather than a list, so this is the script's tail and not one of
-    /// several.
+    /// This endpoint answers with an <em>array</em>, unlike the create on the same path, which answers with a
+    /// single tail. The published schema describes the read as one object too, and a live call says otherwise,
+    /// so the array is what is modelled here. A 404 reads as an empty list rather than an error.
     /// </remarks>
-    Task<WorkerTail?> GetTailAsync(
+    Task<IReadOnlyList<WorkerTail>> ListTailsAsync(
         string scriptName,
         string? accountId = null,
         CancellationToken cancellationToken = default);
@@ -1032,7 +1036,7 @@ public sealed class WorkersScriptsService : CloudflareService, IWorkersScriptsSe
     }
 
     /// <inheritdoc />
-    public async Task<WorkerTail?> GetTailAsync(
+    public async Task<IReadOnlyList<WorkerTail>> ListTailsAsync(
         string scriptName,
         string? accountId = null,
         CancellationToken cancellationToken = default)
@@ -1040,10 +1044,11 @@ public sealed class WorkersScriptsService : CloudflareService, IWorkersScriptsSe
         var request = CloudflareRequest
             .Get(TailPath(ResolveAccountId(accountId), scriptName))
             .Tolerate(System.Net.HttpStatusCode.NotFound);
-        request.OperationName = "Get Worker Tail";
+        request.OperationName = "List Worker Tails";
 
-        var response = await Transport.SendAsync<WorkerTail>(request, cancellationToken).ConfigureAwait(false);
-        return response.Result;
+        // An array, not the single object the create on this path answers with.
+        var response = await Transport.SendAsync<List<WorkerTail>>(request, cancellationToken).ConfigureAwait(false);
+        return response.Result ?? new List<WorkerTail>();
     }
 
     /// <inheritdoc />

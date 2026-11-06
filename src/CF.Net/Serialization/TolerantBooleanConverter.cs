@@ -30,7 +30,7 @@ public sealed class TolerantBooleanConverter : JsonConverter<bool?>
     /// <inheritdoc />
     public override bool? Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options)
     {
-        switch (reader.TokenKind)
+        switch (reader.TokenType)
         {
             case JsonTokenType.True:
                 return true;
@@ -45,7 +45,7 @@ public sealed class TolerantBooleanConverter : JsonConverter<bool?>
                 return ReadWord(reader.GetString());
             default:
                 throw new JsonException(
-                    $"The JSON value of type '{reader.TokenKind}' could not be read as a boolean flag.");
+                    $"The JSON value of type '{reader.TokenType}' could not be read as a boolean flag.");
         }
     }
 

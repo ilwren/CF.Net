@@ -567,6 +567,73 @@ public class ReadOnlyIntegrationTests : CloudflareIntegrationTest
     }
 
     [Fact]
+    public async Task Workers_observability_destinations_can_be_listed()
+    {
+        if (!SkipWithoutAccount())
+        {
+            return;
+        }
+
+        IReadOnlyList<ObservabilityDestination> destinations;
+        try
+        {
+            destinations = await Client.WorkersObservability.ListDestinationsAsync();
+        }
+        catch (CloudflareApiException exception)
+            when (exception.StatusCode is System.Net.HttpStatusCode.Forbidden or System.Net.HttpStatusCode.NotFound)
+        {
+            SkipUnless(
+                false,
+                $"GET /accounts/{{account_id}}/workers/observability/destinations was refused with " +
+                $"{exception.StatusCode}/{exception.ErrorCode}: {exception.Message}");
+            return;
+        }
+
+        Log($"{destinations.Count} observability destination(s)");
+        foreach (var destination in destinations.Take(3))
+        {
+            Log($"destination {destination} enabled={destination.Enabled} type={destination.Configuration?.Type} " +
+                $"dataset={destination.Configuration?.LogpushDataset} url={destination.Configuration?.Url} " +
+                $"last_complete={destination.Configuration?.JobStatus?.LastComplete} " +
+                $"scripts=[{string.Join(", ", destination.Scripts ?? new List<string>())}]");
+
+            if (destination.AdditionalData is { Count: > 0 } ||
+                destination.Configuration?.AdditionalData is { Count: > 0 } ||
+                destination.Configuration?.JobStatus?.AdditionalData is { Count: > 0 })
+            {
+                Warn($"GET /accounts/{{account_id}}/workers/observability/destinations returned fields this " +
+                     $"library does not model yet - destination: {JsonSerializer.Serialize(destination.AdditionalData)}, " +
+                     $"configuration: {JsonSerializer.Serialize(destination.Configuration?.AdditionalData)}, " +
+                     $"job status: {JsonSerializer.Serialize(destination.Configuration?.JobStatus?.AdditionalData)}.");
+            }
+        }
+
+        // The filters on this endpoint are camelCase on the wire, orderBy and perPage rather than order_by and
+        // per_page, which is unusual enough to be worth checking against the live endpoint and not only
+        // against the published schema. A refusal is the answer, so it is reported rather than asserted away.
+        try
+        {
+            var filtered = await Client.WorkersObservability.ListDestinationsAsync(
+                new ObservabilityDestinationListParameters
+                {
+                    Order = ObservabilityDestinationOrders.Descending,
+                    OrderBy = ObservabilityDestinationOrderBy.Created,
+                    Page = 1,
+                    PerPage = 5,
+                });
+
+            Log($"the filtered list answered {filtered.Count} destination(s)");
+        }
+        catch (CloudflareApiException exception)
+        {
+            Warn($"GET /accounts/{{account_id}}/workers/observability/destinations?order=desc&orderBy=created" +
+                 $"&page=1&perPage=5 was refused with {exception.StatusCode}/{exception.ErrorCode}: " +
+                 $"{exception.Message} - so the camelCase filters the published schema names are not what the " +
+                 "live endpoint accepts.");
+        }
+    }
+
+    [Fact]
     public async Task The_workers_dev_subdomain_can_be_read()
     {
         if (!SkipWithoutAccount())
@@ -1055,6 +1122,114 @@ public class WriteIntegrationTests : CloudflareIntegrationTest
         }
 
         Assert.Null(await Client.Kv.GetNamespaceAsync(namespaceId));
+    }
+
+    [Fact]
+    public async Task An_observability_destination_can_be_created_and_removed()
+    {
+        if (!SkipWithoutAccount() || !SkipWithoutWritePermission())
+        {
+            return;
+        }
+
+        var name = $"cfnet-it-{Guid.NewGuid().ToString("N")[..10]}";
+        var request = CreateObservabilityDestinationRequest.ForLogpush(
+            name,
+            "https://example.com/cfnet-it-logs",
+            ObservabilityLogpushDatasets.OpenTelemetryLogs);
+
+        // The url is not a real collector, so Cloudflare's check that delivery works is skipped, and the
+        // destination stays off: this test is about the resource, not about exporting telemetry anywhere.
+        request.SkipPreflightCheck = true;
+
+        string? slug = null;
+        try
+        {
+            ObservabilityDestination created;
+            try
+            {
+                created = await Client.WorkersObservability.CreateDestinationAsync(request);
+            }
+            catch (CloudflareApiException exception)
+            {
+                // Exporting telemetry may be plan-gated, and a refusal says that better than a failed
+                // assertion would.
+                SkipUnless(
+                    false,
+                    $"POST /accounts/{{account_id}}/workers/observability/destinations was refused with " +
+                    $"{exception.StatusCode}/{exception.ErrorCode}: {exception.Message}");
+                return;
+            }
+
+            slug = created.Slug;
+            Log($"created destination {created} enabled={created.Enabled} " +
+                $"dataset={created.Configuration?.LogpushDataset} url={created.Configuration?.Url}");
+
+            Assert.False(string.IsNullOrEmpty(slug));
+            Assert.Equal(name, created.Name);
+            Assert.False(created.Enabled);
+            Assert.Equal(ObservabilityDestinationTypes.Logpush, created.Configuration?.Type);
+            Assert.Equal(
+                ObservabilityLogpushDatasets.OpenTelemetryLogs,
+                created.Configuration?.LogpushDataset);
+
+            var listed = await Client.WorkersObservability.ListDestinationsAsync();
+            Assert.Contains(listed, destination => destination.Slug == slug);
+
+            // Enabled is required on every update even when it is not what is changing, so this resends the
+            // false it already has. An update may still be refused - there is no way to skip a delivery check
+            // on this endpoint - and that refusal is worth more than a failed assertion.
+            try
+            {
+                var updated = await Client.WorkersObservability.UpdateDestinationAsync(
+                    slug!,
+                    new UpdateObservabilityDestinationRequest
+                    {
+                        Enabled = false,
+                        Configuration = new ObservabilityDestinationConfiguration
+                        {
+                            Type = ObservabilityDestinationTypes.Logpush,
+                            Url = "https://example.com/cfnet-it-logs-moved",
+                            Headers = new Dictionary<string, string?> { ["X-Cf-Net"] = "integration-test" },
+                            ReplaceHeaders = true,
+                        },
+                    });
+
+                Log($"updated: enabled={updated.Enabled} url={updated.Configuration?.Url} " +
+                    $"headers=[{string.Join(", ", (updated.Configuration?.Headers ?? new Dictionary<string, string?>()).Keys)}] " +
+                    $"dataset={updated.Configuration?.LogpushDataset}");
+                Assert.False(updated.Enabled);
+            }
+            catch (CloudflareApiException exception)
+            {
+                Warn($"PATCH /accounts/{{account_id}}/workers/observability/destinations/{slug} was refused " +
+                     $"with {exception.StatusCode}/{exception.ErrorCode}: {exception.Message}");
+            }
+
+            // The delete answers with the destination it deleted rather than an empty success.
+            var deleted = await Client.WorkersObservability.DeleteDestinationAsync(slug!);
+            Log($"deleted destination {deleted}");
+            Assert.Equal(slug, deleted.Slug);
+            slug = null;
+
+            var after = await Client.WorkersObservability.ListDestinationsAsync();
+            Assert.DoesNotContain(after, destination => destination.Slug == deleted.Slug);
+        }
+        finally
+        {
+            if (slug is not null)
+            {
+                try
+                {
+                    await Client.WorkersObservability.DeleteDestinationAsync(slug);
+                    Log($"deleted destination {slug}");
+                }
+                catch (CloudflareApiException exception) when (exception.IsNotFound)
+                {
+                    Log("destination was already gone");
+                }
+            }
+        }
     }
 
     [Fact]

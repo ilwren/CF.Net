@@ -336,6 +336,9 @@ public class CloudflareClientTests
         Assert.IsAssignableFrom<IOriginTlsClientAuthService>(client.OriginTlsClientAuth);
         Assert.IsAssignableFrom<IUserService>(client.User);
         Assert.IsAssignableFrom<IAccountsService>(client.Accounts);
+        Assert.IsAssignableFrom<IRulesListService>(client.Lists);
+        Assert.IsAssignableFrom<IRulesetService>(client.Rulesets);
+        Assert.IsAssignableFrom<IWorkersObservabilityService>(client.WorkersObservability);
     }
 
     [Fact]
@@ -535,6 +538,9 @@ public class ServiceCollectionExtensionsTests
         Assert.Same(client.OriginTlsClientAuth, provider.GetRequiredService<IOriginTlsClientAuthService>());
         Assert.Same(client.User, provider.GetRequiredService<IUserService>());
         Assert.Same(client.Accounts, provider.GetRequiredService<IAccountsService>());
+        Assert.Same(client.Lists, provider.GetRequiredService<IRulesListService>());
+        Assert.Same(client.Rulesets, provider.GetRequiredService<IRulesetService>());
+        Assert.Same(client.WorkersObservability, provider.GetRequiredService<IWorkersObservabilityService>());
         Assert.Same(client.Transport, provider.GetRequiredService<ICloudflareTransport>());
         Assert.Same(client, provider.GetRequiredService<CloudflareClient>());
         Assert.NotNull(provider.GetRequiredService<ICloudflareClientFactory>());

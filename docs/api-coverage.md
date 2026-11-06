@@ -481,9 +481,44 @@ Custom domains are an **account-level** collection only — the published schema
 "which domains does this Worker serve" is answered by filtering locally (`ListDomainsForWorkerAsync`) rather
 than by a server-side query.
 
+Verified live on a free-plan account: `PATCH …/script-settings` with `observability` (enabled, head sampling
+rate, logs with invocation logs) was accepted, and the `GET` of the same path carried no field this library
+does not model - so `WorkerScriptSettings` and `WorkerObservability` cover what Cloudflare actually sends.
+
 ⛔ The newer JSON-only flow (`POST /workers/workers` → `…/versions` → `…/deployments`), static asset
-upload sessions, Workers for Platforms dispatch namespaces, query filters on the domain list, tails,
-observability configuration, and Workers AI.
+upload sessions, Workers for Platforms dispatch namespaces, query filters on the domain list, and Workers AI.
+
+---
+
+## Workers Observability
+
+`IWorkersObservabilityService` — `client.WorkersObservability`
+
+Telemetry destinations: where a Worker's logs, traces and metrics are exported to. They are **account-level**
+resources, which is why they are their own service rather than more methods on the scripts one, and a Worker
+reaches one through its own script settings - `observability.logs.destinations` and
+`observability.traces.destinations` carry the slugs defined here.
+
+| Method | Endpoint | Notes |
+| --- | --- | --- |
+| `CreateDestinationAsync(CreateObservabilityDestinationRequest, accountId)` | `POST /accounts/{account_id}/workers/observability/destinations` | `name`, `enabled` and `configuration` are all required by the published schema, and `EnsureValid()` says so locally. The configuration is `{type: "logpush", url, headers, logpushDataset}` - the dataset is **fixed here**, because an update cannot change it. `skipPreflightCheck` skips Cloudflare's check that delivery actually works. `ForLogpush(name, url, dataset, enabled)` builds the whole thing. |
+| `UpdateDestinationAsync(slug, UpdateObservabilityDestinationRequest, accountId)` | `PATCH …/observability/destinations/{slug}` | `enabled` is **required on every update**, even when it is not the field changing, so an address or header change resends the flag it already has. The configuration takes `type`, `url`, `headers` and `replaceHeaders`; no dataset. |
+| `ListDestinationsAsync(ObservabilityDestinationListParameters?, accountId)` | `GET …/observability/destinations` | one page, not a cursor. The filters are `order` (`asc`/`desc`), `orderBy` (`created`/`updated`), `page` and `perPage` - **camelCase on the wire**, where most Cloudflare endpoints spell them `per_page`, so the parameters class does not extend `CloudflarePagedParameters`. |
+| `DeleteDestinationAsync(slug, accountId)` | `DELETE …/observability/destinations/{slug}` | answers with **the destination that was deleted**, not an empty success. |
+
+All four answer with the same object: `slug`, `name`, `enabled`, `scripts` (the Workers exporting to it) and
+`configuration`, where the response's configuration adds `jobStatus` (`error_message`, `last_complete`,
+`last_error`) and its field names are camelCase (`logpushDataset`, `jobStatus`) around a snake_case job
+status - so every property carries its wire name explicitly. `last_complete` and `last_error` are typed as
+strings because the schema types them as strings and an empty value would otherwise be a parse failure.
+
+Because this library never writes a JSON `null`, a header set to `null` is dropped rather than sent: removing
+a header means `replaceHeaders: true` with the headers that should remain.
+
+⛔ The telemetry itself - `…/observability/telemetry/{keys,values,query,live-tail,live-tail/heartbeat}` - and
+the shared queries behind it.
+
+---
 
 ## Pages
 

@@ -88,6 +88,12 @@ public interface ICloudflareClient : IDisposable
     IRulesetService Rulesets { get; }
 
     /// <summary>
+    /// Workers Observability: the telemetry destinations an account exports Worker logs, traces and metrics
+    /// to.
+    /// </summary>
+    IWorkersObservabilityService WorkersObservability { get; }
+
+    /// <summary>
     /// Cheap connectivity check that never throws: verifies the credentials using whichever scheme is
     /// configured and reports the outcome.
     /// </summary>

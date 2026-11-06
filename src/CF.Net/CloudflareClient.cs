@@ -62,6 +62,7 @@ public sealed class CloudflareClient : ICloudflareClient, IDisposable
         R2 = new R2Service(transport);
         Lists = new RulesListService(transport);
         Rulesets = new RulesetService(transport);
+        WorkersObservability = new WorkersObservabilityService(transport);
     }
 
     /// <inheritdoc />
@@ -114,6 +115,9 @@ public sealed class CloudflareClient : ICloudflareClient, IDisposable
 
     /// <inheritdoc />
     public IRulesetService Rulesets { get; }
+
+    /// <inheritdoc />
+    public IWorkersObservabilityService WorkersObservability { get; }
 
     /// <inheritdoc />
     public Task<CloudflareConnectionCheck> CheckConnectionAsync(CancellationToken cancellationToken = default) =>

@@ -753,6 +753,11 @@ change makes a new one. `RulesetKind` covers `root`, `managed`, `custom` and `zo
 the 23 phases the API publishes, from `http_request_redirect` (Bulk Redirects) through
 `http_request_firewall_custom` (custom WAF rules) to `magic_transit`.
 
+Two constraints the live API taught, because the docs do not lead with them: `kind: custom` is only
+accepted in the `http_request_firewall_custom` phase - creating one in `http_request_redirect` is refused
+with `20004` - so Bulk Redirects lives in the account's **root** ruleset for that phase, and a managed rule
+may carry no `expression` at all, Cloudflare defining it by `ref` instead.
+
 Rules come in twenty-odd action-specific shapes. `RulesetRule` declares the fields every rule shares, plus
 the **redirect** parameters - `from_list` (`name` + `key`, the Bulk Redirects case, built by
 `CreateRulesetRuleRequest.ForRedirectFromList`) and `from_value` (a literal or expression target with

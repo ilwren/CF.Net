@@ -141,7 +141,13 @@ public class ReadOnlyIntegrationTests : CloudflareIntegrationTest
             foreach (var rule in ruleset!.Rules ?? new List<RulesetRule>())
             {
                 Assert.False(string.IsNullOrEmpty(rule.Action), $"rule {rule.Id} has no action");
-                Assert.False(string.IsNullOrEmpty(rule.Expression), $"rule {rule.Id} has no expression");
+
+                // A managed rule is written by Cloudflare and one of them in this account carries no
+                // expression at all, so only a ruleset this account could have written is held to it.
+                if (!ruleset.IsManaged)
+                {
+                    Assert.False(string.IsNullOrEmpty(rule.Expression), $"rule {rule.Id} has no expression");
+                }
 
                 if (rule.ActionParameters?.AdditionalData is { Count: > 0 } untyped)
                 {
@@ -1050,7 +1056,105 @@ public class WriteIntegrationTests : CloudflareIntegrationTest
     }
 
     [Fact]
-    public async Task A_redirect_ruleset_can_be_created_given_a_rule_and_removed()
+    public async Task A_custom_ruleset_can_be_created_given_a_rule_and_removed()
+    {
+        if (!SkipWithoutAccount() || !SkipWithoutWritePermission())
+        {
+            return;
+        }
+
+        var marker = Guid.NewGuid().ToString("N")[..8];
+
+        // A custom ruleset is the safe thing to create against a live account: nothing serves it until a
+        // root ruleset executes it, so no request this account receives changes behaviour. Cloudflare
+        // documents http_request_firewall_custom as the phase custom rulesets are created in - the redirect
+        // phase refused kind "custom" with error 20004 on the first live run of this test. Its rules only
+        // log, and match paths nothing serves, so even an accidental execute would be inert.
+        var ruleset = await Client.Rulesets.CreateAsync(new CreateRulesetRequest
+        {
+            Name = $"cfnet-it-{marker}",
+            Kind = RulesetKind.Custom,
+            Phase = RulesetPhase.HttpRequestFirewallCustom,
+            Description = "CF.Net integration test ruleset",
+            Rules = new List<CreateRulesetRuleRequest>
+            {
+                new()
+                {
+                    Action = "log",
+                    Expression = "http.request.uri.path eq \"/cfnet-integration-test-never-served\"",
+                    Description = "first rule",
+                },
+            },
+        });
+
+        try
+        {
+            Assert.Equal(RulesetKind.Custom, ruleset.Kind);
+            Assert.Equal(RulesetPhase.HttpRequestFirewallCustom, ruleset.Phase);
+            Assert.False(ruleset.IsRoot);
+            Log($"created ruleset {ruleset}");
+
+            var rule = Assert.Single(ruleset.Rules!);
+            Assert.Equal("log", rule.Action);
+            Assert.False(string.IsNullOrEmpty(rule.Expression));
+
+            var read = await Client.Rulesets.GetAsync(ruleset.Id!);
+            Assert.NotNull(read);
+            Assert.Equal(ruleset.Version, read!.Version);
+
+            var versions = await Client.Rulesets.ListVersionsAsync(ruleset.Id!);
+            Assert.NotEmpty(versions);
+            Log($"{versions.Count} version(s) after creating it with a rule");
+
+            // A rule change answers with the whole ruleset, not the rule, so the change is read back out of
+            // what came back.
+            var afterAdd = await Client.Rulesets.CreateRuleAsync(
+                ruleset.Id!,
+                new CreateRulesetRuleRequest
+                {
+                    Action = "log",
+                    Expression = "http.request.uri.path eq \"/cfnet-second-never-served\"",
+                    Description = "second rule",
+                });
+            Assert.Equal(2, afterAdd.RuleCount);
+
+            var second = afterAdd.Rules!.Single(candidate => candidate.Description == "second rule");
+            var afterEdit = await Client.Rulesets.EditRuleAsync(
+                ruleset.Id!,
+                second.Id!,
+                new CreateRulesetRuleRequest { Enabled = false });
+            Assert.False(afterEdit.Rules!.Single(candidate => candidate.Id == second.Id).Enabled);
+
+            var afterRemove = await Client.Rulesets.DeleteRuleAsync(ruleset.Id!, second.Id!);
+            Assert.Equal(1, afterRemove.RuleCount);
+            Assert.False(
+                afterRemove.Rules!.Any(candidate => candidate.Id == second.Id),
+                $"rule {second.Id} should have been removed, and it is still in {afterRemove}");
+
+            var finalVersions = await Client.Rulesets.ListVersionsAsync(ruleset.Id!);
+            Log($"{finalVersions.Count} version(s) after appending, editing and removing a rule");
+            Assert.True(
+                finalVersions.Count > versions.Count,
+                $"every change makes a version, so {versions.Count} should have grown, and it is {finalVersions.Count}");
+        }
+        finally
+        {
+            try
+            {
+                await Client.Rulesets.DeleteAsync(ruleset.Id!);
+                Log($"deleted ruleset {ruleset.Id}");
+            }
+            catch (CloudflareApiException exception) when (exception.IsNotFound)
+            {
+                Log("ruleset was already gone");
+            }
+        }
+
+        Assert.Null(await Client.Rulesets.GetAsync(ruleset.Id!));
+    }
+
+    [Fact]
+    public async Task A_bulk_redirect_rule_can_be_validated_without_changing_traffic()
     {
         if (!SkipWithoutAccount() || !SkipWithoutWritePermission())
         {
@@ -1060,13 +1164,13 @@ public class WriteIntegrationTests : CloudflareIntegrationTest
         var marker = Guid.NewGuid().ToString("N")[..8];
         var listName = $"cfnet_it_{DateTime.UtcNow:yyyyMMddHHmmss}_{marker}";
 
-        // A redirect rule points at a list by name, so the list has to exist first. Both are created here
-        // and both are removed below: this test never touches a resource the account already had.
+        // A redirect rule points at a list by name, so the list has to exist before Cloudflare will accept
+        // the rule. List names are account-wide, so this one is created and removed here.
         var list = await Client.Lists.CreateAsync(new CreateRulesListRequest
         {
             Name = listName,
             Kind = RulesListKind.Redirect,
-            Description = "CF.Net integration test list for a redirect ruleset",
+            Description = "CF.Net integration test list for a redirect rule",
         });
 
         try
@@ -1083,97 +1187,45 @@ public class WriteIntegrationTests : CloudflareIntegrationTest
                 pollInterval: TimeSpan.FromSeconds(2));
             Assert.False(itemOperation.HasFailed, $"Cloudflare refused the list item: {itemOperation.Error}");
 
-            // A custom ruleset is the safe thing to create against a live account: nothing serves it until a
-            // root ruleset executes it, so no request this account receives changes behaviour.
-            Ruleset ruleset;
-            try
-            {
-                ruleset = await Client.Rulesets.CreateAsync(new CreateRulesetRequest
-                {
-                    Name = $"cfnet-it-{marker}",
-                    Kind = RulesetKind.Custom,
-                    Phase = RulesetPhase.HttpRequestRedirect,
-                    Description = "CF.Net integration test ruleset",
-                    Rules = new List<CreateRulesetRuleRequest>
+            // Bulk Redirects lives in the account's root ruleset for http_request_redirect, and a custom
+            // ruleset is refused for that phase. So the only way to check a redirect rule against the live
+            // API without changing what traffic does is a dry run: Cloudflare validates it and applies
+            // nothing, and the version check below is what proves that.
+            var entrypoint = await Client.Rulesets.GetEntrypointAsync(RulesetPhase.HttpRequestRedirect);
+            var before = entrypoint?.Version;
+            Log(entrypoint is null
+                ? "this account has no redirect entrypoint yet"
+                : $"this account's redirect entrypoint is at version {before} with {entrypoint.RuleCount} rule(s)");
+
+            var redirectRule = CreateRulesetRuleRequest.ForRedirectFromList(listName, "true", "CF.Net dry run");
+            var validated = entrypoint is null
+                ? await Client.Rulesets.CreateAsync(
+                    new CreateRulesetRequest
                     {
-                        CreateRulesetRuleRequest.ForRedirectFromList(listName, "true", "bulk redirects"),
+                        Name = $"cfnet-it-{marker}",
+                        Kind = RulesetKind.Root,
+                        Phase = RulesetPhase.HttpRequestRedirect,
+                        Rules = new List<CreateRulesetRuleRequest> { redirectRule },
                     },
-                });
-            }
-            catch (CloudflareApiException exception) when (exception.StatusCode == System.Net.HttpStatusCode.Forbidden)
+                    dryRun: true)
+                : await Client.Rulesets.UpdateEntrypointAsync(
+                    RulesetPhase.HttpRequestRedirect,
+                    new UpdateRulesetRequest { Rules = new List<CreateRulesetRuleRequest> { redirectRule } },
+                    dryRun: true);
+
+            Log($"the dry run answered with {validated}");
+            if (validated.Rules is { Count: > 0 } dryRules)
             {
-                // Reading rulesets only needs Rulesets Read; creating them needs Write. The list is still
-                // cleaned up by the finally below.
-                SkipUnless(
-                    false,
-                    "POST /accounts/{account_id}/rulesets was refused, so this token can read Account " +
-                    "Rulesets but not write them. " + exception.Message);
-                return;
+                // The point of the exercise: the from_list parameters survived a round trip through the API.
+                Assert.Contains(
+                    dryRules,
+                    candidate => candidate.ActionParameters?.FromList?.Name == listName
+                        && candidate.ActionParameters.FromList.Key == "target_url");
             }
 
-            try
-            {
-                Assert.Equal(RulesetKind.Custom, ruleset.Kind);
-                Assert.Equal(RulesetPhase.HttpRequestRedirect, ruleset.Phase);
-                Assert.False(ruleset.IsRoot);
-                Log($"created ruleset {ruleset}");
-
-                // The rule went in with the ruleset, so it is already in what came back.
-                var rule = Assert.Single(ruleset.Rules!);
-                Assert.Equal("redirect", rule.Action);
-                Assert.Equal("true", rule.Expression);
-                Assert.Equal(listName, rule.ActionParameters!.FromList!.Name);
-                Assert.Equal("target_url", rule.ActionParameters.FromList.Key);
-
-                var read = await Client.Rulesets.GetAsync(ruleset.Id!);
-                Assert.NotNull(read);
-                Assert.Equal(ruleset.Version, read!.Version);
-
-                var versions = await Client.Rulesets.ListVersionsAsync(ruleset.Id!);
-                Assert.NotEmpty(versions);
-                Log($"{versions.Count} version(s) after creating it with a rule");
-
-                // A rule change answers with the whole ruleset, not the rule, so the change is read back
-                // out of what came back.
-                var afterAdd = await Client.Rulesets.CreateRuleAsync(
-                    ruleset.Id!,
-                    CreateRulesetRuleRequest.ForRedirectFromList(
-                        listName,
-                        """starts_with(http.request.uri.path, "/second")""",
-                        "second rule"));
-                Assert.Equal(2, afterAdd.RuleCount);
-
-                var second = afterAdd.Rules!.Single(candidate => candidate.Description == "second rule");
-                var afterEdit = await Client.Rulesets.EditRuleAsync(
-                    ruleset.Id!,
-                    second.Id!,
-                    new CreateRulesetRuleRequest { Enabled = false });
-                Assert.False(afterEdit.Rules!.Single(candidate => candidate.Id == second.Id).Enabled);
-
-                var afterRemove = await Client.Rulesets.DeleteRuleAsync(ruleset.Id!, second.Id!);
-                Assert.Equal(1, afterRemove.RuleCount);
-                Assert.False(
-                    afterRemove.Rules!.Any(candidate => candidate.Id == second.Id),
-                    $"rule {second.Id} should have been removed, and it is still in {afterRemove}");
-
-                var finalVersions = await Client.Rulesets.ListVersionsAsync(ruleset.Id!);
-                Log($"{finalVersions.Count} version(s) after appending, editing and removing a rule");
-                Assert.True(
-                    finalVersions.Count > versions.Count,
-                    $"every change makes a version, so {versions.Count} should have grown, and it is {finalVersions.Count}");
-            }
-            finally
-            {
-                try
-                {
-                    await Client.Rulesets.DeleteAsync(ruleset.Id!);
-                    Log($"deleted ruleset {ruleset.Id}");
-                }
-                catch (CloudflareApiException exception) when (exception.IsNotFound)
-                {
-                    Log("ruleset was already gone");
-                }
-            }
+            var after = await Client.Rulesets.GetEntrypointAsync(RulesetPhase.HttpRequestRedirect);
+            Assert.Equal(before, after?.Version);
+            Log("the live entrypoint is at the same version it was before the dry run");
         }
         finally
         {

@@ -212,6 +212,10 @@ public sealed class RulesetRule
     /// The Wirefilter expression that decides whether the rule matches, e.g.
     /// <c>starts_with(http.request.uri.path, "/old")</c>. <c>true</c> matches everything.
     /// </summary>
+    /// <remarks>
+    /// Absent on some managed rules, which Cloudflare defines by <see cref="Ref"/> instead - observed live
+    /// on a managed ruleset this account holds. A rule of your own always has one.
+    /// </remarks>
     [JsonPropertyName("expression")]
     public string? Expression { get; set; }
 

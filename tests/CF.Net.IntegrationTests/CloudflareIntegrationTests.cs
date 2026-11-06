@@ -1058,6 +1058,98 @@ public class WriteIntegrationTests : CloudflareIntegrationTest
     }
 
     [Fact]
+    public async Task A_worker_tail_can_be_started_and_stopped()
+    {
+        if (!SkipWithoutAccount() || !SkipWithoutWritePermission())
+        {
+            return;
+        }
+
+        var name = $"cfnet-it-{Guid.NewGuid().ToString("N")[..10]}";
+        var uploaded = await Client.Workers.UploadAsync(
+            name,
+            // The tail streams what the Worker logs, so a script with something to log is the point of the test.
+            "export default { async fetch(request) { console.log('cf-net tail probe'); return new Response('cf-net'); } }",
+            "2025-01-01");
+        Log($"uploaded {uploaded.Name}");
+
+        CFNet.Models.Workers.WorkerTail? tail = null;
+        try
+        {
+            // A script that has never been tailed answers with nothing rather than an error, and that is the
+            // state this one starts in.
+            Assert.Null(await Client.Workers.GetTailAsync(name));
+
+            tail = await Client.Workers.CreateTailAsync(name);
+            Log($"tail {tail}");
+
+            Assert.False(string.IsNullOrEmpty(tail.Id));
+            Assert.False(string.IsNullOrEmpty(tail.Url));
+            Assert.NotNull(tail.ExpiresAt);
+            Assert.False(tail.HasExpired);
+
+            // The url is what a consumer connects to, so it has to be an address rather than a bare token.
+            // The scheme is not asserted: which one Cloudflare hands out is its choice, and the run reports it.
+            Assert.True(
+                Uri.TryCreate(tail.Url, UriKind.Absolute, out var tailUrl),
+                $"the tail url '{tail.Url}' is not an absolute URI");
+            Log($"tail {tail.Id} is served at {tailUrl!.Scheme}://{tailUrl.Host}");
+
+            var read = await Client.Workers.GetTailAsync(name);
+            Assert.NotNull(read);
+            Assert.Equal(tail.Id, read!.Id);
+            Assert.Equal(tail.Url, read.Url);
+
+            await Client.Workers.DeleteTailAsync(name, tail.Id!);
+            Log($"stopped tail {tail.Id}");
+            tail = null;
+
+            // Stopped is the same as never started from the API's point of view.
+            Assert.Null(await Client.Workers.GetTailAsync(name));
+
+            // Whether a script can hold more than one tail is not stated in the schema Cloudflare publishes,
+            // and either answer is a real one, so it is probed and reported rather than asserted.
+            try
+            {
+                var second = await Client.Workers.CreateTailAsync(name);
+                tail = second;
+
+                var after = await Client.Workers.GetTailAsync(name);
+                Warn($"POST /accounts/{{account_id}}/workers/scripts/{name}/tails a second time answered 200 with tail {second.Id}, and the read that followed reported {(after is null ? "no tail" : $"tail {after.Id}")}. So a script does not reject a second create, and {(after?.Id == second.Id ? "the new tail replaced the first" : "which tail the script reports is worth knowing")}.");
+            }
+            catch (CloudflareApiException exception)
+            {
+                Warn($"POST /accounts/{{account_id}}/workers/scripts/{name}/tails a second time was refused with {exception.StatusCode}: {exception.Message} - so a script holds one tail at a time.");
+            }
+        }
+        finally
+        {
+            if (tail is not null)
+            {
+                try
+                {
+                    await Client.Workers.DeleteTailAsync(name, tail.Id!);
+                    Log($"stopped tail {tail.Id}");
+                }
+                catch (CloudflareApiException exception) when (exception.IsNotFound)
+                {
+                    Log("tail was already gone");
+                }
+            }
+
+            try
+            {
+                await Client.Workers.DeleteAsync(name);
+                Log($"deleted script {name}");
+            }
+            catch (CloudflareApiException exception) when (exception.IsNotFound)
+            {
+                Log("script was already gone");
+            }
+        }
+    }
+
+    [Fact]
     public async Task A_redirect_ruleset_can_be_created_given_a_bulk_redirect_rule_and_removed()
     {
         if (!SkipWithoutAccount() || !SkipWithoutWritePermission())

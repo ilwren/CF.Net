@@ -211,6 +211,53 @@ public interface IWorkersScriptsService
         string? accountId = null,
         CancellationToken cancellationToken = default);
 
+    /// <summary>Starts a tail on a Worker: a live stream of its logs and exceptions.</summary>
+    /// <param name="scriptName">The Worker to tail.</param>
+    /// <param name="accountId">Account id; falls back to the configured default when null.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>The tail, with the url a consumer connects to and when it expires.</returns>
+    /// <remarks>
+    /// <c>POST /accounts/{account_id}/workers/scripts/{script_name}/tails</c> takes no body - the script in
+    /// the path is the whole request. The events themselves arrive over the returned url rather than
+    /// through this API, so what this gives a caller is the address and the tail's lifetime.
+    /// </remarks>
+    Task<WorkerTail> CreateTailAsync(
+        string scriptName,
+        string? accountId = null,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>Reads the tail a Worker has.</summary>
+    /// <param name="scriptName">The Worker being tailed.</param>
+    /// <param name="accountId">Account id; falls back to the configured default when null.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>
+    /// The tail, or <c>null</c> when the script is not being tailed - which is the normal state, and what
+    /// an expired tail reads as too.
+    /// </returns>
+    /// <remarks>
+    /// Cloudflare answers with a single tail rather than a list, so this is the script's tail and not one of
+    /// several.
+    /// </remarks>
+    Task<WorkerTail?> GetTailAsync(
+        string scriptName,
+        string? accountId = null,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>Stops a tail.</summary>
+    /// <param name="scriptName">The Worker being tailed.</param>
+    /// <param name="tailId">The tail's id, as <see cref="CreateTailAsync"/> returned it.</param>
+    /// <param name="accountId">Account id; falls back to the configured default when null.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <remarks>
+    /// A tail also stops by itself at <see cref="WorkerTail.ExpiresAt"/>, so deleting one is how a stream is
+    /// ended early rather than the only way it ends.
+    /// </remarks>
+    Task DeleteTailAsync(
+        string scriptName,
+        string tailId,
+        string? accountId = null,
+        CancellationToken cancellationToken = default);
+
     /// <summary>
     /// Uploads (creates or replaces) a Worker. Uses the <c>multipart/form-data</c> shape Cloudflare
     /// requires: a <c>metadata</c> part plus one part per module.
@@ -969,4 +1016,52 @@ public sealed class WorkersScriptsService : CloudflareService, IWorkersScriptsSe
 
         await SendVoidAsync(request, cancellationToken).ConfigureAwait(false);
     }
+
+    /// <inheritdoc />
+    public async Task<WorkerTail> CreateTailAsync(
+        string scriptName,
+        string? accountId = null,
+        CancellationToken cancellationToken = default)
+    {
+        // No body: the script in the path is the whole request.
+        var request = CloudflareRequest.Post(TailPath(ResolveAccountId(accountId), scriptName));
+        request.OperationName = "Create Worker Tail";
+
+        var response = await Transport.SendAsync<WorkerTail>(request, cancellationToken).ConfigureAwait(false);
+        return response.EnsureResult();
+    }
+
+    /// <inheritdoc />
+    public async Task<WorkerTail?> GetTailAsync(
+        string scriptName,
+        string? accountId = null,
+        CancellationToken cancellationToken = default)
+    {
+        var request = CloudflareRequest
+            .Get(TailPath(ResolveAccountId(accountId), scriptName))
+            .Tolerate(System.Net.HttpStatusCode.NotFound);
+        request.OperationName = "Get Worker Tail";
+
+        var response = await Transport.SendAsync<WorkerTail>(request, cancellationToken).ConfigureAwait(false);
+        return response.Result;
+    }
+
+    /// <inheritdoc />
+    public async Task DeleteTailAsync(
+        string scriptName,
+        string tailId,
+        string? accountId = null,
+        CancellationToken cancellationToken = default)
+    {
+        var id = Require(tailId, nameof(tailId));
+        var path = $"{TailPath(ResolveAccountId(accountId), scriptName)}/{CloudflareUrl.EncodeSegment(id)}";
+
+        var request = CloudflareRequest.Delete(path);
+        request.OperationName = "Delete Worker Tail";
+
+        await SendVoidAsync(request, cancellationToken).ConfigureAwait(false);
+    }
+
+    private static string TailPath(string accountId, string scriptName) =>
+        $"{AccountPath(accountId)}/workers/scripts/{CloudflareUrl.EncodeSegment(Require(scriptName, nameof(scriptName)))}/tails";
 }

@@ -607,13 +607,16 @@ would serve as one.
 
 `IWorkersAiService` — `client.WorkersAi`
 
-The catalogue of models an account can run inference against. These live under `/accounts/{account_id}/ai/` —
-a **sibling** of the Workers paths rather than one of them, even though the product is Workers AI — and all
-three searches are catalogues of what Cloudflare offers rather than of what the account owns, so read access
-is the whole of what they need.
+Running a model, and the catalogue behind it. These live under `/accounts/{account_id}/ai/` — a **sibling** of
+the Workers paths rather than one of them, even though the product is Workers AI. The three searches are
+catalogues of what Cloudflare offers rather than of what the account owns, so read access is the whole of what
+they need — and Cloudflare's own words for **Workers AI Read** are "grants access to invoke Workers AI
+models", so `RunAsync` asks for no permission the catalogue did not. Nothing in this section is a paid
+feature.
 
 | Method | Endpoint | Notes |
 | --- | --- | --- |
+| `RunAsync(model, WorkersAiRunRequest, accountId)` | `POST /accounts/{account_id}/ai/run/{model_name}` | one inference call. The model's inputs go in the body **directly** — no model/input/options wrapper — and which fields a model takes is what `GetModelSchemaAsync` says. Answers `WorkersAiRunResult`, which holds the JSON that arrived and reads the arm asked for. See [Inference](#inference) |
 | `ListModelsAsync(WorkersAiModelListParameters?, accountId)` | `GET /accounts/{account_id}/ai/models/search` | page-numbered, with `author`, `format`, `hide_experimental`, `include_deprecated`, `search`, `source` and `task` filters — all snake_case, and all optional, so no filters is no query string at all. `format=openrouter` asks for a marketplace-shaped answer (`{data: […]}`) which this library passes through but does **not** read: the default array is the only shape it types. |
 | `ListAllModelsAsync(...)` | `GET …/ai/models/search` | walks every page, keeping the filters and replacing only `page`; stops on a short page as well as on `result_info`, because a catalogue that fits in one page is the common case |
 | `GetModelSchemaAsync(model, accountId)` | `GET …/ai/models/schema?model={model}` | the model's own input and output JSON Schema, which is the only published source for what an inference call takes — the shapes differ per task. `model` is the full name, namespace included (`@cf/meta/llama-3.2-3b-instruct`), so it goes out escaped |
@@ -652,9 +655,47 @@ not only as it is documented. The model search answered the catalogue's own firs
 that answer carried **only `type`** of the three published fields, so `additionalProperties` and `description`
 are optional in practice and the integration fact asserts no more than presence and a non-empty type.
 
-⛔ `POST …/ai/run/{model_name}` — inference itself, whose request and response are each a union of a dozen
-task-specific shapes — plus `…/ai/finetunes` (and their assets, which need `Workers AI Write`),
-`…/ai/tomarkdown`, and the AI Gateway. None of these is a paid feature; they are simply the next increments.
+### Inference
+
+`POST /accounts/{account_id}/ai/run/{model_name}` is one endpoint with fifteen published request shapes and
+thirteen published answer shapes, one per task — and the model in the path, not the call, decides which.
+
+**The request** is one class rather than fifteen. `WorkersAiRunRequest` carries every field of every arm and
+sends only what is set, so the body is exactly the arm the model expects; the `ForPrompt`, `ForMessages`,
+`ForEmbeddings`, `ForClassification`, `ForTranslation`, `ForSummarization`, `ForTextToImage`,
+`ForTextToSpeech`, `ForSpeechRecognition`, `ForImageClassification`, `ForObjectDetection`, `ForImageToText`
+and `ForMultimodalEmbeddings` factories set what a task requires and nothing else, and the knobs are then set
+on the request. Three fields are published as two JSON kinds at once, and each is one property with a
+converter that writes whichever it was given: `text` is a string or an array of them
+(`WorkersAiTextOrBatch`), `image` is an array of 8-bit values or a base64 string (`WorkersAiImageInput`), and
+a message's `content` is a string or an array of parts (`WorkersAiMessageContent`) — so a caller passes bytes
+or base64, a text or a batch, and does not have to know which arm the model in the path is. `audio`, `image`
+and `mask` are `List<byte>` rather than `byte[]` on purpose: System.Text.Json writes a `byte[]` as base64, and
+these three go out as arrays of numbers.
+
+`EnsureValid()` refuses what Cloudflare cannot act on — an empty body, a prompt and a text together, a prompt
+and a conversation together, an empty conversation or batch — and enforces only the bounds Cloudflare
+publishes (image height and width 256–2048, at most 20 diffusion steps, `strength` between 0 and 1). The
+sampling knobs have no published range, so a strange `temperature` is sent rather than second-guessed.
+**`stream` is refused locally**: a streamed answer is server-sent events, not the one JSON envelope this
+library's transport reads. A field this library does not name goes out through `AdditionalData`, so a model's
+own knob does not have to wait for a release of it.
+
+**The answer** is `WorkersAiRunResult`: the JSON that arrived, plus a projection onto whichever arm is asked
+for. An object arm reads as `AsTextGeneration()`, `AsEmbeddings()`, `AsTranscription()`, `AsAudio()`,
+`AsImage()`, `AsTranslation()`, `AsSummarization()` or `AsImageDescription()`; an array arm as
+`AsClassifications()` or `AsDetections()`; a bare string as itself. The projections guard on the kind that
+arrived, so an arm that does not fit answers `null` or an empty list rather than throwing — `As<T>()` is the
+unguarded escape hatch for an arm this library has not named. `Text` is the convenience most callers want: the
+words, whichever field of whichever arm carries them (`response`, `text`, `translated_text`, `summary`,
+`description`, or the whole answer when it is a string). Every arm keeps fields it does not name in
+`AdditionalData`, and `WorkersAiToolCall.Arguments` stays raw JSON because Cloudflare publishes it as
+`unknown` — a model answers the object its own tool declared.
+
+⛔ `…/ai/finetunes` (and their assets, which need `Workers AI Write`), `…/ai/tomarkdown` — a multipart upload
+plus a `supported` list — and the AI Gateway. None of these is a paid feature; they are simply the next
+increments. Streaming inference is not wrapped either, and would need a transport that reads server-sent
+events rather than one envelope.
 
 ---
 

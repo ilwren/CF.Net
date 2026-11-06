@@ -724,6 +724,136 @@ public class ReadOnlyIntegrationTests : CloudflareIntegrationTest
     }
 
     [Fact]
+    public async Task Workers_ai_models_can_be_run()
+    {
+        if (!SkipWithoutAccount())
+        {
+            return;
+        }
+
+        // The model is picked out of the catalogue rather than named here, because a name that stops being
+        // served would make this fact about Cloudflare's catalogue rather than about this library. A small
+        // model, a short prompt and a small token cap keep the call well inside the free daily allowance:
+        // inference is what Workers AI Read grants, so this needs no permission the catalogue did not.
+        var page = await Client.WorkersAi.ListModelsAsync(
+            new WorkersAiModelListParameters { Task = "text-generation", PerPage = 100, HideExperimental = true });
+        var generationModel = PickModel(page.Items, "llama-3.2-1b", "llama-3.2-3b", "llama-3.1-8b");
+        if (generationModel is null)
+        {
+            Log($"no text-generation model in the catalogue of {page.Count} to run");
+            return;
+        }
+
+        WorkersAiRunResult result;
+        try
+        {
+            result = await Client.WorkersAi.RunAsync(
+                generationModel,
+                new WorkersAiRunRequest
+                {
+                    Prompt = "Reply with the single word: pong.",
+                    MaxTokens = 8,
+                    Temperature = 0,
+                });
+        }
+        catch (CloudflareApiException exception)
+            when (exception.StatusCode is System.Net.HttpStatusCode.Forbidden or System.Net.HttpStatusCode.NotFound)
+        {
+            SkipUnless(
+                false,
+                $"POST /accounts/{{account_id}}/ai/run/{generationModel} was refused with " +
+                $"{exception.StatusCode}/{exception.ErrorCode}: {exception.Message}");
+            return;
+        }
+        catch (CloudflareApiException exception)
+        {
+            Warn($"POST /accounts/{{account_id}}/ai/run/{generationModel} was refused with " +
+                 $"{exception.StatusCode}/{exception.ErrorCode}. Cloudflare's body: {exception.ResponseBody}");
+            return;
+        }
+        catch (Exception exception) when (exception is not CloudflareApiException)
+        {
+            Warn($"POST /accounts/{{account_id}}/ai/run/{generationModel} answered something this library " +
+                 $"could not read: {exception.GetType().Name}: {exception.Message}");
+            return;
+        }
+
+        Log($"ran {generationModel}: {result.Kind} - {result}");
+        Assert.False(string.IsNullOrEmpty(result.Text));
+
+        if (!result.IsObject)
+        {
+            Warn($"POST /accounts/{{account_id}}/ai/run/{generationModel} answered {result.Kind} rather than " +
+                 $"an object, which is not the text-generation arm. As it arrived: {result.Raw}");
+            return;
+        }
+
+        var generation = result.AsTextGeneration();
+        Assert.NotNull(generation);
+        Log($"response={generation!.Response} usage={generation.Usage} " +
+            $"unmodelled={string.Join(",", (generation.AdditionalData ?? new Dictionary<string, JsonElement>()).Keys)}");
+        if (generation.AdditionalData is { Count: > 0 })
+        {
+            Warn($"POST /accounts/{{account_id}}/ai/run/{generationModel} answered text-generation fields this " +
+                 $"library does not model: {string.Join(",", generation.AdditionalData.Keys)}. As read: " +
+                 $"{JsonSerializer.Serialize(generation, CFNet.Serialization.CloudflareJson.Default)}");
+        }
+
+        // The other arm worth seeing live is the one whose answer is numbers rather than words: an embedding
+        // model's vectors and the shape it reports for them.
+        var embeddingsPage = await Client.WorkersAi.ListModelsAsync(
+            new WorkersAiModelListParameters { Task = "text-embeddings", PerPage = 100, HideExperimental = true });
+        var embeddingModel = PickModel(embeddingsPage.Items, "e5-small", "bge-base", "nomic-embed");
+        if (embeddingModel is null)
+        {
+            Log($"no text-embeddings model in the catalogue of {embeddingsPage.Count} to run");
+            return;
+        }
+
+        try
+        {
+            var embedded = await Client.WorkersAi.RunAsync(
+                embeddingModel,
+                WorkersAiRunRequest.ForEmbeddings("hello"));
+
+            var vectors = embedded.AsEmbeddings();
+            Log($"ran {embeddingModel}: {embedded.Kind} - {embedded}; vectors={vectors?.VectorCount} " +
+                $"dimensions={vectors?.Dimensions} " +
+                $"unmodelled={string.Join(",", (vectors?.AdditionalData ?? new Dictionary<string, JsonElement>()).Keys)}");
+            Assert.NotNull(vectors);
+            Assert.True(vectors!.VectorCount > 0);
+            Assert.True(vectors.Dimensions > 0);
+            if (vectors.AdditionalData is { Count: > 0 })
+            {
+                Warn($"POST /accounts/{{account_id}}/ai/run/{embeddingModel} answered embedding fields this " +
+                     $"library does not model: {string.Join(",", vectors.AdditionalData.Keys)}");
+            }
+        }
+        catch (CloudflareApiException exception)
+        {
+            Warn($"POST /accounts/{{account_id}}/ai/run/{embeddingModel} was refused with " +
+                 $"{exception.StatusCode}/{exception.ErrorCode}. Cloudflare's body: {exception.ResponseBody}");
+        }
+    }
+
+    /// <summary>Chooses the first model whose name contains one of these fragments, or the first model.</summary>
+    private static string? PickModel(IReadOnlyList<WorkersAiModel> models, params string[] preferred)
+    {
+        foreach (var fragment in preferred)
+        {
+            foreach (var model in models)
+            {
+                if (model.Name?.Contains(fragment, StringComparison.OrdinalIgnoreCase) == true)
+                {
+                    return model.Name;
+                }
+            }
+        }
+
+        return models.Count > 0 ? models[0].Name : null;
+    }
+
+    [Fact]
     public async Task Workers_observability_telemetry_keys_and_values_can_be_read()
     {
         if (!SkipWithoutAccount())

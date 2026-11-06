@@ -1,11 +1,12 @@
 using System.Runtime.CompilerServices;
+using System.Text.Json;
 using CFNet.Http;
 using CFNet.Models.WorkersAi;
 
 namespace CFNet.Services;
 
 /// <summary>
-/// Workers AI: the model catalogue an account can run inference against - its models, the tasks they
+/// Workers AI: running a model, and the catalogue behind it - the models an account can run, the tasks they
 /// perform, the authors behind them, and each model's own input and output schema.
 /// </summary>
 /// <remarks>
@@ -18,8 +19,9 @@ namespace CFNet.Services;
 /// All three searches here are catalogues of what Cloudflare offers, not of what the account owns, so none of
 /// them needs anything but read access - and the published schema types the items of all three as
 /// <c>unknown</c>, which is why the models behind them are deliberately narrow and preserve whatever else
-/// arrives. Running a model (<c>POST …/ai/run/{model_name}</c>), the fine-tunes, and the AI Gateway are not
-/// wrapped yet; <see cref="GetModelSchemaAsync"/> is the call that says what a run would take.
+/// arrives. <see cref="GetModelSchemaAsync"/> is the call that says what a run takes, and
+/// <see cref="RunAsync(string, WorkersAiRunRequest, string?, CancellationToken)"/> is the run itself. The
+/// fine-tunes, the to-markdown converter and the AI Gateway are not wrapped yet.
 /// </para>
 /// </remarks>
 public interface IWorkersAiService
@@ -85,6 +87,40 @@ public interface IWorkersAiService
     /// and an author's name is what the model search's <c>author</c> filter takes.
     /// </remarks>
     Task<IReadOnlyList<WorkersAiAuthor>> ListAuthorsAsync(
+        string? accountId = null,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>Runs a model: one inference call against the model named in the path.</summary>
+    /// <param name="model">
+    /// The model's full name, namespace included, such as <c>@cf/meta/llama-3.2-1b-instruct</c>.
+    /// </param>
+    /// <param name="request">The model's inputs, which go in the body directly with no wrapper.</param>
+    /// <param name="accountId">Account id; falls back to the configured default when null.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>
+    /// The answer as the JSON that arrived, plus a projection onto whichever arm the caller asks for.
+    /// </returns>
+    /// <remarks>
+    /// <para>
+    /// <c>POST /accounts/{account_id}/ai/run/{model_name}</c>. The permission the catalogue needs is the one
+    /// this needs too: Cloudflare's own words for <b>Workers AI Read</b> are "grants access to invoke Workers
+    /// AI models", so running a model asks for nothing a token that can list them lacks.
+    /// </para>
+    /// <para>
+    /// What comes back depends on the model, and Cloudflare publishes thirteen shapes for it - an object for a
+    /// chat or embedding model, an array of objects for a classification or detection model, a bare string for
+    /// a few others. That is why the answer is <see cref="WorkersAiRunResult"/> rather than one typed model:
+    /// it holds the JSON and reads the arm a caller asks for, and <see cref="WorkersAiRunResult.Text"/> is the
+    /// words whichever arm carries them.
+    /// </para>
+    /// <para>
+    /// A streamed answer is refused locally rather than sent: <c>stream: true</c> makes Cloudflare answer
+    /// server-sent events, which is not the one JSON envelope this library's transport reads.
+    /// </para>
+    /// </remarks>
+    Task<WorkersAiRunResult> RunAsync(
+        string model,
+        WorkersAiRunRequest request,
         string? accountId = null,
         CancellationToken cancellationToken = default);
 }
@@ -199,6 +235,31 @@ public sealed class WorkersAiService : CloudflareService, IWorkersAiService
             .SendAsync<List<WorkersAiAuthor>>(request, cancellationToken)
             .ConfigureAwait(false);
         return response.Result ?? new List<WorkersAiAuthor>();
+    }
+
+    /// <inheritdoc />
+    public async Task<WorkersAiRunResult> RunAsync(
+        string model,
+        WorkersAiRunRequest request,
+        string? accountId = null,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        request.EnsureValid();
+
+        var cloudflareRequest = CloudflareRequest.Post(
+            $"{AiPath(ResolveAccountId(accountId))}/run/{CloudflareUrl.EncodeSegment(Require(model, nameof(model)))}",
+            request);
+        cloudflareRequest.OperationName = "Run Workers AI Model";
+
+        // The answer is read as the JSON it arrived in. Cloudflare publishes thirteen shapes for it - an
+        // object, an array of objects, a bare string - and which one comes back is a property of the model in
+        // the path rather than of the call, so typing it here would be a guess about a model this library has
+        // never seen. WorkersAiRunResult holds the JSON and reads whichever arm the caller asks for.
+        var response = await Transport
+            .SendAsync<JsonElement>(cloudflareRequest, cancellationToken)
+            .ConfigureAwait(false);
+        return new WorkersAiRunResult(response.EnsureResult());
     }
 
     private static string AiPath(string accountId) => $"{AccountPath(accountId)}/ai";

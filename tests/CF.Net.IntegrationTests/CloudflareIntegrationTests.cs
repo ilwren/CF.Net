@@ -735,12 +735,41 @@ public class ReadOnlyIntegrationTests : CloudflareIntegrationTest
         // served would make this fact about Cloudflare's catalogue rather than about this library. A small
         // model, a short prompt and a small token cap keep the call well inside the free daily allowance:
         // inference is what Workers AI Read grants, so this needs no permission the catalogue did not.
-        var page = await Client.WorkersAi.ListModelsAsync(
-            new WorkersAiModelListParameters { Task = "text-generation", PerPage = 100, HideExperimental = true });
-        var generationModel = PickModel(page.Items, "llama-3.2-1b", "llama-3.2-3b", "llama-3.1-8b");
+        var tasks = await Client.WorkersAi.ListTasksAsync();
+        string? generationTaskId = null;
+        foreach (var task in tasks)
+        {
+            if (task.Name == "text-generation")
+            {
+                generationTaskId = task.Id;
+            }
+        }
+
+        // The task filter is worth checking rather than trusting. If it takes a task's id rather than its
+        // name, a filtered search answers nothing at all - and a fact that quietly returned because it found
+        // no model would never say so, which is exactly what happened the first time this ran.
+        var byName = await Client.WorkersAi.ListModelsAsync(
+            new WorkersAiModelListParameters { Task = "text-generation", PerPage = 100 });
+        var byId = generationTaskId is null
+            ? null
+            : await Client.WorkersAi.ListModelsAsync(
+                new WorkersAiModelListParameters { Task = generationTaskId, PerPage = 100 });
+        var catalogue = await TakeAllAsync(
+            Client.WorkersAi.ListAllModelsAsync(new WorkersAiModelListParameters { PerPage = 100 }));
+
+        // One Warn slot, spent once: what the task filter takes, so the coverage doc can say it rather than
+        // leave a caller to find out by getting an empty page.
+        Warn($"GET /accounts/{{account_id}}/ai/models/search?task=… answered {byName.Count} model(s) for the " +
+             $"name 'text-generation' and {byId?.Count ?? -1} for the id '{generationTaskId}', against a " +
+             $"catalogue of {catalogue.Count} walked unfiltered, of which " +
+             $"{CountByTask(catalogue, "text-generation")} are text-generation and " +
+             $"{CountByTask(catalogue, "text-embeddings")} are text-embeddings.");
+
+        var generationModel = PickByTask(catalogue, "text-generation", "llama-3.2-1b", "llama-3.2-3b", "llama-3.1-8b");
         if (generationModel is null)
         {
-            Log($"no text-generation model in the catalogue of {page.Count} to run");
+            Warn($"no text-generation model in a catalogue of {catalogue.Count}, so no inference was run. " +
+                 $"Tasks seen: {string.Join(", ", tasks.Select(task => task.ToString()))}");
             return;
         }
 
@@ -810,12 +839,10 @@ public class ReadOnlyIntegrationTests : CloudflareIntegrationTest
 
         // The other arm worth seeing live is the one whose answer is numbers rather than words: an embedding
         // model's vectors and the shape it reports for them.
-        var embeddingsPage = await Client.WorkersAi.ListModelsAsync(
-            new WorkersAiModelListParameters { Task = "text-embeddings", PerPage = 100, HideExperimental = true });
-        var embeddingModel = PickModel(embeddingsPage.Items, "e5-small", "bge-base", "nomic-embed");
+        var embeddingModel = PickByTask(catalogue, "text-embeddings", "e5-small", "bge-base", "nomic-embed");
         if (embeddingModel is null)
         {
-            Log($"no text-embeddings model in the catalogue of {embeddingsPage.Count} to run");
+            Log("no text-embeddings model in the catalogue to run");
             return;
         }
 
@@ -854,26 +881,69 @@ public class ReadOnlyIntegrationTests : CloudflareIntegrationTest
         }
     }
 
-    /// <summary>The first three numbers of an embedding answer, which is all of it worth reporting.</summary>
-    private static IEnumerable<double> FirstThree(WorkersAiEmbeddings embeddings) =>
-        embeddings.Data is { Count: > 0 } data ? data[0].Take(3) : [];
+    /// <summary>Walks an async sequence into a list, which is what picking a model out of it needs.</summary>
+    private static async Task<List<WorkersAiModel>> TakeAllAsync(IAsyncEnumerable<WorkersAiModel> models)
+    {
+        var all = new List<WorkersAiModel>();
+        await foreach (var model in models)
+        {
+            all.Add(model);
+        }
 
-    /// <summary>Chooses the first model whose name contains one of these fragments, or the first model.</summary>
-    private static string? PickModel(IReadOnlyList<WorkersAiModel> models, params string[] preferred)
+        return all;
+    }
+
+    /// <summary>How many models in a catalogue perform a given task.</summary>
+    private static int CountByTask(IReadOnlyList<WorkersAiModel> models, string task)
+    {
+        var count = 0;
+        foreach (var model in models)
+        {
+            if (model.Task?.Name == task)
+            {
+                count++;
+            }
+        }
+
+        return count;
+    }
+
+    /// <summary>
+    /// Chooses a model that performs a task, preferring the smallest of the names it recognises, so a run
+    /// costs as few neurons as it can.
+    /// </summary>
+    private static string? PickByTask(
+        IReadOnlyList<WorkersAiModel> models,
+        string task,
+        params string[] preferred)
     {
         foreach (var fragment in preferred)
         {
             foreach (var model in models)
             {
-                if (model.Name?.Contains(fragment, StringComparison.OrdinalIgnoreCase) == true)
+                if (model.Task?.Name == task &&
+                    model.Name?.Contains(fragment, StringComparison.OrdinalIgnoreCase) == true)
                 {
                     return model.Name;
                 }
             }
         }
 
-        return models.Count > 0 ? models[0].Name : null;
+        foreach (var model in models)
+        {
+            if (model.Task?.Name == task)
+            {
+                return model.Name;
+            }
+        }
+
+        return null;
     }
+
+    /// <summary>The first three numbers of an embedding answer, which is all of it worth reporting.</summary>
+    private static IEnumerable<double> FirstThree(WorkersAiEmbeddings embeddings) =>
+        embeddings.Data is { Count: > 0 } data ? data[0].Take(3) : [];
+
 
     [Fact]
     public async Task Workers_observability_telemetry_keys_and_values_can_be_read()

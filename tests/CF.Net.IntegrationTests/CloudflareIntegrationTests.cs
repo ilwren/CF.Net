@@ -3677,9 +3677,11 @@ public class WriteIntegrationTests : CloudflareIntegrationTest
             ReportWidgetFields("GET /accounts/{account_id}/challenges/widgets/{sitekey}", read);
 
             // Updating is a PUT that replaces the whole widget, so the required fields go again beside the two
-            // that are changing: the mode and the hostnames it may run on. A refusal here is reported rather
-            // than failed, and does not stop the rotation, the list or the delete below it - the offline suite
-            // pins this call's method, path and exact body, so what a live run adds is what Cloudflare accepts.
+            // that are changing: the mode and the hostnames it may run on. offlabel stays out of it - a live
+            // run reported that setting it to true is refused as an entitlement, and paid features are out of
+            // scope here, so the field is wrapped and left alone. A refusal is reported rather than failed and
+            // does not stop the rotation, the list or the delete below it: the offline suite pins this call's
+            // method, path and exact body, so what a live run adds is what Cloudflare accepts.
             TurnstileWidget? updated = null;
             try
             {
@@ -3691,7 +3693,7 @@ public class WriteIntegrationTests : CloudflareIntegrationTest
                         Mode = TurnstileWidgetMode.NonInteractive,
                         Domains = new List<string> { "example.com", "www.example.com" },
                         Region = TurnstileRegion.World,
-                        Offlabel = true,
+                        EphemeralId = true,
                     });
             }
             catch (CloudflareApiException exception)
@@ -3705,7 +3707,7 @@ public class WriteIntegrationTests : CloudflareIntegrationTest
             {
                 Assert.Equal(TurnstileWidgetMode.NonInteractive, updated.Mode);
                 Assert.Equal(2, updated.Domains?.Count ?? 0);
-                Assert.True(updated.Offlabel);
+                Assert.True(updated.EphemeralId);
                 Log($"updated it: {updated} mode={updated.Mode} offlabel={updated.Offlabel} " +
                     $"domains={string.Join(",", updated.Domains ?? new List<string>())} " +
                     $"modified_on={updated.ModifiedOn}");

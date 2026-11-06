@@ -66,7 +66,9 @@ public class TurnstileWidgetSummary
 
     /// <summary>
     /// Whether the challenge is served without Cloudflare's branding. One word on the wire, and one word here:
-    /// <c>offlabel</c> rather than <c>off_label</c>.
+    /// <c>offlabel</c> rather than <c>off_label</c>. Setting it to <see langword="true"/> is an entitlement a
+    /// free account does not have - a live <c>PUT</c> answered 400 with <c>not entitled to create widgets with
+    /// `offlabel` set to true</c> - where <see langword="false"/> is accepted.
     /// </summary>
     [JsonPropertyName("offlabel")]
     public bool? Offlabel { get; set; }
@@ -167,7 +169,11 @@ public sealed class TurnstileWidgetRequest
     [JsonPropertyName("ephemeral_id")]
     public bool? EphemeralId { get; set; }
 
-    /// <summary>Whether the challenge is served without Cloudflare's branding.</summary>
+    /// <summary>
+    /// Whether the challenge is served without Cloudflare's branding. Turning it on is entitlement-gated and
+    /// answered with 400 <c>not entitled to create widgets with `offlabel` set to true</c> on an account that
+    /// does not have it, so leaving it unset - which sends nothing - is the ordinary case.
+    /// </summary>
     [JsonPropertyName("offlabel")]
     public bool? Offlabel { get; set; }
 

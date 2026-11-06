@@ -1101,9 +1101,21 @@ broken model. `mode` (`non-interactive`, `invisible`, `managed`), `region` (`wor
 `clearance_level` (`no_clearance`, `jschallenge`, `managed`, `interactive`) are enums that read an unrecognised
 value as `Unknown` and refuse to write one.
 
-⛔ Nothing is left out of this resource: those six methods are all of `challenges/widgets`. Verifying a token
-(`siteverify`) is not part of this API at all — it lives on `challenges.cloudflare.com`, and belongs to the
-server that checked a visitor rather than to the account that owns the widget.
+**Verified live**: create with every field the endpoint takes, read the widget back with its secret, rotate to
+a **different** secret under the **same** site key, find the widget in a list, and delete it. The list answered
+that widget with no `secret` and with no field this library does not model — so the two-type split is a
+confirmed answer rather than an assumption, and a single widget's answer carries nothing unpublished either.
+A refused `PUT` is reported by the run rather than failed, because the offline suite pins that call's method,
+path and exact body and a live run only adds what Cloudflare accepts.
+
+⛔ `offlabel: true` — serving the challenge without Cloudflare's branding — is **entitlement-gated**: a live
+`PUT` answered 400 with `not entitled to create widgets with `offlabel` set to true`. `offlabel: false` is
+accepted on a free account, so the field stays wrapped and the live run leaves it alone, in line with paid
+features being out of scope.
+
+⛔ Nothing else is left out of this resource: those six methods are all of `challenges/widgets`. Verifying a
+token (`siteverify`) is not part of this API at all — it lives on `challenges.cloudflare.com`, and belongs to
+the server that checked a visitor rather than to the account that owns the widget.
 
 ---
 

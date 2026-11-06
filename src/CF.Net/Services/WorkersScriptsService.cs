@@ -224,6 +224,11 @@ public interface IWorkersScriptsService
     /// the path is the whole request. The events themselves arrive over the returned url rather than
     /// through this API, so what this gives a caller is the address and the tail's lifetime.
     /// </remarks>
+    /// <para>
+    /// A script holds one tail at a time: creating a second replaces the one already running rather than
+    /// adding to it, and answers with the new tail's id.
+    /// </para>
+    /// </remarks>
     Task<WorkerTail> CreateTailAsync(
         string scriptName,
         string? accountId = null,
@@ -239,8 +244,9 @@ public interface IWorkersScriptsService
     /// </returns>
     /// <remarks>
     /// This endpoint answers with an <em>array</em>, unlike the create on the same path, which answers with a
-    /// single tail. The published schema describes the read as one object too, and a live call says otherwise,
-    /// so the array is what is modelled here. A 404 reads as an empty list rather than an error.
+    /// single tail - the published schema describes the read as one object too, and a live call says
+    /// otherwise, so the array is what is modelled. Its items carry the same fields the create answers with.
+    /// A 404 reads as an empty list rather than an error.
     /// </remarks>
     Task<IReadOnlyList<WorkerTail>> ListTailsAsync(
         string scriptName,

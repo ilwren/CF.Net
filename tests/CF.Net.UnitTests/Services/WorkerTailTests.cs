@@ -9,10 +9,9 @@ using Xunit;
 namespace CFNet.UnitTests.Services;
 
 /// <summary>
-/// Worker tails. The two halves of this resource answer differently: creating a tail answers with one tail
-/// carrying the url a consumer connects to, while reading the script's tails answers with an array whose
-/// items carry the dispatch namespace, the script name and the consumers instead. Both are asserted here as
-/// the live API answers them, not as one shape assumed for both.
+/// Worker tails, in the shapes a live call answers with: creating one answers with a single tail, and reading
+/// a script's tails answers with an array of them carrying the same three fields. The published schema
+/// describes the read as an object too, so the array is asserted here rather than assumed away.
 /// </summary>
 public class WorkerTailTests
 {
@@ -20,9 +19,12 @@ public class WorkerTailTests
     private const string CreatedTail =
         """{"id":"tail-1","expires_at":"2026-11-07T02:03:04Z","url":"wss://tail.example.workers.dev/acct-1234/tail-1"}""";
 
-    /// <summary>Tails as the list answers them - no url, but the script and its consumers.</summary>
+    /// <summary>
+    /// Tails as the list answers them: an array, and each item the same three fields the create answers with.
+    /// This is a live answer with only the ids shortened.
+    /// </summary>
     private const string ListedTails =
-        """[{"id":"tail-1","dispatch_namespace":"acct-1234","script_name":"my-worker","consumers":[{"service":"collector","environment":"production"}]}]""";
+        """[{"id":"d944b03ffcba4384a2d6ef57db31f7e4","expires_at":"2026-11-06T08:52:41+00:00","url":"wss://tail.developers.workers.dev/d944b03ffcba4384a2d6ef57db31f7e4"}]""";
 
     [Fact]
     public async Task CreateTailAsync_posts_to_the_script_and_sends_no_body()
@@ -61,20 +63,12 @@ public class WorkerTailTests
             StringComparison.Ordinal);
 
         var tail = Assert.Single(tails);
-        Assert.Equal("tail-1", tail.Id);
-        Assert.Equal("acct-1234", tail.DispatchNamespace);
-        Assert.Equal("my-worker", tail.ScriptName);
-
-        var consumer = Assert.Single(tail.Consumers!);
-        Assert.Equal("collector", consumer.Service);
-        Assert.Equal("production", consumer.Environment);
-        Assert.Null(consumer.Namespace);
-        Assert.Equal("collector", consumer.ToString());
-
-        // The url and the expiry belong to the create's answer, and a listed tail does not carry them.
-        Assert.Null(tail.Url);
-        Assert.Null(tail.ExpiresAt);
-        Assert.Equal("tail-1 (no expiry reported)", tail.ToString());
+        Assert.Equal("d944b03ffcba4384a2d6ef57db31f7e4", tail.Id);
+        Assert.Equal(
+            "wss://tail.developers.workers.dev/d944b03ffcba4384a2d6ef57db31f7e4",
+            tail.Url);
+        Assert.Equal(new DateTimeOffset(2026, 11, 6, 8, 52, 41, TimeSpan.Zero), tail.ExpiresAt);
+        Assert.Equal("d944b03ffcba4384a2d6ef57db31f7e4 (expires 2026-11-06 08:52:41Z)", tail.ToString());
     }
 
     [Fact]
@@ -140,27 +134,19 @@ public class WorkerTailTests
     }
 
     [Fact]
-    public void A_tail_consumer_in_a_dispatch_namespace_says_so()
-    {
-        var consumer = new WorkerTailConsumer
-        {
-            Service = "collector",
-            Namespace = "platform",
-        };
-
-        Assert.Equal("collector (platform)", consumer.ToString());
-    }
-
-    [Fact]
     public void A_tail_keeps_any_field_it_does_not_model()
     {
+        // A live tail carries exactly id, expires_at and url, so anything else - a consumer list, say - has
+        // to survive as raw JSON rather than be dropped.
         var tail = JsonSerializer.Deserialize<WorkerTail>(
-            """{"id":"tail-1","script_name":"my-worker","events_per_minute":42}""",
+            """{"id":"tail-1","url":"wss://t/1","consumers":[{"service":"collector"}],"events_per_minute":42}""",
             CloudflareJson.Default)!;
 
-        Assert.Equal("my-worker", tail.ScriptName);
+        Assert.Equal("tail-1", tail.Id);
         Assert.NotNull(tail.AdditionalData);
-        Assert.Contains("events_per_minute", tail.AdditionalData!.Keys, StringComparer.Ordinal);
+        Assert.Contains("consumers", tail.AdditionalData!.Keys, StringComparer.Ordinal);
+        Assert.Contains("events_per_minute", tail.AdditionalData.Keys, StringComparer.Ordinal);
         Assert.Equal(42, tail.AdditionalData["events_per_minute"].GetInt32());
+        Assert.Equal("collector", tail.AdditionalData["consumers"][0].GetProperty("service").GetString());
     }
 }

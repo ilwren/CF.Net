@@ -1095,12 +1095,18 @@ public class WriteIntegrationTests : CloudflareIntegrationTest
                 $"the tail url '{tail.Url}' is not an absolute URI");
             Log($"tail {tail.Id} is served at {tailUrl!.Scheme}://{tailUrl.Host}");
 
-            // What a listed tail carries is not what creating one answers with, so the first listed item is
-            // reported in full before anything is asserted about its fields.
+            // The list answers with an array whose items carry the same three fields the create did, which is
+            // not what the published schema says this endpoint answers with.
             var listed = await Client.Workers.ListTailsAsync(name);
-            Assert.NotEmpty(listed);
-            Warn($"GET /accounts/{{account_id}}/workers/scripts/{name}/tails answered {listed.Count} item(s); the first was {CFNet.Serialization.CloudflareJson.ToIndentedJson(listed[0])}");
-            Assert.Contains(listed, item => item.Id == tail.Id);
+            var only = Assert.Single(listed);
+            Assert.Equal(tail.Id, only.Id);
+            Assert.Equal(tail.Url, only.Url);
+
+            // The expiry is only checked as "still in the future" rather than as the value the create
+            // answered with, because whether Cloudflare reports the stored one or recomputes it on read is
+            // not something a caller should depend on.
+            Assert.NotNull(only.ExpiresAt);
+            Assert.False(only.HasExpired);
 
             await Client.Workers.DeleteTailAsync(name, tail.Id!);
             Log($"stopped tail {tail.Id}");
@@ -1109,20 +1115,20 @@ public class WriteIntegrationTests : CloudflareIntegrationTest
             // Stopped is the same as never started from the API's point of view.
             Assert.Empty(await Client.Workers.ListTailsAsync(name));
 
-            // Whether a script can hold more than one tail is not stated in the schema Cloudflare publishes,
-            // and either answer is a real one, so it is probed and reported rather than asserted.
-            try
-            {
-                var second = await Client.Workers.CreateTailAsync(name);
-                tail = second;
+            // A script holds one tail at a time: a second create answers 200 with a new tail and replaces the
+            // one already running rather than adding to it.
+            var first = await Client.Workers.CreateTailAsync(name);
+            var replacement = await Client.Workers.CreateTailAsync(name);
+            Log($"tail {first.Id} was replaced by {replacement.Id}");
+            tail = replacement;
 
-                var after = await Client.Workers.ListTailsAsync(name);
-                Warn($"POST /accounts/{{account_id}}/workers/scripts/{name}/tails a second time answered 200 with tail {second.Id}, and the list that followed reported {after.Count} tail(s): {string.Join(", ", after.Select(item => item.Id ?? "(no id)"))}. So a script does not reject a second create, and {(after.Count == 1 ? "the new tail replaced the first" : "a script can hold several at once")}.");
-            }
-            catch (CloudflareApiException exception)
-            {
-                Warn($"POST /accounts/{{account_id}}/workers/scripts/{name}/tails a second time was refused with {exception.StatusCode}: {exception.Message} - so a script holds one tail at a time.");
-            }
+            var after = await Client.Workers.ListTailsAsync(name);
+            var current = Assert.Single(after);
+            Assert.Equal(replacement.Id, current.Id);
+
+            await Client.Workers.DeleteTailAsync(name, replacement.Id!);
+            tail = null;
+            Assert.Empty(await Client.Workers.ListTailsAsync(name));
         }
         finally
         {

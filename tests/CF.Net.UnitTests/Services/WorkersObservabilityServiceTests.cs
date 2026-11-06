@@ -219,7 +219,7 @@ public class WorkersObservabilityServiceTests
                 "https://logs.example.com/ingest",
                 ObservabilityLogpushDatasets.OpenTelemetryMetrics));
 
-        Assert.Contains(""headers":{}", harness.LastRequest.Body, StringComparison.Ordinal);
+        Assert.Contains("\"headers\":{}", harness.LastRequest.Body, StringComparison.Ordinal);
     }
 
     [Fact]

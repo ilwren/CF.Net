@@ -48,8 +48,8 @@ public sealed class WorkerTail
     public string? ScriptName { get; set; }
 
     /// <summary>
-    /// The Workers registered to receive this tail's events. A tail that is only being watched by the caller
-    /// has none.
+    /// The Workers registered to receive this tail's events, as <c>WorkerTailConsumer</c> - the same type a
+    /// script's settings report its tail consumers with. A tail nothing consumes yet has none.
     /// </summary>
     [JsonPropertyName("consumers")]
     public List<WorkerTailConsumer>? Consumers { get; set; }
@@ -66,38 +66,4 @@ public sealed class WorkerTail
     /// <returns>The tail described in one line.</returns>
     public override string ToString() =>
         ExpiresAt is { } until ? $"{Id} (expires {until:u})" : $"{Id} (no expiry reported)";
-}
-
-/// <summary>
-/// A Worker registered to receive another Worker's tail events - the consumer half of a tail.
-/// </summary>
-/// <remarks>
-/// What <c>consumers</c> entries look like on a listed tail. A consumer is named by service, so this is a
-/// reference to a Worker rather than an embedded one; <see cref="Namespace"/> is set when the consumer lives
-/// in a Workers for Platforms dispatch namespace rather than in the account proper.
-/// </remarks>
-public sealed class WorkerTailConsumer
-{
-    /// <summary>The consuming Worker's name.</summary>
-    [JsonPropertyName("service")]
-    public string? Service { get; set; }
-
-    /// <summary>The consumer's environment, when it has more than one.</summary>
-    [JsonPropertyName("environment")]
-    public string? Environment { get; set; }
-
-    /// <summary>The dispatch namespace the consumer lives in, when it is not the account itself.</summary>
-    [JsonPropertyName("namespace")]
-    public string? Namespace { get; set; }
-
-    /// <summary>Captures any field Cloudflare adds in the future.</summary>
-    [JsonExtensionData]
-    public IDictionary<string, JsonElement>? AdditionalData { get; set; }
-
-    /// <summary>The consumer Worker named the way Cloudflare names it.</summary>
-    /// <returns>The consumer in one line.</returns>
-    public override string ToString() =>
-        Namespace is { Length: > 0 } dispatchNamespace
-            ? $"{Service} ({dispatchNamespace})"
-            : $"{Service}";
 }

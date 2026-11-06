@@ -182,6 +182,16 @@ public sealed class WorkerTailConsumer
     /// <summary>Captures any field Cloudflare adds in the future.</summary>
     [JsonExtensionData]
     public IDictionary<string, JsonElement>? AdditionalData { get; set; }
+
+    /// <summary>The consuming Worker named the way Cloudflare names it.</summary>
+    /// <returns>
+    /// The service, with the dispatch namespace in brackets when the consumer is a Workers for Platforms
+    /// Worker rather than one in the account itself.
+    /// </returns>
+    public override string ToString() =>
+        Namespace is { Length: > 0 } dispatchNamespace
+            ? $"{Service} ({dispatchNamespace})"
+            : $"{Service}";
 }
 
 /// <summary>Query filters for <c>GET /accounts/{account_id}/workers/scripts</c>.</summary>

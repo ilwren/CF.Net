@@ -607,7 +607,8 @@ would serve as one.
 
 `IWorkersAiService` — `client.WorkersAi`
 
-Running a model, and the catalogue behind it. These live under `/accounts/{account_id}/ai/` — a **sibling** of
+Running a model, the catalogue behind it, and the fine-tunes and file formats beside them. These live under
+`/accounts/{account_id}/ai/` — a **sibling** of
 the Workers paths rather than one of them, even though the product is Workers AI. The three searches are
 catalogues of what Cloudflare offers rather than of what the account owns, so read access is the whole of what
 they need — and Cloudflare's own words for **Workers AI Read** are "grants access to invoke Workers AI
@@ -622,6 +623,9 @@ feature.
 | `GetModelSchemaAsync(model, accountId)` | `GET …/ai/models/schema?model={model}` | the model's own input and output JSON Schema, which is the only published source for what an inference call takes — the shapes differ per task. `model` is the full name, namespace included (`@cf/meta/llama-3.2-3b-instruct`), so it goes out escaped here, where it is a query parameter - the same name is **not** escaped in `RunAsync`'s path, where Cloudflare's router wants it spelled out |
 | `ListTasksAsync(accountId)` | `GET …/ai/tasks/search` | the task types — `text-generation`, `text-embeddings` and the rest, though **a live answer spells them for a person**, `Feature Extraction` rather than `feature-extraction`. That name - not the slug, and not the task's `id` - is what the model search's `task` filter takes, and `WorkersAiTaskNames.Same` bridges the two spellings for a caller comparing them. Takes **only** the account id: no filters at all, not even a search term, despite the path saying `search`. Answers a bare array |
 | `ListAuthorsAsync(accountId)` | `GET …/ai/authors/search` | the authors and organisations behind the models, likewise a bare array with no filters. An author's name is what the model search's `author` filter takes - but **a live answer for this account carried no authors at all** (0 against a catalogue of 73 models), so that filter is worth trying before it is relied on, and the same is unresolved for `task` |
+| `ListFinetunesAsync(accountId)` | `GET /accounts/{account_id}/ai/finetunes` | the account's own fine-tuning jobs, and it accepts **Workers AI Read** as well as Write. Its summary says it "lists all fine-tuning jobs created by the account, including status and metrics" while its published 200 example answers **one object** carrying neither, so both kinds are read: an array is the list, an object a list of one, and a null no jobs at all. `WorkersAiFinetune` names `id`, `name`, `model`, `description`, `public`, `created_at` and `modified_at`, and keeps anything else - the promised status and metrics first among them |
+| `ListPublicFinetunesAsync(WorkersAiPublicFinetuneListParameters?, accountId)` | `GET /accounts/{account_id}/ai/finetunes/public` | the fine-tuned models Cloudflare publishes for every account, answering the same `WorkersAiFinetune` with `public` set. Paged by **`limit` and `offset`** rather than `page` and `per_page`, and ordered by **`orderBy`, camelCase on the wire**, so its parameters are their own class instead of this library's usual paging |
+| `ListToMarkdownFormatsAsync(accountId)` | `GET /accounts/{account_id}/ai/tomarkdown/supported` | the file formats the to-markdown conversion accepts: a bare array of `{extension, mimeType}` with no filters, and **`mimeType` camelCase**, which nearly nothing else Cloudflare answers is - so it is named explicitly rather than left to the snake_case policy |
 
 **The published schema types the items of all three searches as `unknown`** — Cloudflare documents these
 endpoints' query parameters and then answers with `result: array of unknown`, its own 200 example being
@@ -741,10 +745,15 @@ path intact and checks the name rather than escaping it.
 with `shape: [1,768]` and the vector itself. Both were addressed by the name spelled out — the escaped form
 never reached a model at all.
 
-⛔ `…/ai/finetunes` (and their assets, which need `Workers AI Write`), `…/ai/tomarkdown` — a multipart upload
-plus a `supported` list — and the AI Gateway. None of these is a paid feature; they are simply the next
-increments. Streaming inference is not wrapped either, and would need a transport that reads server-sent
-events rather than one envelope.
+⛔ `POST …/ai/finetunes` and `POST …/ai/finetunes/{finetune_id}/finetune-assets` — both need **Workers AI
+Write**, which the token template here does not ask for, and the second is a **multipart upload** of a training
+file besides. Creating a fine-tune also starts billable training, so neither is wrapped and the two lists above
+are the readable half of the area. `POST …/ai/tomarkdown` is not wrapped either: it uploads `files` as
+multipart/form-data and this library's request body is JSON — though its answer's shape is known
+(`{data, format, mimeType, name, tokens}`, with `tokens` a **string**), so the day the transport grows a
+multipart body the model is a small addition rather than a research project. The AI Gateway is a resource of
+its own, not part of this one. Streaming inference is not wrapped either, and would need a transport that
+reads server-sent events rather than one envelope.
 
 ---
 

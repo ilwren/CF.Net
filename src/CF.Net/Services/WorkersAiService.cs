@@ -123,6 +123,62 @@ public interface IWorkersAiService
         WorkersAiRunRequest request,
         string? accountId = null,
         CancellationToken cancellationToken = default);
+
+    /// <summary>Lists the account's own fine-tuning jobs.</summary>
+    /// <param name="accountId">Account id; falls back to the configured default when null.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>
+    /// The jobs, in the order Cloudflare answers them, or an empty list when the account has none - which is
+    /// the common case, since a fine-tune has to be created before it appears here.
+    /// </returns>
+    /// <remarks>
+    /// <para>
+    /// <c>GET /accounts/{account_id}/ai/finetunes</c>, which accepts <b>Workers AI Read</b> as well as Write.
+    /// </para>
+    /// <para>
+    /// The endpoint's summary says it "lists all fine-tuning jobs created by the account", and its published
+    /// answer is a single object rather than a list of them - the same disagreement the model schema has
+    /// between its summary and its shape. Both are read: an array is the list, an object is a list of one,
+    /// and a null or empty answer is an account with no jobs. Nothing here guesses which one Cloudflare means.
+    /// </para>
+    /// </remarks>
+    Task<IReadOnlyList<WorkersAiFinetune>> ListFinetunesAsync(
+        string? accountId = null,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>Lists the fine-tuned models Cloudflare has published for every account.</summary>
+    /// <param name="parameters">How many to ask for, how many to skip, and what to order them by.</param>
+    /// <param name="accountId">Account id; falls back to the configured default when null.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>The published jobs, or an empty list when there are none.</returns>
+    /// <remarks>
+    /// <c>GET /accounts/{account_id}/ai/finetunes/public</c>. This list is paged by <c>limit</c> and
+    /// <c>offset</c> and ordered by <b><c>orderBy</c></b>, camelCase on the wire, so its parameters are their
+    /// own class rather than the paging every other list here uses.
+    /// </remarks>
+    Task<IReadOnlyList<WorkersAiFinetune>> ListPublicFinetunesAsync(
+        WorkersAiPublicFinetuneListParameters? parameters = null,
+        string? accountId = null,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>Lists the file formats the to-markdown conversion accepts.</summary>
+    /// <param name="accountId">Account id; falls back to the configured default when null.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>The formats, each an extension and the MIME type that goes with it.</returns>
+    /// <remarks>
+    /// <para>
+    /// <c>GET /accounts/{account_id}/ai/tomarkdown/supported</c>, a bare array with no filters, whose items
+    /// carry <c>extension</c> and a camelCase <c>mimeType</c>.
+    /// </para>
+    /// <para>
+    /// This is the readable half of to-markdown. The conversion itself, <c>POST …/ai/tomarkdown</c>, is a
+    /// <b>multipart/form-data upload of one or more files</b> - <c>files</c> in the SDK's own shape - which
+    /// this library's JSON-only request body cannot express, so it is not wrapped.
+    /// </para>
+    /// </remarks>
+    Task<IReadOnlyList<WorkersAiToMarkdownFormat>> ListToMarkdownFormatsAsync(
+        string? accountId = null,
+        CancellationToken cancellationToken = default);
 }
 
 /// <inheritdoc />
@@ -261,6 +317,74 @@ public sealed class WorkersAiService : CloudflareService, IWorkersAiService
             .ConfigureAwait(false);
         return new WorkersAiRunResult(response.EnsureResult());
     }
+
+    /// <inheritdoc />
+    public async Task<IReadOnlyList<WorkersAiFinetune>> ListFinetunesAsync(
+        string? accountId = null,
+        CancellationToken cancellationToken = default)
+    {
+        var request = CloudflareRequest.Get($"{AiPath(ResolveAccountId(accountId))}/finetunes");
+        request.OperationName = "List Workers AI Finetunes";
+
+        // Read as the JSON that arrived, because the documentation does not settle the kind: the endpoint's
+        // summary promises a list of every job the account created, and its published 200 example answers one
+        // object. Both are read below rather than one of them being guessed at.
+        var response = await Transport
+            .SendAsync<JsonElement>(request, cancellationToken)
+            .ConfigureAwait(false);
+        return ReadFinetunes(response.Result);
+    }
+
+    /// <inheritdoc />
+    public async Task<IReadOnlyList<WorkersAiFinetune>> ListPublicFinetunesAsync(
+        WorkersAiPublicFinetuneListParameters? parameters = null,
+        string? accountId = null,
+        CancellationToken cancellationToken = default)
+    {
+        var request = CloudflareRequest.Get($"{AiPath(ResolveAccountId(accountId))}/finetunes/public");
+        parameters?.Apply(request.Query);
+        request.OperationName = "List Public Workers AI Finetunes";
+
+        var response = await Transport
+            .SendAsync<List<WorkersAiFinetune>>(request, cancellationToken)
+            .ConfigureAwait(false);
+        return response.Result ?? new List<WorkersAiFinetune>();
+    }
+
+    /// <inheritdoc />
+    public async Task<IReadOnlyList<WorkersAiToMarkdownFormat>> ListToMarkdownFormatsAsync(
+        string? accountId = null,
+        CancellationToken cancellationToken = default)
+    {
+        var request = CloudflareRequest.Get($"{AiPath(ResolveAccountId(accountId))}/tomarkdown/supported");
+        request.OperationName = "List Workers AI To-Markdown Formats";
+
+        var response = await Transport
+            .SendAsync<List<WorkersAiToMarkdownFormat>>(request, cancellationToken)
+            .ConfigureAwait(false);
+        return response.Result ?? new List<WorkersAiToMarkdownFormat>();
+    }
+
+    /// <summary>
+    /// Reads a fine-tune list whichever kind Cloudflare answered: an array of jobs, one job as an object, or
+    /// nothing at all.
+    /// </summary>
+    /// <param name="result">The <c>result</c> of the answer, as the JSON that arrived.</param>
+    /// <returns>The jobs it holds, which may be none.</returns>
+    private static IReadOnlyList<WorkersAiFinetune> ReadFinetunes(JsonElement result) =>
+        result.ValueKind switch
+        {
+            JsonValueKind.Array =>
+                result.Deserialize<List<WorkersAiFinetune>>(CFNet.Serialization.CloudflareJson.Default)
+                ?? new List<WorkersAiFinetune>(),
+            JsonValueKind.Object =>
+                new List<WorkersAiFinetune>
+                {
+                    result.Deserialize<WorkersAiFinetune>(CFNet.Serialization.CloudflareJson.Default)
+                    ?? new WorkersAiFinetune(),
+                },
+            _ => new List<WorkersAiFinetune>(),
+        };
 
     /// <summary>
     /// Puts a model's name into a path exactly as it is written, which is the one path segment in this library

@@ -736,6 +736,114 @@ public class ReadOnlyIntegrationTests : CloudflareIntegrationTest
     }
 
     [Fact]
+    public async Task Workers_ai_finetunes_and_to_markdown_formats_can_be_read()
+    {
+        if (!SkipWithoutAccount())
+        {
+            return;
+        }
+
+        // The account's own jobs first. There are none unless one was created, and creating one is a write
+        // that needs Workers AI Write and bills training time, so an empty list is the expected answer - what
+        // is interesting is the kind of answer, because this endpoint's published 200 example is a single
+        // object where its own summary promises a list of every job.
+        IReadOnlyList<WorkersAiFinetune> jobs;
+        try
+        {
+            jobs = await Client.WorkersAi.ListFinetunesAsync();
+        }
+        catch (CloudflareApiException exception)
+        {
+            Warn($"GET /accounts/{{account_id}}/ai/finetunes was refused with " +
+                 $"{exception.StatusCode}/{exception.ErrorCode}. Cloudflare's body: {exception.ResponseBody}");
+            return;
+        }
+        catch (Exception exception) when (exception is not CloudflareApiException)
+        {
+            Warn($"GET /accounts/{{account_id}}/ai/finetunes answered something this library could not read as " +
+                 $"a fine-tune list: {exception.GetType().Name}: {exception.Message}");
+            return;
+        }
+
+        Log($"{jobs.Count} fine-tuning job(s): {string.Join(", ", jobs.Take(5))}");
+        Assert.All(jobs, job => Assert.False(string.IsNullOrEmpty(job.Id)));
+        foreach (var job in jobs.Take(3))
+        {
+            if (job.AdditionalData is { Count: > 0 })
+            {
+                Warn($"GET /accounts/{{account_id}}/ai/finetunes answered fine-tune fields this library does " +
+                     $"not model: {string.Join(", ", job.AdditionalData.Keys)} - its summary promises status " +
+                     $"and metrics and its published shape has neither. The item as read: " +
+                     $"{JsonSerializer.Serialize(job, CFNet.Serialization.CloudflareJson.Default)}");
+            }
+        }
+
+        // The published jobs are Cloudflare's rather than the account's, so this list can answer items even
+        // when the one above does not. limit and offset page it; orderBy is left out here because its accepted
+        // values are not published and a wrong one is a 400 rather than an empty page.
+        IReadOnlyList<WorkersAiFinetune> published;
+        try
+        {
+            published = await Client.WorkersAi.ListPublicFinetunesAsync(
+                new WorkersAiPublicFinetuneListParameters { Limit = 5 });
+        }
+        catch (CloudflareApiException exception)
+        {
+            Warn($"GET /accounts/{{account_id}}/ai/finetunes/public was refused with " +
+                 $"{exception.StatusCode}/{exception.ErrorCode}. Cloudflare's body: {exception.ResponseBody}");
+            return;
+        }
+
+        Log($"{published.Count} published fine-tune(s): {string.Join(", ", published.Take(5))}");
+        Assert.All(published, job => Assert.False(string.IsNullOrEmpty(job.Id)));
+        foreach (var job in published.Take(3))
+        {
+            if (job.AdditionalData is { Count: > 0 })
+            {
+                Warn($"GET /accounts/{{account_id}}/ai/finetunes/public answered fine-tune fields this library " +
+                     $"does not model: {string.Join(", ", job.AdditionalData.Keys)}. The item as read: " +
+                     $"{JsonSerializer.Serialize(job, CFNet.Serialization.CloudflareJson.Default)}");
+            }
+        }
+
+        // The readable half of to-markdown: what the conversion this library cannot send would accept. The
+        // conversion itself is a multipart upload of one or more files, which a JSON-only request body cannot
+        // express, so the format list is the whole of this endpoint pair that is wrapped.
+        IReadOnlyList<WorkersAiToMarkdownFormat> formats;
+        try
+        {
+            formats = await Client.WorkersAi.ListToMarkdownFormatsAsync();
+        }
+        catch (CloudflareApiException exception)
+        {
+            Warn($"GET /accounts/{{account_id}}/ai/tomarkdown/supported was refused with " +
+                 $"{exception.StatusCode}/{exception.ErrorCode}. Cloudflare's body: {exception.ResponseBody}");
+            return;
+        }
+
+        Log($"{formats.Count} to-markdown format(s): {string.Join(", ", formats.Take(10))}");
+        if (formats.Count == 0)
+        {
+            Warn("GET /accounts/{account_id}/ai/tomarkdown/supported answered 200 with no formats at all, so " +
+                 "there is nothing to say about what the conversion accepts.");
+            return;
+        }
+
+        Assert.All(formats, format => Assert.False(string.IsNullOrEmpty(format.Extension)));
+        Assert.All(formats, format => Assert.False(string.IsNullOrEmpty(format.MimeType)));
+        foreach (var format in formats.Take(3))
+        {
+            if (format.AdditionalData is { Count: > 0 })
+            {
+                Warn($"GET /accounts/{{account_id}}/ai/tomarkdown/supported answered format fields this library " +
+                     $"does not model: {string.Join(", ", format.AdditionalData.Keys)}. The item as read: " +
+                     $"{JsonSerializer.Serialize(format, CFNet.Serialization.CloudflareJson.Default)}");
+            }
+        }
+    }
+
+
+    [Fact]
     public async Task Workers_ai_models_can_be_run()
     {
         if (!SkipWithoutAccount())

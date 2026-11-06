@@ -422,11 +422,11 @@ public class WorkersAiRunTests
                 }));
 
         Assert.Equal(0, harness.RequestCount);
-        Assert.Equal(8, exception.Problems.Count);
-        Assert.Equal(
-            "prompt and text cannot both be set: a generation model takes prompt and a classification, " +
-            "translation or embedding model takes text, and one call goes to one model.",
-            exception.Problems[0]);
+
+        // Seven, in the order EnsureValid looks for them. The two-arms-at-once rules are not among them: this
+        // request carries a prompt and no text, which is one arm, and the rules that refuse two are pinned by
+        // their own fact.
+        Assert.Equal(7, exception.Problems.Count);
         Assert.Equal(
             "input_text has to be at least one character.|" +
             "target_lang has to be at least one character.|" +
@@ -435,7 +435,7 @@ public class WorkersAiRunTests
             "width has to be between 256 and 2048 pixels, as Cloudflare publishes it.|" +
             "num_steps has to be between 1 and 20, as Cloudflare publishes it.|" +
             "strength has to be between 0 and 1, as Cloudflare publishes it.",
-            string.Join("|", exception.Problems.Skip(1)));
+            string.Join("|", exception.Problems));
 
         // The sampling knobs have no published range, so a strange one is Cloudflare's to refuse: this
         // library sends it rather than inventing a bound.

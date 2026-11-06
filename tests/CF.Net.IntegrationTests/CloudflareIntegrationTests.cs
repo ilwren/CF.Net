@@ -799,6 +799,15 @@ public class ReadOnlyIntegrationTests : CloudflareIntegrationTest
                  $"{JsonSerializer.Serialize(generation, CFNet.Serialization.CloudflareJson.Default)}");
         }
 
+        // One Warn slot, spent once: which fields of the arm a live answer actually carried, so the coverage
+        // doc can say what Cloudflare sent rather than what its published union allows. This becomes
+        // assertions - and the slot goes back - as soon as it has reported.
+        Warn($"POST /accounts/{{account_id}}/ai/run/{generationModel} answered {result.Kind}: " +
+             $"text={result.Text}; response={generation.Response}; usage={generation.Usage}; " +
+             $"tool_calls={generation.ToolCalls?.Count ?? 0}; unmodelled=" +
+             $"[{string.Join(",", (generation.AdditionalData ?? new Dictionary<string, JsonElement>()).Keys)}]; " +
+             $"as read: {JsonSerializer.Serialize(generation, CFNet.Serialization.CloudflareJson.Default)}");
+
         // The other arm worth seeing live is the one whose answer is numbers rather than words: an embedding
         // model's vectors and the shape it reports for them.
         var embeddingsPage = await Client.WorkersAi.ListModelsAsync(
@@ -828,6 +837,15 @@ public class ReadOnlyIntegrationTests : CloudflareIntegrationTest
                 Warn($"POST /accounts/{{account_id}}/ai/run/{embeddingModel} answered embedding fields this " +
                      $"library does not model: {string.Join(",", vectors.AdditionalData.Keys)}");
             }
+
+            // The other half of the same question, for an arm whose answer is numbers: does the model report
+            // the shape it published, and how wide is a vector really. The vectors themselves are not worth
+            // the characters a Warn has.
+            Warn($"POST /accounts/{{account_id}}/ai/run/{embeddingModel} answered {embedded.Kind}: " +
+                 $"vectors={vectors.VectorCount} dimensions={vectors.Dimensions} " +
+                 $"shape=[{string.Join(",", vectors.Shape ?? new List<long>())}] " +
+                 $"first three=[{string.Join(",", FirstThree(vectors))}] unmodelled=" +
+                 $"[{string.Join(",", (vectors.AdditionalData ?? new Dictionary<string, JsonElement>()).Keys)}]");
         }
         catch (CloudflareApiException exception)
         {
@@ -835,6 +853,10 @@ public class ReadOnlyIntegrationTests : CloudflareIntegrationTest
                  $"{exception.StatusCode}/{exception.ErrorCode}. Cloudflare's body: {exception.ResponseBody}");
         }
     }
+
+    /// <summary>The first three numbers of an embedding answer, which is all of it worth reporting.</summary>
+    private static IEnumerable<double> FirstThree(WorkersAiEmbeddings embeddings) =>
+        embeddings.Data is { Count: > 0 } data ? data[0].Take(3) : [];
 
     /// <summary>Chooses the first model whose name contains one of these fragments, or the first model.</summary>
     private static string? PickModel(IReadOnlyList<WorkersAiModel> models, params string[] preferred)

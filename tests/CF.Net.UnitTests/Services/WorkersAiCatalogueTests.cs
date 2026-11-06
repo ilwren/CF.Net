@@ -196,7 +196,7 @@ public class WorkersAiCatalogueTests
         Assert.Equal("string", schema.Output.OneOf![0].Properties!["response"].Type);
 
         // A keyword this library does not model still costs nothing, nested as deep as it arrives.
-        Assert.Equal(1, schema.Input.Properties["prompt"].AdditionalData!.Count);
+        Assert.Single(schema.Input.Properties["prompt"].AdditionalData!);
         Assert.Equal(1, schema.Input.Properties["prompt"].AdditionalData["minLength"].GetInt32());
     }
 

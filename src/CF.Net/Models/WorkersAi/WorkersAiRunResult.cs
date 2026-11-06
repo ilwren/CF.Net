@@ -220,6 +220,17 @@ public sealed class WorkersAiUsage
     [JsonPropertyName("total_tokens")]
     public long? TotalTokens { get; set; }
 
+    /// <summary>
+    /// What the call cost in neurons, Workers AI's own unit for billing a model that is not counted in tokens
+    /// alone. Observed live as <c>0.18253148533403873</c>, and not published in the answer's shape.
+    /// </summary>
+    [JsonPropertyName("neurons")]
+    public double? Neurons { get; set; }
+
+    /// <summary>How much of the prompt came from a cache, when Cloudflare reports the detail at all.</summary>
+    [JsonPropertyName("prompt_tokens_details")]
+    public WorkersAiPromptTokensDetails? PromptTokensDetails { get; set; }
+
     /// <summary>Captures any field Cloudflare adds.</summary>
     [JsonExtensionData]
     public IDictionary<string, JsonElement>? AdditionalData { get; set; }
@@ -228,6 +239,25 @@ public sealed class WorkersAiUsage
     /// <returns>The usage described in one line.</returns>
     public override string ToString() =>
         $"{PromptTokens ?? 0} in + {CompletionTokens ?? 0} out = {TotalTokens ?? 0} token(s)";
+}
+
+/// <summary>
+/// The detail behind a usage's prompt tokens. Observed live inside a generation's <c>usage</c> as
+/// <c>{"cached_tokens":0}</c>; nothing publishes it.
+/// </summary>
+public sealed class WorkersAiPromptTokensDetails
+{
+    /// <summary>How many of the prompt's tokens were served from a cache.</summary>
+    [JsonPropertyName("cached_tokens")]
+    public long? CachedTokens { get; set; }
+
+    /// <summary>Captures any field Cloudflare adds.</summary>
+    [JsonExtensionData]
+    public IDictionary<string, JsonElement>? AdditionalData { get; set; }
+
+    /// <summary>The cached count, on one line.</summary>
+    /// <returns>The detail described in one line.</returns>
+    public override string ToString() => $"{CachedTokens ?? 0} cached token(s)";
 }
 
 /// <summary>What a speech-synthesis model answered: audio, base64-encoded.</summary>
@@ -285,6 +315,20 @@ public sealed class WorkersAiEmbeddings
     /// </summary>
     [JsonPropertyName("shape")]
     public List<long>? Shape { get; set; }
+
+    /// <summary>
+    /// How the vectors were pooled, when the model says. Observed live on
+    /// <c>@cf/baai/bge-base-en-v1.5</c>, whose published answer is only <c>data</c> and <c>shape</c>.
+    /// </summary>
+    [JsonPropertyName("pooling")]
+    public string? Pooling { get; set; }
+
+    /// <summary>
+    /// What the call cost, which an embedding answers as readily as a generation does - and which the published
+    /// shape for this arm does not mention.
+    /// </summary>
+    [JsonPropertyName("usage")]
+    public WorkersAiUsage? Usage { get; set; }
 
     /// <summary>How many vectors arrived.</summary>
     [JsonIgnore]

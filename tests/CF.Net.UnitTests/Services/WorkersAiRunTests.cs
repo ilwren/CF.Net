@@ -580,4 +580,62 @@ public class WorkersAiRunTests
         Assert.Empty(result.AsClassifications());
         Assert.Null(result.As<WorkersAiEmbeddings>());
     }
+
+    [Fact]
+    public async Task A_live_generation_answer_reads_as_words_with_neurons_and_a_cache_count()
+    {
+        using var harness = CloudflareHarness.Create();
+        // The answer POST …/ai/run/@cf/meta/llama-3.2-1b-instruct gave live, verbatim. Two of its fields -
+        // neurons and prompt_tokens_details - are in no published shape, and both are worth having: one is what
+        // the call cost and the other is how much of the prompt was served from a cache.
+        harness.RespondWithResult(
+            """{"response":"What.","usage":{"completion_tokens":3,"prompt_tokens":52,"total_tokens":55,"prompt_tokens_details":{"cached_tokens":0},"neurons":0.18253148533403873}}""");
+
+        var result = await harness.Client.WorkersAi.RunAsync(
+            "@cf/meta/llama-3.2-1b-instruct",
+            WorkersAiRunRequest.ForPrompt("Say the single word what."));
+
+        var generation = result.AsTextGeneration()!;
+        Assert.Equal("What.", generation.Response);
+        Assert.Equal("What.", result.Text);
+
+        var usage = generation.Usage!;
+        Assert.Equal(52, usage.PromptTokens);
+        Assert.Equal(3, usage.CompletionTokens);
+        Assert.Equal(55, usage.TotalTokens);
+        Assert.Equal(0.18253148533403873d, usage.Neurons!.Value, 12);
+        Assert.Equal(0, usage.PromptTokensDetails!.CachedTokens);
+        Assert.Equal("52 in + 3 out = 55 token(s)", usage.ToString());
+        Assert.Equal("0 cached token(s)", usage.PromptTokensDetails!.ToString());
+
+        // Everything that arrived is named now, so nothing is left over to preserve.
+        Assert.True(usage.AdditionalData is not { Count: > 0 });
+        Assert.True(usage.PromptTokensDetails!.AdditionalData is not { Count: > 0 });
+        Assert.True(generation.AdditionalData is not { Count: > 0 });
+    }
+
+    [Fact]
+    public async Task A_live_embedding_answer_reads_as_vectors_with_pooling_and_usage()
+    {
+        using var harness = CloudflareHarness.Create();
+        // POST …/ai/run/@cf/baai/bge-base-en-v1.5 answered one vector of 768 live, and reported two fields its
+        // published shape does not mention: pooling and usage. The vector's numbers are the live ones; the
+        // pooling value is this fixture's own, because the live one was not written down.
+        harness.RespondWithResult(
+            """{"shape":[1,768],"data":[[-0.006252288818359375,0.0252227783203125,0.0259552001953125]],"pooling":"mean","usage":{"prompt_tokens":9,"total_tokens":9}}""");
+
+        var result = await harness.Client.WorkersAi.RunAsync(
+            "@cf/baai/bge-base-en-v1.5",
+            WorkersAiRunRequest.ForEmbeddings("hello"));
+
+        var embeddings = result.AsEmbeddings()!;
+        Assert.Equal(1, embeddings.VectorCount);
+        Assert.Equal(768, embeddings.Dimensions);
+        Assert.Equal(-0.006252288818359375d, embeddings.Data![0][0], 12);
+        Assert.Equal("mean", embeddings.Pooling);
+        Assert.Equal(9, embeddings.Usage!.TotalTokens);
+        Assert.Equal("1 vector(s) of 768", embeddings.ToString());
+        Assert.True(embeddings.AdditionalData is not { Count: > 0 });
+        Assert.True(embeddings.Usage!.AdditionalData is not { Count: > 0 });
+    }
 }

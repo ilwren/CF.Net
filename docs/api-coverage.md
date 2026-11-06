@@ -616,7 +616,7 @@ feature.
 
 | Method | Endpoint | Notes |
 | --- | --- | --- |
-| `RunAsync(model, WorkersAiRunRequest, accountId)` | `POST /accounts/{account_id}/ai/run/{model_name}` | one inference call. The model's inputs go in the body **directly** — no model/input/options wrapper — and which fields a model takes is what `GetModelSchemaAsync` says. Answers `WorkersAiRunResult`, which holds the JSON that arrived and reads the arm asked for. **The model's name goes into the path unescaped** - `…/ai/run/@cf/meta/llama-3.2-1b-instruct`, its slashes and its `@` intact: the escaped form this library uses for every other path segment was refused live with **400** and error **7000**, "No route for that URI". The name is therefore *checked* rather than escaped - whitespace, `?`, `#`, `%` and a leading or trailing slash are refused locally - and stays escaped where it is a query parameter, as in `GetModelSchemaAsync`. See [Inference](#inference) |
+| `RunAsync(model, WorkersAiRunRequest, accountId)` | `POST /accounts/{account_id}/ai/run/{model_name}` | one inference call. The model's inputs go in the body **directly** — no model/input/options wrapper — and which fields a model takes is what `GetModelSchemaAsync` says. Answers `WorkersAiRunResult`, which holds the JSON that arrived and reads the arm asked for. **The model's name goes into the path unescaped** - `…/ai/run/@cf/meta/llama-3.2-1b-instruct`, its slashes and its `@` intact: the escaped form this library uses for every other path segment was refused live with **400** and error **7000**, "No route for that URI". The name is therefore *checked* rather than escaped - whitespace, `?`, `#`, `%` and a leading or trailing slash are refused locally - and stays escaped where it is a query parameter, as in `GetModelSchemaAsync`. **Verified live** on both a generation and an embedding, which answered `usage.neurons` and `usage.prompt_tokens_details` and, for the embedding, `pooling` - three fields no published shape mentions and all three now modelled. See [Inference](#inference) |
 | `ListModelsAsync(WorkersAiModelListParameters?, accountId)` | `GET /accounts/{account_id}/ai/models/search` | page-numbered, with `author`, `format`, `hide_experimental`, `include_deprecated`, `search`, `source` and `task` filters — all snake_case, and all optional, so no filters is no query string at all. `format=openrouter` asks for a marketplace-shaped answer (`{data: […]}`) which this library passes through but does **not** read: the default array is the only shape it types. **`task` is the one filter whose spelling is not settled**: a live call with `task=text-generation` answered no models, one with the task list's own `Feature Extraction` answered a `total_count` of **331** with no items in the page either, and an unfiltered walk of the same catalogue returned **73**. The integration run asks whether the filter wants the slug, the display name or the task's `id`, and this row says so once it answers |
 | `ListAllModelsAsync(...)` | `GET …/ai/models/search` | walks every page, keeping the filters and replacing only `page`; stops on a short page as well as on `result_info`, because a catalogue that fits in one page is the common case |
 | `GetModelSchemaAsync(model, accountId)` | `GET …/ai/models/schema?model={model}` | the model's own input and output JSON Schema, which is the only published source for what an inference call takes — the shapes differ per task. `model` is the full name, namespace included (`@cf/meta/llama-3.2-3b-instruct`), so it goes out escaped here, where it is a query parameter - the same name is **not** escaped in `RunAsync`'s path, where Cloudflare's router wants it spelled out |
@@ -660,8 +660,25 @@ are written for a person - the first reads `{"id":"eefd8baf-f3a5-4366-a03d-e5391
 Extraction"}` and carries no `description`, though the published shape allows one; `authors/search` answered
 **0** authors; and a model search filtered by that first task's name answered a `total_count` of **331** with
 **nothing in the page**, where the same search unfiltered walked **73** models and found none of them
-reporting the task name `text-generation` in any casing. So the catalogue is real and readable, and the
-`task` filter is not yet understood.
+reporting the task name `text-generation` in any casing. That last count was the library's own doing: the
+task names are written for a person, so matching `text-generation` against `Text Generation` needs the case
+and the separators normalised, and once they are the same catalogue reports **39** generation models and **7**
+embedding models across **10** task names (`Dumb Pipe`, `Text Generation`, `Text Embeddings`, `Text
+Classification`, `Text-to-Image`, `Text-to-Speech` and four more).
+
+It also answered two model fields no documentation mentions, which `WorkersAiModel` now names: **`source`**, a
+number (`1` on every model) matching the search's own `source` parameter, and **`created_at`**, written
+`2024-05-22 19:27:09.781` - a space where ISO 8601 puts a `T` and no offset, which is why it stays a string
+rather than a `DateTime` that would have to guess. A model's `properties` are as varied as ever: `price`
+arrives as a **list** of `{unit, price, currency}`, `reasoning_effort` as an object with its own
+`supported_efforts`, and `context_window` as the *string* `"60000"`, so a property's value staying the JSON it
+arrived as is not laziness.
+
+The `task` filter is still not understood, and it is the only unsettled thing here: all three spellings of one
+task - the slug, the name the task list gives and the task's own `id` - answer **200** with the same
+`total_count` of **331**, which is neither the 73 models an unfiltered walk collects nor a count of what the
+filter matched. Filtering by task is therefore best done by walking the catalogue and comparing
+`model.Task.Name` locally, which is what the integration fact does.
 
 ### Inference
 
@@ -700,13 +717,24 @@ words, whichever field of whichever arm carries them (`response`, `text`, `trans
 `AdditionalData`, and `WorkersAiToolCall.Arguments` stays raw JSON because Cloudflare publishes it as
 `unknown` — a model answers the object its own tool declared.
 
+**Two live answers widened it.** `@cf/meta/llama-3.2-1b-instruct` replied with a `usage` carrying
+**`neurons: 0.18253148533403873`** and **`prompt_tokens_details: {"cached_tokens":0}`** — neither is
+published, and the first is what a call actually costs, so `WorkersAiUsage` names both.
+`@cf/baai/bge-base-en-v1.5` replied one vector of 768 with **`pooling`** and a **`usage`** of its own beside
+the published `data` and `shape`, so `WorkersAiEmbeddings` names those as well. Both answers then left
+`AdditionalData` empty, which is the point of naming them: what is left over next is what Cloudflare adds.
+
 **The path is the one thing this endpoint does differently, and a live run is what said so**:
 `POST …/ai/run/%40cf%2Fmeta%2Fllama-3.2-1b-instruct` — the model's name escaped the way every other path
 segment in this library escapes — answered **400** with error **7000**, "No route for that URI". Cloudflare
 routes inference on the name as it is spelled, so `RunAsync` writes `@cf/meta/llama-3.2-1b-instruct` into the
-path intact and checks the name rather than escaping it. A model that answers is still to be observed: what a
-generation and an embedding really carry is reported by the integration run until it is, and only then becomes
-assertions here.
+path intact and checks the name rather than escaping it.
+
+**Verified live**: `POST …/ai/run/@cf/meta/llama-3.2-1b-instruct` with `{prompt, max_tokens: 8, temperature:
+0}` answered **200** and `{"response":"What.","usage":{"completion_tokens":3,"prompt_tokens":52,
+"total_tokens":55,…}}`; `POST …/ai/run/@cf/baai/bge-base-en-v1.5` with `{"text":"hello"}` answered **200**
+with `shape: [1,768]` and the vector itself. Both were addressed by the name spelled out — the escaped form
+never reached a model at all.
 
 ⛔ `…/ai/finetunes` (and their assets, which need `Workers AI Write`), `…/ai/tomarkdown` — a multipart upload
 plus a `supported` list — and the AI Gateway. None of these is a paid feature; they are simply the next

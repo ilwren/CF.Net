@@ -58,6 +58,24 @@ public sealed class WorkersAiModel
     [JsonPropertyName("batching")]
     public WorkersAiModelBatching? Batching { get; set; }
 
+    /// <summary>
+    /// Where the model comes from, as the search's <c>source</c> parameter numbers it. Observed live as
+    /// <c>1</c> on every model in a catalogue of 73; the documentation numbers the parameter and says no more
+    /// than that, so this library numbers it too rather than inventing names for the values.
+    /// </summary>
+    [JsonPropertyName("source")]
+    public int? Source { get; set; }
+
+    /// <summary>
+    /// When the model was added to the catalogue, exactly as Cloudflare writes it - observed live as
+    /// <c>2024-05-22 19:27:09.781</c>, a date and a time with a <b>space</b> between them and no offset. That
+    /// is not ISO 8601, and System.Text.Json reads a <see cref="DateTime"/> by that standard alone, so this
+    /// stays the string that arrived; <c>DateTime.Parse</c> on it is a caller's choice, and a guess about the
+    /// offset is theirs to make.
+    /// </summary>
+    [JsonPropertyName("created_at")]
+    public string? CreatedAt { get; set; }
+
     /// <summary>Captures any field Cloudflare adds, which for this endpoint is not a small possibility.</summary>
     [JsonExtensionData]
     public IDictionary<string, JsonElement>? AdditionalData { get; set; }

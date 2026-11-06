@@ -1,4 +1,5 @@
 using System.Net;
+using System.Text.Json;
 using CFNet.Exceptions;
 using CFNet.Models.WorkersAi;
 using CFNet.UnitTests.Testing;
@@ -362,5 +363,45 @@ public class WorkersAiCatalogueTests
 
         Assert.Equal("format=openrouter", harness.LastRequest.Query.TrimStart('?'));
         Assert.Equal("openrouter", Assert.Single(WorkersAiModelFormats.All));
+    }
+
+    /// <summary>
+    /// A model item exactly as a live <c>GET …/ai/models/search</c> answered it, punctuation and all: a task
+    /// named for a person rather than a slug, two properties whose values are two different JSON kinds, and
+    /// two fields no documentation mentions.
+    /// </summary>
+    private const string LiveModelJson =
+        """{"id":"eed32bc1-8775-4985-89ce-dd1405508ad8","name":"@cf/baai/bge-m3","description":"Multi-Functionality, Multi-Linguality, and Multi-Granularity embeddings model.","task":{"id":"0137cdcf-162a-4108-94f2-1ca59e8c65ee","name":"Text Embeddings","description":"Feature extraction models transform raw data into numerical features that can be processed while preserving the information in the original dataset."},"tags":[],"properties":[{"property_id":"context_window","value":"60000"},{"property_id":"price","value":[{"unit":"per M input tokens","price":0.0118,"currency":"USD"}]}],"source":1,"created_at":"2024-05-22 19:27:09.781"}""";
+
+    [Fact]
+    public async Task A_model_item_keeps_the_two_fields_a_live_catalogue_answers_that_no_documentation_does()
+    {
+        using var harness = CloudflareHarness.Create();
+        harness.RespondWithPage($"[{LiveModelJson}]", page: 1, totalPages: 1, count: 1, totalCount: 1);
+
+        var page = await harness.Client.WorkersAi.ListModelsAsync();
+        var model = Assert.Single(page.Items);
+
+        Assert.Equal("@cf/baai/bge-m3", model.Name);
+
+        // The catalogue writes task names for a person - "Text Embeddings", not "text_embeddings" - so a caller
+        // matching one against a slug has to normalise both.
+        Assert.Equal("Text Embeddings", model.Task!.Name);
+
+        Assert.Equal(1, model.Source);
+
+        // Not ISO 8601: a space where the standard puts a T, and no offset. System.Text.Json reads a DateTime
+        // by the standard alone, so this stays the string that arrived.
+        Assert.Equal("2024-05-22 19:27:09.781", model.CreatedAt);
+
+        // A property's value is the JSON it arrived as, whichever kind that is: a number written as a string
+        // here, and a list of prices there.
+        Assert.Equal("60000", model.Property("context_window")!.ValueText);
+        Assert.Equal(JsonValueKind.Array, model.Property("price")!.Value!.Value.ValueKind);
+        Assert.Empty(model.Tags!);
+        Assert.Equal("@cf/baai/bge-m3 (Text Embeddings)", model.ToString());
+
+        // Nothing is left over: source and created_at are the whole of what the documentation omits.
+        Assert.True(model.AdditionalData is not { Count: > 0 });
     }
 }

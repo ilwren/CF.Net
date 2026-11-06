@@ -779,17 +779,31 @@ public class ReadOnlyIntegrationTests : CloudflareIntegrationTest
         var taskNames = DistinctTasks(catalogue);
         var firstTask = catalogue.Count > 0 ? catalogue[0].Task : null;
 
-        // One Warn slot, spent once: what the filter takes, what a model's task field really reads as, and how
-        // big the catalogue is. All three become sentences in the coverage doc once they have reported.
-        Warn($"GET /accounts/{{account_id}}/ai/models/search?task=… reported total_count " +
-             $"{bySlug.TotalCount ?? -1} for the slug 'text-generation', {byName?.TotalCount ?? -1} for the " +
-             $"task's own name '{generationTaskName}' and {byId?.TotalCount ?? -1} for its id " +
-             $"'{generationTaskId}'. Walked unfiltered, the catalogue is {catalogue.Count} model(s) naming " +
-             $"{taskNames.Count} distinct task(s) - {string.Join(", ", taskNames.Take(6))} - of which " +
-             $"{CountByTask(catalogue, "text-generation")} are text-generation and " +
-             $"{CountByTask(catalogue, "text-embeddings")} text-embeddings. The first model is " +
-             $"{(catalogue.Count > 0 ? catalogue[0].Name : "none")} with task " +
-             $"{(firstTask is null ? "no task field at all" : JsonSerializer.Serialize(firstTask, CFNet.Serialization.CloudflareJson.Default))}.");
+        // The filter answers 200 for every spelling of a task and reports the same total_count for all of
+        // them, so total_count here is not a count of what the filter matched - and a live page for one of
+        // those spellings was empty while the unfiltered walk of the same catalogue collected 73 models. What
+        // the filter does to a page's own items is still open, so it is asked once, with the same search
+        // unfiltered as the control, rather than assumed.
+        var unfiltered = await Client.WorkersAi.ListModelsAsync(
+            new WorkersAiModelListParameters { PerPage = 1 });
+
+        Warn($"GET /accounts/{{account_id}}/ai/models/search?task=… answered {bySlug.Count} item(s) for the slug " +
+             $"'text-generation', {byName?.Count ?? -1} for the task's own name '{generationTaskName}' and " +
+             $"{byId?.Count ?? -1} for its id, all three reporting total_count {bySlug.TotalCount}; unfiltered " +
+             $"the same search answered {unfiltered.Count} item(s) and total_count {unfiltered.TotalCount}, and " +
+             $"walking every page collected {catalogue.Count} model(s).");
+
+        // What the catalogue says about itself is settled enough to assert: a model carries a task whose name
+        // is written for a person, and both tasks this fact runs are in it.
+        Assert.NotEmpty(catalogue);
+        Assert.False(string.IsNullOrEmpty(catalogue[0].Name));
+        Assert.NotNull(catalogue[0].Task);
+        Assert.False(string.IsNullOrEmpty(catalogue[0].Task!.Name));
+        Assert.True(taskNames.Count > 1);
+        Assert.True(CountByTask(catalogue, "text-generation") > 0);
+        Assert.True(CountByTask(catalogue, "text-embeddings") > 0);
+        Log($"catalogue: {catalogue.Count} model(s) naming {taskNames.Count} task(s): " +
+            $"{string.Join(", ", taskNames)}");
 
         var generationModel = PickByTask(catalogue, "text-generation", "llama-3.2-1b", "llama-3.2-3b", "llama-3.1-8b");
         if (generationModel is null)
@@ -854,14 +868,14 @@ public class ReadOnlyIntegrationTests : CloudflareIntegrationTest
                  $"{JsonSerializer.Serialize(generation, CFNet.Serialization.CloudflareJson.Default)}");
         }
 
-        // One Warn slot, spent once: which fields of the arm a live answer actually carried, so the coverage
-        // doc can say what Cloudflare sent rather than what its published union allows. This becomes
-        // assertions - and the slot goes back - as soon as it has reported.
-        Warn($"POST /accounts/{{account_id}}/ai/run/{generationModel} answered {result.Kind}: " +
-             $"text={result.Text}; response={generation.Response}; usage={generation.Usage}; " +
-             $"tool_calls={generation.ToolCalls?.Count ?? 0}; unmodelled=" +
-             $"[{string.Join(",", (generation.AdditionalData ?? new Dictionary<string, JsonElement>()).Keys)}]; " +
-             $"as read: {JsonSerializer.Serialize(generation, CFNet.Serialization.CloudflareJson.Default)}");
+        // What a live generation answers is settled enough to assert: words in response, and a usage that
+        // bills them. Two more fields arrived that no published shape mentions - a neuron count and a cache
+        // detail behind the prompt tokens - and both are modelled, so they are logged rather than left to
+        // AdditionalData.
+        Assert.NotNull(generation.Usage);
+        Assert.True(generation.Usage!.TotalTokens > 0);
+        Log($"neurons={generation.Usage.Neurons} cached={generation.Usage.PromptTokensDetails?.CachedTokens} " +
+            $"tool_calls={generation.ToolCalls?.Count ?? 0}");
 
         // The other arm worth seeing live is the one whose answer is numbers rather than words: an embedding
         // model's vectors and the shape it reports for them.
@@ -879,26 +893,22 @@ public class ReadOnlyIntegrationTests : CloudflareIntegrationTest
                 WorkersAiRunRequest.ForEmbeddings("hello"));
 
             var vectors = embedded.AsEmbeddings();
-            Log($"ran {embeddingModel}: {embedded.Kind} - {embedded}; vectors={vectors?.VectorCount} " +
-                $"dimensions={vectors?.Dimensions} " +
-                $"unmodelled={string.Join(",", (vectors?.AdditionalData ?? new Dictionary<string, JsonElement>()).Keys)}");
             Assert.NotNull(vectors);
             Assert.True(vectors!.VectorCount > 0);
             Assert.True(vectors.Dimensions > 0);
+
+            // A live embedding answers two fields its published shape does not mention - pooling and usage -
+            // and both are modelled now, so anything left over is what Cloudflare adds next.
+            Log($"ran {embeddingModel}: {embedded.Kind} - {embedded}; vectors={vectors.VectorCount} " +
+                $"dimensions={vectors.Dimensions} shape=[{string.Join(",", vectors.Shape ?? new List<long>())}] " +
+                $"pooling={vectors.Pooling} usage={vectors.Usage} " +
+                $"first three=[{string.Join(",", FirstThree(vectors))}] unmodelled=" +
+                $"{string.Join(",", (vectors.AdditionalData ?? new Dictionary<string, JsonElement>()).Keys)}");
             if (vectors.AdditionalData is { Count: > 0 })
             {
                 Warn($"POST /accounts/{{account_id}}/ai/run/{embeddingModel} answered embedding fields this " +
                      $"library does not model: {string.Join(",", vectors.AdditionalData.Keys)}");
             }
-
-            // The other half of the same question, for an arm whose answer is numbers: does the model report
-            // the shape it published, and how wide is a vector really. The vectors themselves are not worth
-            // the characters a Warn has.
-            Warn($"POST /accounts/{{account_id}}/ai/run/{embeddingModel} answered {embedded.Kind}: " +
-                 $"vectors={vectors.VectorCount} dimensions={vectors.Dimensions} " +
-                 $"shape=[{string.Join(",", vectors.Shape ?? new List<long>())}] " +
-                 $"first three=[{string.Join(",", FirstThree(vectors))}] unmodelled=" +
-                 $"[{string.Join(",", (vectors.AdditionalData ?? new Dictionary<string, JsonElement>()).Keys)}]");
         }
         catch (CloudflareApiException exception)
         {
@@ -2000,10 +2010,10 @@ public class WriteIntegrationTests : CloudflareIntegrationTest
         }
 
         var name = $"cfnet-it-{Guid.NewGuid().ToString("N")[..10]}";
-        var uploaded = await Client.Workers.UploadAsync(
+        var uploaded = await Retrying5xxAsync(() => Client.Workers.UploadAsync(
             name,
             "export default { async fetch(request) { return new Response('cf-net'); } }",
-            "2025-01-01");
+            "2025-01-01"));
         Log($"uploaded {uploaded.Name}");
 
         try
@@ -2082,7 +2092,7 @@ public class WriteIntegrationTests : CloudflareIntegrationTest
         {
             try
             {
-                await Client.Workers.DeleteAsync(name);
+                await Retrying5xxAsync(() => Client.Workers.DeleteAsync(name));
                 Log($"deleted script {name}");
             }
             catch (CloudflareApiException exception) when (exception.IsNotFound)
@@ -2101,11 +2111,11 @@ public class WriteIntegrationTests : CloudflareIntegrationTest
         }
 
         var name = $"cfnet-it-{Guid.NewGuid().ToString("N")[..10]}";
-        var uploaded = await Client.Workers.UploadAsync(
+        var uploaded = await Retrying5xxAsync(() => Client.Workers.UploadAsync(
             name,
             // The tail streams what the Worker logs, so a script with something to log is the point of the test.
             "export default { async fetch(request) { console.log('cf-net tail probe'); return new Response('cf-net'); } }",
-            "2025-01-01");
+            "2025-01-01"));
         Log($"uploaded {uploaded.Name}");
 
         CFNet.Models.Workers.WorkerTail? tail = null;
@@ -2182,7 +2192,7 @@ public class WriteIntegrationTests : CloudflareIntegrationTest
 
             try
             {
-                await Client.Workers.DeleteAsync(name);
+                await Retrying5xxAsync(() => Client.Workers.DeleteAsync(name));
                 Log($"deleted script {name}");
             }
             catch (CloudflareApiException exception) when (exception.IsNotFound)
@@ -2625,13 +2635,13 @@ public class WriteIntegrationTests : CloudflareIntegrationTest
 
         try
         {
-            var uploaded = await Client.Workers.UploadAsync(
+            var uploaded = await Retrying5xxAsync(() => Client.Workers.UploadAsync(
                 name,
                 // The scheduled handler is here so the cron triggers below are set on a Worker that can
                 // be triggered; the fetch assertion only looks for the response text.
                 "export default { async fetch(request) { return new Response('cf-net'); }, async scheduled(event) { } }",
                 "2025-01-01",
-                new[] { WorkerBinding.PlainText("GREETING", "hello") });
+                new[] { WorkerBinding.PlainText("GREETING", "hello") }));
 
             Log($"uploaded {uploaded.Name}");
 
@@ -2981,7 +2991,7 @@ public class WriteIntegrationTests : CloudflareIntegrationTest
         {
             try
             {
-                await Client.Workers.DeleteAsync(name);
+                await Retrying5xxAsync(() => Client.Workers.DeleteAsync(name));
                 Log($"deleted worker {name}");
             }
             catch (CloudflareApiException exception) when (exception.IsNotFound)

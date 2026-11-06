@@ -324,6 +324,52 @@ public abstract class CloudflareIntegrationTest : IDisposable
     /// <summary>Puts a response CF.Net could not read into words, keeping the parser's own diagnosis.</summary>
     /// <param name="exception">The exception the transport threw.</param>
     /// <returns>A reason for the run report.</returns>
+    /// <summary>
+    /// Runs a call again when Cloudflare answers 5xx, which it does from time to time for reasons of its own:
+    /// one live run failed three facts with <b>503 Service Unavailable</b> and no structured error in the body
+    /// at all, while uploading and deleting a Worker script. A 5xx is not an answer about the request, so
+    /// waiting and asking again is the honest response; anything below 500 is rethrown at once, because that
+    /// is Cloudflare answering.
+    /// </summary>
+    /// <typeparam name="T">What the call answers with.</typeparam>
+    /// <param name="call">The call to make.</param>
+    /// <param name="attempts">How many times to make it in total.</param>
+    /// <param name="delay">How long to wait between attempts.</param>
+    /// <returns>What the call answered.</returns>
+    protected static async Task<T> Retrying5xxAsync<T>(Func<Task<T>> call, int attempts = 3, TimeSpan? delay = null)
+    {
+        var wait = delay ?? TimeSpan.FromSeconds(6);
+        for (var attempt = 1; ; attempt++)
+        {
+            try
+            {
+                return await call().ConfigureAwait(false);
+            }
+            catch (CloudflareApiException exception)
+                when (exception.StatusCode is { } status && (int)status >= 500 && attempt < attempts)
+            {
+                await Task.Delay(wait).ConfigureAwait(false);
+            }
+        }
+    }
+
+    /// <summary>
+    /// <see cref="Retrying5xxAsync{T}(Func{Task{T}}, int, TimeSpan?)"/> for a call that answers with nothing.
+    /// </summary>
+    /// <param name="call">The call to make.</param>
+    /// <param name="attempts">How many times to make it in total.</param>
+    /// <param name="delay">How long to wait between attempts.</param>
+    /// <returns>A task that completes when the call has been answered with something below 500.</returns>
+    protected static async Task Retrying5xxAsync(Func<Task> call, int attempts = 3, TimeSpan? delay = null) =>
+        await Retrying5xxAsync(
+            async () =>
+            {
+                await call().ConfigureAwait(false);
+                return 0;
+            },
+            attempts,
+            delay).ConfigureAwait(false);
+
     protected static string ModelMismatchReason(CloudflareApiException exception) =>
         "CF.Net could not read Cloudflare's response as the shape it models, which is a bug in this library " +
         "rather than a problem with the credentials: " + exception.Message;

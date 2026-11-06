@@ -9,6 +9,13 @@ Base URL: `https://api.cloudflare.com/client/v4`.
 
 Status legend: ✅ wrapped · ⛔ deliberately out of scope for this phase.
 
+**Paid features are out of scope.** An endpoint that only answers for a paid plan or a paid add-on - SSL for
+SaaS beyond what a free account is entitled to, WAF custom rules and rate limiting where the account is not
+entitled to the ruleset, waiting rooms, load balancing - is not part of the coverage target, and "every
+endpoint" does not mean those. What is already wrapped stays wrapped: the live suite skips such a call as an
+entitlement refusal (`1404`, `50002`, a `403` with no permission behind it) rather than failing it, and the
+skip reason names the plan or permission the account would need.
+
 ---
 
 ## Zones (Domains)
@@ -525,6 +532,7 @@ their bodies are camelCase like the destinations' (`keyNeedle`, `scriptId`, `fil
 | --- | --- | --- |
 | `ListTelemetryKeysAsync(ObservabilityTelemetryKeysRequest?, accountId)` | `POST …/telemetry/keys` | the attribute keys that have appeared, each with its `type` and `lastSeenAt`. Null sends `{}`, which asks with no conditions. `datasets` empty means the defaults. |
 | `ListTelemetryValuesAsync(ObservabilityTelemetryValuesRequest, accountId)` | `POST …/telemetry/values` | the values one key has been seen with. `key`, `type` and `timeframe` are required; `datasets` is **required to be present but may be empty**, which the schema documents as meaning the defaults - so leaving it out is refused locally as a different request from sending `[]`. |
+| `QueryTelemetryAsync(ObservabilityTelemetryQueryRequest, accountId)` | `POST …/telemetry/query` | runs a query and answers with the run, its statistics, and whichever of six result shapes `view` asked for. `queryId` and `timeframe` are required: the id re-runs a query Cloudflare already holds when `parameters` is left out, and is any identifier when they are inline - `AdHoc(view, timeframe)` and `OverSpan(view, from, to)` generate one prefixed `cfnet-`. `dry` executes without persisting the results. **A distribution chart cannot be compared**: the schema says the pair answers 400, so `EnsureValid()` refuses it locally instead. Paging is a cursor (`offset`) for the event-shaped views and a numeric `offsetBy` for grouped ones. |
 | `PrepareLiveTailAsync(ObservabilityLiveTailRequest?, accountId)` | `POST …/telemetry/live-tail` | prepares a WebSocket server and answers `{wsUrl}`. Opening it is the caller's part; a prepared session expires on its own and there is nothing to delete. |
 | `SendLiveTailHeartbeatAsync(scriptId?, accountId)` | `POST …/telemetry/live-tail/heartbeat` | keeps that session alive. The published response type is `unknown`, so this is a void call: it either works or the session is gone. |
 
@@ -545,11 +553,41 @@ and `ObservabilityTelemetryKeysRequest.OverSpan(from, to)` convert so a caller n
 keys like `$metadata.message`, and answered 0 values for one over a day on an account with no traffic - so an
 empty answer there is a quiet account, not a broken call.
 
-⛔ `POST …/telemetry/query` - the query endpoint itself, whose response type runs to some 1700 lines of
-generated schema across five views (`events`, `calculations`, `invocations`, `traces`, `agents`) - and the
-shared query types behind it. Also unexercised live: an update that sends a configuration, which needs a
-receiver that answers Cloudflare's preflight. The suite has none; a Worker of the account's own, uploaded and
-left answering 200, would serve as one.
+The query is one endpoint and six views, and which fields of the answer are populated moves with the view, so
+`ObservabilityTelemetryQueryResult` carries all of them: `run` and `statistics` always arrive, then `events`,
+`invocations`, `traces`, `agents`, `calculations` or `distribution` when one was asked for - plus `compare`,
+which is the previous period of equal length in the calculations' own shape. Its `AllEvents`,
+`AllInvocations`, `AllTraces`, `AllAgents` and `AllCalculations` read whichever came back as one list, so a
+caller can print a result without first working out what it asked for.
+
+Three of the schema's unions collapse instead of being modelled twice, because their arms are the same shape
+with different fields required: an **invocation is an event** (`invocations` groups the very same objects by
+request id), **`compare` is a `calculations` entry**, and the two arms of an event's `$workers` differ only in
+whether `cpuTimeMs`, `wallTimeMs` and `outcome` are required. The echoed `run.query.parameters` is the one
+place a request type is *not* reused: the request always writes a filter's `kind` discriminator, but the
+schema makes it optional on a leaf, so an echo can carry a filter with no `kind` at all - and reading that
+into the polymorphic tree would fail on a field Cloudflare merely left out.
+`ObservabilityTelemetryRunQueryParameters` therefore keeps the echoed filters as raw `JsonElement`s and
+shares every other type with the request. The integration run logs how many of the echoed filters carried a
+`kind`, so that hedge can be dropped if Cloudflare always sends one.
+
+An aggregate's numbers are estimates when the events behind them were sampled: `sampleInterval` is 1 when
+nothing was and above 1 when `count` and `value` were extrapolated (`IsSampled` says which), `interval` is a
+deprecated alias of it that Cloudflare still sends, and `statistics` - `bytes_read`, `rows_read`, `elapsed`
+in seconds, `abr_level` - is the only part of the answer spelled in snake_case. The query's own schema also
+settles the timestamp unit the keys endpoint left open, asking for "Unix timestamps in milliseconds", so
+`ObservabilityTelemetryTimeframe` now converts both ways through `FromUtc` and `ToUtc`.
+
+A calculation names its operator from `ObservabilityTelemetryCalculationOperators` - thirty-eight spellings
+across the lowercase words and the uppercase ones the dashboard grew, `uniq` and `COUNT_DISTINCT` being the
+same count in two cases - and is not validated against that list, for the reason a filter's operation is not.
+A plain count needs no `key` and everything else does, which `EnsureValid()` checks. `groupBys`, `havings` and
+`orderBy` only apply to the calculations view, and a having's operation *is* a closed set of six, so that one
+is validated.
+
+⛔ Unexercised live: an update that sends a destination `configuration`, which needs a receiver that answers
+Cloudflare's preflight. The suite has none; a Worker of the account's own, uploaded and left answering 200,
+would serve as one.
 
 ---
 

@@ -4,7 +4,9 @@ using CFNet.Models.Workers;
 namespace CFNet.Services;
 
 /// <summary>
-/// Workers Observability: the telemetry destinations an account exports Worker logs, traces and metrics to.
+/// Workers Observability: the telemetry destinations an account exports Worker logs, traces and metrics to,
+/// and the telemetry itself - the keys and values it holds, queries over them, and a live tail of what
+/// arrives.
 /// </summary>
 /// <remarks>
 /// <para>
@@ -15,8 +17,8 @@ namespace CFNet.Services;
 /// slugs defined here.
 /// </para>
 /// <para>
-/// The rest of Workers Observability - querying the telemetry itself, and its live tail - lives under the
-/// same path and is not wrapped yet.
+/// The telemetry itself lives under the same path, in a <c>telemetry</c> sub-path of its own: what keys and
+/// values it holds, running a query over them, and preparing a live tail of what arrives next.
 /// </para>
 /// </remarks>
 public interface IWorkersObservabilityService
@@ -110,6 +112,24 @@ public interface IWorkersObservabilityService
     /// </remarks>
     Task<IReadOnlyList<ObservabilityTelemetryValue>> ListTelemetryValuesAsync(
         ObservabilityTelemetryValuesRequest request,
+        string? accountId = null,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>Runs a query over the account's telemetry.</summary>
+    /// <param name="request">The query id and the span it covers, plus the view and whatever narrows it.</param>
+    /// <param name="accountId">Account id; falls back to the configured default when null.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>The run that executed it, what that cost, and the results the view asked for.</returns>
+    /// <remarks>
+    /// <c>POST /accounts/{account_id}/workers/observability/telemetry/query</c>. One endpoint and six views,
+    /// and which fields of the answer are populated moves with the view - so
+    /// <c>ObservabilityTelemetryQueryResult</c> carries all six shapes, and the properties whose names start
+    /// with <c>All</c> read whichever arrived as one list. Paging is by cursor for the event-shaped views and
+    /// by numeric offset for grouped ones. A <c>dry</c> query runs without persisting its results, which is
+    /// what validating one before saving it needs.
+    /// </remarks>
+    Task<ObservabilityTelemetryQueryResult> QueryTelemetryAsync(
+        ObservabilityTelemetryQueryRequest request,
         string? accountId = null,
         CancellationToken cancellationToken = default);
 
@@ -258,6 +278,24 @@ public sealed class WorkersObservabilityService : CloudflareService, IWorkersObs
             .SendAsync<List<ObservabilityTelemetryValue>>(send, cancellationToken)
             .ConfigureAwait(false);
         return response.Result ?? new List<ObservabilityTelemetryValue>();
+    }
+
+    /// <inheritdoc />
+    public async Task<ObservabilityTelemetryQueryResult> QueryTelemetryAsync(
+        ObservabilityTelemetryQueryRequest request,
+        string? accountId = null,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        request.EnsureValid();
+
+        var send = CloudflareRequest.Post($"{TelemetryPath(ResolveAccountId(accountId))}/query", request);
+        send.OperationName = "Query Observability Telemetry";
+
+        var response = await Transport
+            .SendAsync<ObservabilityTelemetryQueryResult>(send, cancellationToken)
+            .ConfigureAwait(false);
+        return response.EnsureResult();
     }
 
     /// <inheritdoc />

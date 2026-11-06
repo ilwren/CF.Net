@@ -369,9 +369,11 @@ public sealed class ObservabilityTelemetryNeedle
 
 /// <summary>A span of time, in the milliseconds since the epoch that the telemetry endpoints count in.</summary>
 /// <remarks>
-/// Both ends are numbers on the wire and the published schema does not say which unit they count in; a live
-/// <c>lastSeenAt</c> of <c>1793943698985</c> for a key seen that day settled it as milliseconds, and
-/// <see cref="Between(DateTimeOffset, DateTimeOffset)"/> converts so a caller does not have to.
+/// Both ends are numbers on the wire. The schema for the keys and values endpoints does not say which unit
+/// they count in, and a live <c>lastSeenAt</c> of <c>1793943698985</c> for a key seen that day settled it as
+/// milliseconds; the query endpoint's schema then says so outright, asking for "Unix timestamps in
+/// milliseconds" with <c>from</c> earlier than <c>to</c>. <see cref="Between(DateTimeOffset, DateTimeOffset)"/>
+/// converts one way and <see cref="FromUtc"/> and <see cref="ToUtc"/> the other, so a caller never has to.
 /// </remarks>
 public sealed class ObservabilityTelemetryTimeframe
 {
@@ -400,11 +402,25 @@ public sealed class ObservabilityTelemetryTimeframe
             To = ToMilliseconds(to),
         };
 
+    /// <summary>Start of the span as a date, or null when the span has no start.</summary>
+    [JsonIgnore]
+    public DateTimeOffset? FromUtc => From is { } from ? FromMilliseconds(from) : null;
+
+    /// <summary>End of the span as a date, or null when the span has no end.</summary>
+    [JsonIgnore]
+    public DateTimeOffset? ToUtc => To is { } to ? FromMilliseconds(to) : null;
+
     /// <summary>Converts a date to the epoch milliseconds these endpoints count in.</summary>
     /// <param name="timestamp">The date to convert.</param>
     /// <returns>Milliseconds since the epoch.</returns>
     internal static long ToMilliseconds(DateTimeOffset timestamp) =>
         (long)(timestamp.ToUniversalTime() - DateTimeOffset.UnixEpoch).TotalMilliseconds;
+
+    /// <summary>Converts one of those epoch milliseconds back to a date.</summary>
+    /// <param name="milliseconds">Milliseconds since the epoch.</param>
+    /// <returns>The date they count towards, in UTC.</returns>
+    internal static DateTimeOffset FromMilliseconds(long milliseconds) =>
+        DateTimeOffset.FromUnixTimeMilliseconds(milliseconds);
 
     /// <summary>
     /// Checks that both ends are there and in the right order.

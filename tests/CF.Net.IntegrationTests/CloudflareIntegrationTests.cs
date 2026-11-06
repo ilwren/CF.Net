@@ -644,6 +644,174 @@ public class ReadOnlyIntegrationTests : CloudflareIntegrationTest
     }
 
     [Fact]
+    public async Task Workers_observability_telemetry_can_be_queried()
+    {
+        if (!SkipWithoutAccount())
+        {
+            return;
+        }
+
+        // Both queries are dry runs, which execute and answer without persisting their results, so this stays
+        // a read-only fact. Two views are asked for because which fields of the answer are populated moves
+        // with the view: one shape cannot be checked by asking for the other.
+        var to = DateTimeOffset.UtcNow;
+        var from = to.AddHours(-1);
+
+        var eventsQuery = ObservabilityTelemetryQueryRequest.OverSpan(
+            ObservabilityTelemetryViews.Events,
+            from,
+            to);
+        eventsQuery.Dry = true;
+        eventsQuery.Limit = 5;
+        eventsQuery.Parameters = new ObservabilityTelemetryQueryParameters
+        {
+            // Empty means every dataset the account can see.
+            Datasets = new List<string>(),
+            Filters = new List<ObservabilityTelemetryFilterNode>
+            {
+                ObservabilityTelemetryFilter.Of(
+                    "$metadata.level",
+                    ObservabilityFilterOperations.Equal,
+                    ObservabilityTelemetryValueTypes.String,
+                    "error"),
+            },
+            Needle = ObservabilityTelemetryNeedle.Literal("cfnet"),
+            Limit = 5,
+        };
+
+        ObservabilityTelemetryQueryResult events;
+        try
+        {
+            events = await Client.WorkersObservability.QueryTelemetryAsync(eventsQuery);
+        }
+        catch (CloudflareApiException exception)
+            when (exception.StatusCode is System.Net.HttpStatusCode.Forbidden or System.Net.HttpStatusCode.NotFound)
+        {
+            SkipUnless(
+                false,
+                $"POST /accounts/{{account_id}}/workers/observability/telemetry/query was refused with " +
+                $"{exception.StatusCode}/{exception.ErrorCode}: {exception.Message}");
+            return;
+        }
+        catch (CloudflareApiException exception)
+        {
+            // A 400 here means the body this library built is the wrong shape, and Cloudflare's body is the
+            // only thing that says which field it objected to.
+            Warn($"POST /accounts/{{account_id}}/workers/observability/telemetry/query (events view) was " +
+                 $"refused with {exception.StatusCode}/{exception.ErrorCode}. Cloudflare's body: " +
+                 $"{exception.ResponseBody}. The request sent: " +
+                 $"{JsonSerializer.Serialize(eventsQuery, CFNet.Serialization.CloudflareJson.Default)}");
+            return;
+        }
+
+        Assert.NotNull(events.Run);
+        Assert.False(string.IsNullOrEmpty(events.Run!.Id));
+        Assert.NotNull(events.Statistics);
+        Log($"events view: {events.Run.Status} {events.Statistics}; " +
+            $"{events.AllEvents.Count} event(s) of a reported {events.Events?.Count}");
+
+        // A run echoes the query it executed. Its filters are read as raw JSON because a leaf may come back
+        // with no "kind", which is what the request always writes; say which it was, so that hedge can be
+        // dropped if Cloudflare always sends one.
+        if (events.Run.Query?.Parameters?.Filters is { Count: > 0 } echoed)
+        {
+            Log($"{echoed.Count} echoed filter(s), {echoed.Count(filter => filter.TryGetProperty("kind", out _))} " +
+                $"of them carrying a kind");
+        }
+        else
+        {
+            Log("the run echoed no filters back");
+        }
+
+        foreach (var unmodelled in new[]
+                 {
+                     ("result", events.AdditionalData),
+                     ("run", events.Run.AdditionalData),
+                     ("events", events.Events?.AdditionalData),
+                     ("event", events.AllEvents.FirstOrDefault()?.AdditionalData),
+                     ("$metadata", events.AllEvents.FirstOrDefault()?.Metadata?.AdditionalData),
+                 }.Where(pair => pair.Item2 is { Count: > 0 }))
+        {
+            Warn($"POST /accounts/{{account_id}}/workers/observability/telemetry/query answered " +
+                 $"{unmodelled.Item1} fields this library does not model yet: " +
+                 $"{JsonSerializer.Serialize(unmodelled.Item2)}.");
+        }
+
+        var calculationsQuery = ObservabilityTelemetryQueryRequest.OverSpan(
+            ObservabilityTelemetryViews.Calculations,
+            from,
+            to);
+        calculationsQuery.Dry = true;
+        calculationsQuery.Chart = true;
+        calculationsQuery.Granularity = 10;
+        calculationsQuery.Parameters = new ObservabilityTelemetryQueryParameters
+        {
+            Datasets = new List<string>(),
+            Calculations = new List<ObservabilityTelemetryCalculation>
+            {
+                ObservabilityTelemetryCalculation.Count("hits"),
+                ObservabilityTelemetryCalculation.Of(
+                    "$metadata.duration",
+                    ObservabilityTelemetryCalculationOperators.P99,
+                    "slowest",
+                    ObservabilityTelemetryValueTypes.Number),
+            },
+            GroupBys = new List<ObservabilityTelemetryGroupBy>
+            {
+                ObservabilityTelemetryGroupBy.On(
+                    "$metadata.service",
+                    ObservabilityTelemetryValueTypes.String),
+            },
+            Havings = new List<ObservabilityTelemetryHaving>
+            {
+                ObservabilityTelemetryHaving.Of(
+                    "hits",
+                    ObservabilityFilterOperations.GreaterThan,
+                    0),
+            },
+            OrderBy = ObservabilityTelemetryOrderBy.Descending("hits"),
+            Limit = 5,
+        };
+
+        try
+        {
+            var calculations = await Client.WorkersObservability.QueryTelemetryAsync(calculationsQuery);
+
+            Assert.NotNull(calculations.Run);
+            Log($"calculations view: {calculations.Run!.Status} {calculations.Statistics}; " +
+                $"{calculations.AllCalculations.Count} calculation(s)");
+
+            foreach (var calculation in calculations.AllCalculations)
+            {
+                Log($"calculation {calculation}: {calculation.Aggregates?.Count ?? 0} aggregate(s), " +
+                    $"{calculation.Series?.Count ?? 0} series bucket(s)");
+                foreach (var aggregate in (calculation.Aggregates ??
+                                           new List<ObservabilityTelemetryAggregate>()).Take(3))
+                {
+                    // An account with no traffic aggregates to nothing, so the numbers are logged, not
+                    // asserted; whether they were estimated from sampled events is the part that matters.
+                    Log($"  aggregate {aggregate} sampled={aggregate.IsSampled} groups=" +
+                        $"{string.Join(",", (aggregate.Groups ?? new List<ObservabilityTelemetryGroup>()).Select(group => group.ToString()))}");
+                }
+            }
+
+            if (calculations.AdditionalData is { Count: > 0 })
+            {
+                Warn($"POST /accounts/{{account_id}}/workers/observability/telemetry/query answered result " +
+                     $"fields this library does not model yet: " +
+                     $"{JsonSerializer.Serialize(calculations.AdditionalData)}.");
+            }
+        }
+        catch (CloudflareApiException exception)
+        {
+            Warn($"POST /accounts/{{account_id}}/workers/observability/telemetry/query (calculations view) " +
+                 $"was refused with {exception.StatusCode}/{exception.ErrorCode}. Cloudflare's body: " +
+                 $"{exception.ResponseBody}. The request sent: " +
+                 $"{JsonSerializer.Serialize(calculationsQuery, CFNet.Serialization.CloudflareJson.Default)}");
+        }
+    }
+
+    [Fact]
     public async Task Workers_observability_destinations_can_be_listed()
     {
         if (!SkipWithoutAccount())

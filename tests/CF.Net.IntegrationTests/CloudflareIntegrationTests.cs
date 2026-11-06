@@ -622,7 +622,7 @@ public class ReadOnlyIntegrationTests : CloudflareIntegrationTest
                     PerPage = 5,
                 });
 
-            Log($"the filtered list answered {filtered.Count} destination(s)");
+            Log($"the filtered list answered {filtered.Count} destination(s) with the camelCase filters");
         }
         catch (CloudflareApiException exception)
         {
@@ -1152,12 +1152,17 @@ public class WriteIntegrationTests : CloudflareIntegrationTest
             }
             catch (CloudflareApiException exception)
             {
-                // Exporting telemetry may be plan-gated, and a refusal says that better than a failed
-                // assertion would.
+                // A 400 here is about the body this library sends rather than about entitlement, so the whole
+                // of it goes out on the long channel: a skip reason is truncated in the run report and would
+                // hide the field Cloudflare objected to.
+                Warn($"POST /accounts/{{account_id}}/workers/observability/destinations was refused with " +
+                     $"{exception.StatusCode}/{exception.ErrorCode}. Cloudflare's body: {exception.ResponseBody} " +
+                     $"This library sent: {JsonSerializer.Serialize(request)}. {exception.Message}");
+
                 SkipUnless(
                     false,
                     $"POST /accounts/{{account_id}}/workers/observability/destinations was refused with " +
-                    $"{exception.StatusCode}/{exception.ErrorCode}: {exception.Message}");
+                    $"{exception.StatusCode}/{exception.ErrorCode}: see the Learned line for what Cloudflare said.");
                 return;
             }
 
@@ -1203,7 +1208,8 @@ public class WriteIntegrationTests : CloudflareIntegrationTest
             catch (CloudflareApiException exception)
             {
                 Warn($"PATCH /accounts/{{account_id}}/workers/observability/destinations/{slug} was refused " +
-                     $"with {exception.StatusCode}/{exception.ErrorCode}: {exception.Message}");
+                     $"with {exception.StatusCode}/{exception.ErrorCode}. Cloudflare's body: " +
+                     $"{exception.ResponseBody}");
             }
 
             // The delete answers with the destination it deleted rather than an empty success.

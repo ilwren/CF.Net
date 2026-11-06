@@ -1090,6 +1090,10 @@ Three things here are not what the product's name suggests:
   thing as a value this library has not heard of. `TurnstileDeploymentSource` carries both: `NotRecorded` for
   Cloudflare's `unknown`, `Unknown` for the sentinel every enum here has.
 
+Cloudflare validates every hostname in `domains` and refuses a pattern it does not accept: a live `PUT`
+carrying `*.example.org` answered **400 `invalid value in \`domains\`, found invalid hostname`**. Nothing here
+validates a hostname itself — Cloudflare is the authority on which ones it accepts, and it says so at once.
+
 `offlabel` is one word on the wire and one word here, not `off_label`. Both timestamps are kept as the strings
 that arrived, with `CreatedOnUtc` and `ModifiedOnUtc` beside them, because Workers AI proved that one product
 area can answer a timestamp in a shape no example shows — a change there is then a one-line fix rather than a

@@ -203,6 +203,28 @@ public class TurnstileServiceTests
     }
 
     [Fact]
+    public async Task A_hostname_Cloudflare_may_refuse_is_still_sent_for_Cloudflare_to_refuse()
+    {
+        using var harness = CloudflareHarness.Create();
+        harness.RespondWithResult(
+            """{"sitekey":"0x4AAAAAAADnPIDROrmt1Wwj","name":"cf-net widget","mode":"managed","domains":["*.example.org"],"secret":"0x4AAAAAAABcDeFgHiJkLmNoPqRsTuVwXyZ"}""");
+
+        // A wildcard subdomain is not a hostname Cloudflare accepts - a live PUT answered 400 with "invalid
+        // value in `domains`, found invalid hostname" - but which hostnames it accepts is its call to make,
+        // not this library's. The domain goes out exactly as it was given, and the refusal comes back as a
+        // CloudflareApiException that quotes Cloudflare's own words.
+        await harness.Client.Turnstile.CreateAsync(
+            new TurnstileWidgetRequest
+            {
+                Name = "cf-net widget",
+                Mode = TurnstileWidgetMode.Managed,
+                Domains = new List<string> { "*.example.org" },
+            });
+
+        Assert.Contains("*.example.org", harness.LastRequest.Body, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task UpdateAsync_puts_the_whole_widget_because_a_put_replaces_it()
     {
         using var harness = CloudflareHarness.Create();

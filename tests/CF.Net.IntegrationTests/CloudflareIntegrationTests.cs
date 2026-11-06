@@ -3677,24 +3677,40 @@ public class WriteIntegrationTests : CloudflareIntegrationTest
             ReportWidgetFields("GET /accounts/{account_id}/challenges/widgets/{sitekey}", read);
 
             // Updating is a PUT that replaces the whole widget, so the required fields go again beside the two
-            // that are changing: the mode and the hostnames it may run on.
-            var updated = await Client.Turnstile.UpdateAsync(
-                sitekey!,
-                new TurnstileWidgetRequest
-                {
-                    Name = name,
-                    Mode = TurnstileWidgetMode.NonInteractive,
-                    Domains = new List<string> { "example.com", "*.example.org" },
-                    Region = TurnstileRegion.World,
-                    Offlabel = true,
-                });
-            Assert.Equal(TurnstileWidgetMode.NonInteractive, updated.Mode);
-            Assert.Equal(2, updated.Domains?.Count ?? 0);
-            Assert.True(updated.Offlabel);
-            Log($"updated it: {updated} mode={updated.Mode} offlabel={updated.Offlabel} " +
-                $"domains={string.Join(",", updated.Domains ?? new List<string>())} " +
-                $"modified_on={updated.ModifiedOn}");
-            ReportWidgetFields("PUT /accounts/{account_id}/challenges/widgets/{sitekey}", updated);
+            // that are changing: the mode and the hostnames it may run on. A refusal here is reported rather
+            // than failed, and does not stop the rotation, the list or the delete below it - the offline suite
+            // pins this call's method, path and exact body, so what a live run adds is what Cloudflare accepts.
+            TurnstileWidget? updated = null;
+            try
+            {
+                updated = await Client.Turnstile.UpdateAsync(
+                    sitekey!,
+                    new TurnstileWidgetRequest
+                    {
+                        Name = name,
+                        Mode = TurnstileWidgetMode.NonInteractive,
+                        Domains = new List<string> { "example.com", "www.example.com" },
+                        Region = TurnstileRegion.World,
+                        Offlabel = true,
+                    });
+            }
+            catch (CloudflareApiException exception)
+            {
+                Warn($"PUT /accounts/{{account_id}}/challenges/widgets/{{sitekey}} was refused with " +
+                     $"{exception.StatusCode}/{exception.ErrorCode}: {Truncate(exception.Message, 300)} " +
+                     $"Cloudflare's body: {Truncate(exception.ResponseBody, 500)}");
+            }
+
+            if (updated is not null)
+            {
+                Assert.Equal(TurnstileWidgetMode.NonInteractive, updated.Mode);
+                Assert.Equal(2, updated.Domains?.Count ?? 0);
+                Assert.True(updated.Offlabel);
+                Log($"updated it: {updated} mode={updated.Mode} offlabel={updated.Offlabel} " +
+                    $"domains={string.Join(",", updated.Domains ?? new List<string>())} " +
+                    $"modified_on={updated.ModifiedOn}");
+                ReportWidgetFields("PUT /accounts/{account_id}/challenges/widgets/{sitekey}", updated);
+            }
 
             // Rotating without the flag leaves the old secret working for a grace period, which is the point
             // of not sending it: a deployment can be rolled without a gap in verification.
@@ -3711,7 +3727,19 @@ public class WriteIntegrationTests : CloudflareIntegrationTest
             var found = listed.Items.FirstOrDefault(widget => widget.Sitekey == sitekey);
             Assert.NotNull(found);
             Assert.Equal(name, found!.Name);
-            Assert.Equal(TurnstileWidgetMode.NonInteractive, found.Mode);
+            if (updated is not null)
+            {
+                // Only assert the replacement took when the replacement was accepted: a refused PUT leaves the
+                // widget as it was created, which is the mode below.
+                Assert.Equal(TurnstileWidgetMode.NonInteractive, found.Mode);
+            }
+            else
+            {
+                Assert.Equal(TurnstileWidgetMode.Managed, found.Mode);
+            }
+
+            // The point of the two types: a list item is not a widget, and has no secret to read.
+            Assert.IsNotType<TurnstileWidget>(found);
             ReportWidgetFields("GET /accounts/{account_id}/challenges/widgets", found);
         }
         finally

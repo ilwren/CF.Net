@@ -39,8 +39,11 @@ public class TurnstileWidgetSummary
     public TurnstileWidgetMode? Mode { get; set; }
 
     /// <summary>
-    /// The hostnames the widget is allowed to run on. A managed widget may carry <c>*</c>, which is every
-    /// hostname; Cloudflare publishes no other grammar for one.
+    /// The hostnames the widget is allowed to run on. Cloudflare validates every one of them and refuses a
+    /// pattern it does not accept: a live <c>PUT</c> carrying <c>*.example.org</c> answered 400 with
+    /// <c>invalid value in `domains`, found invalid hostname</c>, so a wildcard subdomain is not one, however
+    /// the dashboard's "all hostnames" is spelled. Nothing here validates a hostname itself - Cloudflare is
+    /// the authority on which ones it accepts, and it says so immediately.
     /// </summary>
     [JsonPropertyName("domains")]
     public List<string>? Domains { get; set; }
@@ -141,8 +144,9 @@ public sealed class TurnstileWidgetRequest
     public TurnstileWidgetMode? Mode { get; set; }
 
     /// <summary>
-    /// The hostnames the widget may run on, which replace any it had. <c>*</c> is every hostname; Cloudflare
-    /// publishes no other grammar for one.
+    /// The hostnames the widget may run on, which replace any it had. Each has to be one Cloudflare accepts -
+    /// a wildcard subdomain such as <c>*.example.org</c> is refused with 400 and
+    /// <c>invalid value in `domains`, found invalid hostname</c>, as a live <c>PUT</c> reported.
     /// </summary>
     [JsonPropertyName("domains")]
     public List<string>? Domains { get; set; }
@@ -190,9 +194,8 @@ public sealed class TurnstileWidgetRequest
         if (Domains is not { Count: > 0 })
         {
             problems.Add(
-                "domains is required and cannot be empty: a widget runs on the hostnames listed here, and " +
-                "'*' is how Cloudflare writes every hostname. An update replaces the list, so sending none " +
-                "would not leave the widget's hostnames alone.");
+                "domains is required and cannot be empty: a widget runs on the hostnames listed here. An " +
+                "update replaces the list, so sending none would not leave the widget's hostnames alone.");
         }
         else if (Domains.Any(string.IsNullOrWhiteSpace))
         {

@@ -743,104 +743,140 @@ public class ReadOnlyIntegrationTests : CloudflareIntegrationTest
             return;
         }
 
-        // The account's own jobs first. There are none unless one was created, and creating one is a write
-        // that needs Workers AI Write and bills training time, so an empty list is the expected answer - what
-        // is interesting is the kind of answer, because this endpoint's published 200 example is a single
-        // object where its own summary promises a list of every job.
-        IReadOnlyList<WorkersAiFinetune> jobs;
+        // Three lists beside the catalogue, each read on its own: an account with no fine-tuning jobs answers
+        // none, Cloudflare's published ones are its own rather than the account's, and the to-markdown formats
+        // are what a conversion this library cannot send would accept. Creating a fine-tune is a write that
+        // needs Workers AI Write and bills training time, so nothing here writes.
+        var jobs = await TryReadAsync(
+            "GET /accounts/{account_id}/ai/finetunes",
+            () => Client.WorkersAi.ListFinetunesAsync());
+        if (jobs is not null)
+        {
+            Log($"{jobs.Count} fine-tuning job(s): {string.Join(", ", jobs.Take(5))}");
+            Assert.All(jobs, job => Assert.False(string.IsNullOrEmpty(job.Id)));
+            ReportUnmodelled("GET /accounts/{account_id}/ai/finetunes", jobs, job => job.AdditionalData);
+        }
+
+        // limit and offset page this list; orderBy is left out because its accepted values are not published
+        // and a wrong one is a 400 rather than an empty page.
+        var published = await TryReadAsync(
+            "GET /accounts/{account_id}/ai/finetunes/public",
+            () => Client.WorkersAi.ListPublicFinetunesAsync(
+                new WorkersAiPublicFinetuneListParameters { Limit = 5 }));
+        if (published is not null)
+        {
+            Log($"{published.Count} published fine-tune(s): {string.Join(", ", published.Take(5))}");
+            Assert.All(published, job => Assert.False(string.IsNullOrEmpty(job.Name)));
+            ReportUnmodelled(
+                "GET /accounts/{account_id}/ai/finetunes/public",
+                published,
+                job => job.AdditionalData);
+        }
+
+        // The conversion itself, with the smallest file worth converting: it is a POST that runs a model over
+        // the bytes, so it costs a few tokens, and a refusal to spend them is reported rather than failed.
+        var conversions = await TryReadAsync(
+            "POST /accounts/{account_id}/ai/tomarkdown",
+            () => Client.WorkersAi.ConvertToMarkdownAsync(
+                new[]
+                {
+                    WorkersAiToMarkdownFile.OfHtml(
+                        "cf-net.html",
+                        "<h1>CF.Net</h1><p>A typed Cloudflare API v4 client.</p>"),
+                }));
+        if (conversions is not null)
+        {
+            Assert.NotEmpty(conversions);
+            Log($"{conversions.Count} conversion(s); the first read {conversions[0].Name} as " +
+                $"{conversions[0].Format} in {conversions[0].Tokens} token(s): " +
+                $"{Truncate(conversions[0].Data, 200)}");
+            ReportUnmodelled(
+                "POST /accounts/{account_id}/ai/tomarkdown",
+                conversions,
+                conversion => conversion.AdditionalData);
+        }
+
+        var formats = await TryReadAsync(
+            "GET /accounts/{account_id}/ai/tomarkdown/supported",
+            () => Client.WorkersAi.ListToMarkdownFormatsAsync());
+        if (formats is not null)
+        {
+            Log($"{formats.Count} to-markdown format(s): {string.Join(", ", formats.Take(10))}");
+            if (formats.Count == 0)
+            {
+                Warn("GET /accounts/{account_id}/ai/tomarkdown/supported answered 200 with no formats at all, " +
+                     "so there is nothing to say about what the conversion accepts.");
+                return;
+            }
+
+            Assert.All(formats, format => Assert.False(string.IsNullOrEmpty(format.Extension)));
+            Assert.All(formats, format => Assert.False(string.IsNullOrEmpty(format.MimeType)));
+            ReportUnmodelled(
+                "GET /accounts/{account_id}/ai/tomarkdown/supported",
+                formats,
+                format => format.AdditionalData);
+        }
+    }
+
+    /// <summary>
+    /// Reads one of a fact's lists, reporting a refusal - or a body this library could not read as the shape
+    /// it models - as one Warn and answering null instead of failing.
+    /// </summary>
+    /// <remarks>
+    /// A list that changed shape under a fact is worth a line and not worth hiding the two lists beside it:
+    /// the run that found <c>"public": 1</c> and a timestamp with no offset in it reported one and returned
+    /// before it ever asked for the to-markdown formats. The exception's message comes first in the Warn
+    /// because that is where a parse failure names the field it choked on; the status and error code, which
+    /// are what a refusal carries, come after it.
+    /// </remarks>
+    private async Task<IReadOnlyList<T>?> TryReadAsync<T>(string endpoint, Func<Task<IReadOnlyList<T>>> read)
+    {
         try
         {
-            jobs = await Client.WorkersAi.ListFinetunesAsync();
+            return await read().ConfigureAwait(false);
         }
         catch (CloudflareApiException exception)
         {
-            Warn($"GET /accounts/{{account_id}}/ai/finetunes was refused with " +
-                 $"{exception.StatusCode}/{exception.ErrorCode}. Cloudflare's body: {exception.ResponseBody}");
-            return;
+            Warn($"{endpoint} was refused with {exception.StatusCode}/{exception.ErrorCode}: " +
+                 $"{Truncate(exception.Message, 400)} Cloudflare's body: {Truncate(exception.ResponseBody, 600)}");
+            return null;
         }
         catch (Exception exception) when (exception is not CloudflareApiException)
         {
-            Warn($"GET /accounts/{{account_id}}/ai/finetunes answered something this library could not read as " +
-                 $"a fine-tune list: {exception.GetType().Name}: {exception.Message}");
-            return;
-        }
-
-        Log($"{jobs.Count} fine-tuning job(s): {string.Join(", ", jobs.Take(5))}");
-        Assert.All(jobs, job => Assert.False(string.IsNullOrEmpty(job.Id)));
-        foreach (var job in jobs.Take(3))
-        {
-            if (job.AdditionalData is { Count: > 0 })
-            {
-                Warn($"GET /accounts/{{account_id}}/ai/finetunes answered fine-tune fields this library does " +
-                     $"not model: {string.Join(", ", job.AdditionalData.Keys)} - its summary promises status " +
-                     $"and metrics and its published shape has neither. The item as read: " +
-                     $"{JsonSerializer.Serialize(job, CFNet.Serialization.CloudflareJson.Default)}");
-            }
-        }
-
-        // The published jobs are Cloudflare's rather than the account's, so this list can answer items even
-        // when the one above does not. limit and offset page it; orderBy is left out here because its accepted
-        // values are not published and a wrong one is a 400 rather than an empty page.
-        IReadOnlyList<WorkersAiFinetune> published;
-        try
-        {
-            published = await Client.WorkersAi.ListPublicFinetunesAsync(
-                new WorkersAiPublicFinetuneListParameters { Limit = 5 });
-        }
-        catch (CloudflareApiException exception)
-        {
-            Warn($"GET /accounts/{{account_id}}/ai/finetunes/public was refused with " +
-                 $"{exception.StatusCode}/{exception.ErrorCode}. Cloudflare's body: {exception.ResponseBody}");
-            return;
-        }
-
-        Log($"{published.Count} published fine-tune(s): {string.Join(", ", published.Take(5))}");
-        Assert.All(published, job => Assert.False(string.IsNullOrEmpty(job.Id)));
-        foreach (var job in published.Take(3))
-        {
-            if (job.AdditionalData is { Count: > 0 })
-            {
-                Warn($"GET /accounts/{{account_id}}/ai/finetunes/public answered fine-tune fields this library " +
-                     $"does not model: {string.Join(", ", job.AdditionalData.Keys)}. The item as read: " +
-                     $"{JsonSerializer.Serialize(job, CFNet.Serialization.CloudflareJson.Default)}");
-            }
-        }
-
-        // The readable half of to-markdown: what the conversion this library cannot send would accept. The
-        // conversion itself is a multipart upload of one or more files, which a JSON-only request body cannot
-        // express, so the format list is the whole of this endpoint pair that is wrapped.
-        IReadOnlyList<WorkersAiToMarkdownFormat> formats;
-        try
-        {
-            formats = await Client.WorkersAi.ListToMarkdownFormatsAsync();
-        }
-        catch (CloudflareApiException exception)
-        {
-            Warn($"GET /accounts/{{account_id}}/ai/tomarkdown/supported was refused with " +
-                 $"{exception.StatusCode}/{exception.ErrorCode}. Cloudflare's body: {exception.ResponseBody}");
-            return;
-        }
-
-        Log($"{formats.Count} to-markdown format(s): {string.Join(", ", formats.Take(10))}");
-        if (formats.Count == 0)
-        {
-            Warn("GET /accounts/{account_id}/ai/tomarkdown/supported answered 200 with no formats at all, so " +
-                 "there is nothing to say about what the conversion accepts.");
-            return;
-        }
-
-        Assert.All(formats, format => Assert.False(string.IsNullOrEmpty(format.Extension)));
-        Assert.All(formats, format => Assert.False(string.IsNullOrEmpty(format.MimeType)));
-        foreach (var format in formats.Take(3))
-        {
-            if (format.AdditionalData is { Count: > 0 })
-            {
-                Warn($"GET /accounts/{{account_id}}/ai/tomarkdown/supported answered format fields this library " +
-                     $"does not model: {string.Join(", ", format.AdditionalData.Keys)}. The item as read: " +
-                     $"{JsonSerializer.Serialize(format, CFNet.Serialization.CloudflareJson.Default)}");
-            }
+            Warn($"{endpoint} answered something this library could not read: {exception.GetType().Name}: " +
+                 $"{Truncate(exception.Message, 400)}");
+            return null;
         }
     }
+
+    /// <summary>
+    /// Warns once for each of the first few items in a list that carries fields this library does not name,
+    /// which is how a published shape that understates a live answer gets found.
+    /// </summary>
+    private void ReportUnmodelled<T>(
+        string endpoint,
+        IReadOnlyList<T> items,
+        Func<T, IDictionary<string, JsonElement>?> unmodelled,
+        int lookAt = 3)
+    {
+        foreach (var item in items.Take(lookAt))
+        {
+            if (unmodelled(item) is not { Count: > 0 } extras)
+            {
+                continue;
+            }
+
+            Warn($"{endpoint} answered fields this library does not model: {string.Join(", ", extras.Keys)}. " +
+                 $"The item as read: " +
+                 $"{Truncate(JsonSerializer.Serialize(item, CFNet.Serialization.CloudflareJson.Default), 800)}");
+        }
+    }
+
+    /// <summary>Cuts a diagnostic down to what a Warn has room for, saying that it did.</summary>
+    private static string Truncate(string? text, int longest) =>
+        string.IsNullOrEmpty(text) || text.Length <= longest
+            ? text ?? string.Empty
+            : text[..longest] + "…";
 
 
     [Fact]

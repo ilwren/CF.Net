@@ -179,6 +179,29 @@ public interface IWorkersAiService
     Task<IReadOnlyList<WorkersAiToMarkdownFormat>> ListToMarkdownFormatsAsync(
         string? accountId = null,
         CancellationToken cancellationToken = default);
+
+    /// <summary>Converts one or more files to Markdown.</summary>
+    /// <param name="files">The files to convert, each a name, its bytes and the type to send them as.</param>
+    /// <param name="accountId">Account id; falls back to the configured default when null.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>One conversion per file, whose <c>Data</c> is the Markdown.</returns>
+    /// <remarks>
+    /// <para>
+    /// <c>POST /accounts/{account_id}/ai/tomarkdown</c>, a <b>multipart/form-data</b> upload in which every
+    /// part is named <c>files</c> - one part per file - and the answer is a bare array of
+    /// <see cref="WorkersAiToMarkdownConversion"/>. Cloudflare reads a file from its name and the type it
+    /// arrives with rather than from anything in the body, so both go out on the part.
+    /// </para>
+    /// <para>
+    /// A conversion with no files in it, a file with no name, or a file with nothing in it is refused locally:
+    /// Cloudflare cannot convert any of them, and saying so here names the file rather than leaving a caller
+    /// with a 400 about one part among several.
+    /// </para>
+    /// </remarks>
+    Task<IReadOnlyList<WorkersAiToMarkdownConversion>> ConvertToMarkdownAsync(
+        IEnumerable<WorkersAiToMarkdownFile> files,
+        string? accountId = null,
+        CancellationToken cancellationToken = default);
 }
 
 /// <inheritdoc />
@@ -363,6 +386,62 @@ public sealed class WorkersAiService : CloudflareService, IWorkersAiService
             .SendAsync<List<WorkersAiToMarkdownFormat>>(request, cancellationToken)
             .ConfigureAwait(false);
         return response.Result ?? new List<WorkersAiToMarkdownFormat>();
+    }
+
+    /// <inheritdoc />
+    public async Task<IReadOnlyList<WorkersAiToMarkdownConversion>> ConvertToMarkdownAsync(
+        IEnumerable<WorkersAiToMarkdownFile> files,
+        string? accountId = null,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(files);
+        var uploads = files.ToList();
+        var problems = new List<string>();
+
+        if (uploads.Count == 0)
+        {
+            problems.Add("a conversion needs at least one file, and this request has none.");
+        }
+
+        foreach (var file in uploads)
+        {
+            if (string.IsNullOrWhiteSpace(file.FileName))
+            {
+                problems.Add(
+                    "a file to convert needs a name: its extension is what tells Cloudflare what it is, since " +
+                    "nothing in a multipart part says so.");
+            }
+
+            if (file.Content is not { Length: > 0 })
+            {
+                problems.Add($"the file '{file.FileName}' has nothing in it, so there is nothing to convert.");
+            }
+        }
+
+        if (problems.Count > 0)
+        {
+            throw new CFNet.Exceptions.CloudflareConfigurationException(problems);
+        }
+
+        var body = new MultipartRequestBody();
+        foreach (var file in uploads)
+        {
+            // Every part is named "files", one per file, which is how Cloudflare's own client sends several.
+            body.AddFile("files", file.Content!, file.ContentType, file.FileName);
+        }
+
+        var cloudflareRequest = new CloudflareRequest(
+            HttpMethod.Post,
+            $"{AiPath(ResolveAccountId(accountId))}/tomarkdown")
+        {
+            Body = body,
+            OperationName = "Convert Files To Markdown",
+        };
+
+        var response = await Transport
+            .SendAsync<List<WorkersAiToMarkdownConversion>>(cloudflareRequest, cancellationToken)
+            .ConfigureAwait(false);
+        return response.Result ?? new List<WorkersAiToMarkdownConversion>();
     }
 
     /// <summary>

@@ -887,4 +887,71 @@ public class ZonePublishedExampleTests
         Assert.NotNull(zone.Meta?.AdditionalData);
         Assert.True(zone.Meta!.AdditionalData!.ContainsKey("foundation_dns"));
     }
+
+    [Fact]
+    public void A_flag_Cloudflare_wrote_as_a_number_or_a_word_still_reads_as_a_flag()
+    {
+        // GET …/ai/finetunes/public answered "public": 1 where the field's published shape says boolean, so a
+        // model that declares the flag with the tolerant converter reads every way Cloudflare writes one - and
+        // a blank string or a null is nothing said rather than a flag set to false.
+        var jobs = JsonSerializer.Deserialize<List<CFNet.Models.WorkersAi.WorkersAiFinetune>>(
+            """[{"public":true},{"public":false},{"public":1},{"public":0},{"public":"true"},{"public":"0"},{"public":"yes"},{"public":""},{"public":null},{"public":2.5}]""",
+            CloudflareJson.Default)!;
+
+        Assert.Equal(
+            new bool?[] { true, false, true, false, true, false, true, null, null, true },
+            jobs.Select(job => job.Public).ToArray());
+
+        // Whichever way a flag was read, it is written as a flag - and a null is written as null by the
+        // converter, though this library's writer omits a null property before ever asking it.
+        Assert.Equal("true", JsonSerializer.Serialize((bool?)true, new TolerantBooleanConverter()));
+        Assert.Equal("null", JsonSerializer.Serialize((bool?)null, new TolerantBooleanConverter()));
+        Assert.Equal(
+            """{"public":true}""",
+            JsonSerializer.Serialize(
+                new CFNet.Models.WorkersAi.WorkersAiFinetune { Public = true },
+                CloudflareJson.Default));
+        Assert.Equal(
+            "{}",
+            JsonSerializer.Serialize(
+                new CFNet.Models.WorkersAi.WorkersAiFinetune { Public = null },
+                CloudflareJson.Default));
+
+        // A word that is not a word for a flag is refused loudly, as anything else this library cannot read is.
+        Assert.Throws<JsonException>(() => JsonSerializer.Deserialize<CFNet.Models.WorkersAi.WorkersAiFinetune>(
+            """{"public":"perhaps"}""",
+            CloudflareJson.Default));
+    }
+
+    [Fact]
+    public void The_two_ways_Cloudflare_writes_a_timestamp_both_read_as_one_instant()
+    {
+        // ISO 8601 with its offset, which is most of the API, and the space-separated form Workers AI answers
+        // with no offset at all, which the strict ISO 8601 reader refuses outright.
+        Assert.Equal(
+            new DateTimeOffset(2019, 12, 27, 18, 11, 19, 117, TimeSpan.Zero),
+            CloudflareTimestamps.Read("2019-12-27T18:11:19.117Z")!.Value);
+        Assert.Equal(
+            new DateTimeOffset(2024, 5, 8, 2, 23, 55, 897, TimeSpan.Zero),
+            CloudflareTimestamps.Read("2024-05-08 02:23:55.897")!.Value);
+
+        // An offset that is not UTC is honoured and then brought to UTC, so two answers from two endpoints can
+        // be compared without either being converted first.
+        Assert.Equal(
+            new DateTimeOffset(2024, 5, 8, 0, 0, 0, TimeSpan.Zero),
+            CloudflareTimestamps.Read("2024-05-08T02:00:00+02:00")!.Value);
+
+        // A whole second, and a date on its own.
+        Assert.Equal(
+            new DateTimeOffset(2024, 5, 8, 2, 23, 55, TimeSpan.Zero),
+            CloudflareTimestamps.Read("2024-05-08 02:23:55")!.Value);
+        Assert.Equal(
+            new DateTimeOffset(2024, 5, 8, 0, 0, 0, TimeSpan.Zero),
+            CloudflareTimestamps.Read("2024-05-08")!.Value);
+
+        // Nothing said, and something said that is not a timestamp.
+        Assert.Null(CloudflareTimestamps.Read(null));
+        Assert.Null(CloudflareTimestamps.Read("   "));
+        Assert.Null(CloudflareTimestamps.Read("not a timestamp"));
+    }
 }

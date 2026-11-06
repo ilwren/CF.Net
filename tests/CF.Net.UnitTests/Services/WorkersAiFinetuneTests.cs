@@ -49,10 +49,14 @@ public class WorkersAiFinetuneTests
         Assert.Equal("support-replies", job.Name);
         Assert.Equal("@cf/meta/llama-3.2-1b-instruct", job.Model);
         Assert.Equal("Trained on this account's support replies.", job.Description);
+        // The published example writes ISO 8601 and a live answer does not, so the string that arrived is what
+        // is kept - and both read as one instant, at offset zero.
+        Assert.Equal("2019-12-27T18:11:19.117Z", job.CreatedAt);
+        Assert.Equal("2019-12-28T09:00:00Z", job.ModifiedAt);
         Assert.Equal(
             new DateTimeOffset(2019, 12, 27, 18, 11, 19, 117, TimeSpan.Zero),
-            job.CreatedAt!.Value);
-        Assert.Equal(new DateTimeOffset(2019, 12, 28, 9, 0, 0, TimeSpan.Zero), job.ModifiedAt!.Value);
+            job.CreatedAtUtc!.Value);
+        Assert.Equal(new DateTimeOffset(2019, 12, 28, 9, 0, 0, TimeSpan.Zero), job.ModifiedAtUtc!.Value);
 
         // Nothing in the published shape is left over.
         Assert.True(job.AdditionalData is not { Count: > 0 });
@@ -89,6 +93,32 @@ public class WorkersAiFinetuneTests
         Assert.Empty(await harness.Client.WorkersAi.ListFinetunesAsync());
         Assert.Single(await harness.Client.WorkersAi.ListFinetunesAsync());
         Assert.Equal(2, harness.RequestCount);
+    }
+
+    [Fact]
+    public async Task A_live_published_finetune_reads_its_number_as_a_flag_and_its_timestamp_as_an_instant()
+    {
+        using var harness = CloudflareHarness.Create();
+
+        // The item exactly as GET …/ai/finetunes/public answered it live: public as the number 1, and both
+        // timestamps with a space in them and no offset - neither of which its published shape allows, and
+        // both of which threw until the model read them the way Cloudflare writes them.
+        harness.RespondWithResult(
+            """[{"id":"39fb185c-762a-4633-a2ad-7a4462940608","name":"cf-public-magicoder","description":"LoRA adapter that enables Mistral to generate code","created_at":"2024-05-08 02:23:55.897","modified_at":"2024-05-08 02:23:55.897","public":1,"model":"@cf/mistral/mistral-7b-instruct-v0.2-lora"}]""");
+
+        var job = Assert.Single(await harness.Client.WorkersAi.ListPublicFinetunesAsync());
+
+        Assert.Equal("cf-public-magicoder", job.Name);
+        Assert.Equal("@cf/mistral/mistral-7b-instruct-v0.2-lora", job.Model);
+        Assert.True(job.Public);
+        Assert.Equal("2024-05-08 02:23:55.897", job.CreatedAt);
+        Assert.Equal(
+            new DateTimeOffset(2024, 5, 8, 2, 23, 55, 897, TimeSpan.Zero),
+            job.CreatedAtUtc!.Value);
+        Assert.Equal(job.CreatedAtUtc, job.ModifiedAtUtc);
+
+        // Nothing is left over: every field of the live answer is named.
+        Assert.True(job.AdditionalData is not { Count: > 0 });
     }
 
     [Fact]
@@ -139,41 +169,5 @@ public class WorkersAiFinetuneTests
         var job = Assert.Single(jobs);
         Assert.True(job.Public);
         Assert.Equal("cf-public-sentiment (@cf/sentiment)", job.ToString());
-    }
-
-    [Fact]
-    public async Task ListToMarkdownFormatsAsync_reads_the_camel_case_mime_type()
-    {
-        using var harness = CloudflareHarness.Create();
-        harness.RespondWithResult(
-            """[{"extension":"pdf","mimeType":"application/pdf"},{"extension":"docx","mimeType":"application/vnd.openxmlformats-officedocument.wordprocessingml.document"}]""");
-
-        var formats = await harness.Client.WorkersAi.ListToMarkdownFormatsAsync();
-
-        Assert.Equal(HttpMethod.Get, harness.LastRequest.Method);
-        Assert.EndsWith(
-            "/accounts/acct-1234/ai/tomarkdown/supported",
-            harness.LastRequest.Path,
-            StringComparison.Ordinal);
-        Assert.Equal(string.Empty, harness.LastRequest.Query);
-
-        Assert.Equal(2, formats.Count);
-        Assert.Equal("pdf", formats[0].Extension);
-
-        // mimeType is camelCase on the wire, which nearly nothing Cloudflare answers is, so it is named
-        // explicitly rather than left to this library's snake_case policy.
-        Assert.Equal("application/pdf", formats[0].MimeType);
-        Assert.True(formats[0].AdditionalData is not { Count: > 0 });
-        Assert.Equal("pdf (application/pdf)", formats[0].ToString());
-    }
-
-    [Fact]
-    public async Task ListToMarkdownFormatsAsync_answers_nothing_when_the_list_is_empty()
-    {
-        using var harness = CloudflareHarness.Create();
-        harness.RespondWithResult("[]");
-
-        Assert.Empty(await harness.Client.WorkersAi.ListToMarkdownFormatsAsync());
-        Assert.Equal(1, harness.RequestCount);
     }
 }

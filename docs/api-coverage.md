@@ -623,9 +623,10 @@ feature.
 | `GetModelSchemaAsync(model, accountId)` | `GET …/ai/models/schema?model={model}` | the model's own input and output JSON Schema, which is the only published source for what an inference call takes — the shapes differ per task. `model` is the full name, namespace included (`@cf/meta/llama-3.2-3b-instruct`), so it goes out escaped here, where it is a query parameter - the same name is **not** escaped in `RunAsync`'s path, where Cloudflare's router wants it spelled out |
 | `ListTasksAsync(accountId)` | `GET …/ai/tasks/search` | the task types — `text-generation`, `text-embeddings` and the rest, though **a live answer spells them for a person**, `Feature Extraction` rather than `feature-extraction`. That name - not the slug, and not the task's `id` - is what the model search's `task` filter takes, and `WorkersAiTaskNames.Same` bridges the two spellings for a caller comparing them. Takes **only** the account id: no filters at all, not even a search term, despite the path saying `search`. Answers a bare array |
 | `ListAuthorsAsync(accountId)` | `GET …/ai/authors/search` | the authors and organisations behind the models, likewise a bare array with no filters. An author's name is what the model search's `author` filter takes - but **a live answer for this account carried no authors at all** (0 against a catalogue of 73 models), so that filter is worth trying before it is relied on, and the same is unresolved for `task` |
-| `ListFinetunesAsync(accountId)` | `GET /accounts/{account_id}/ai/finetunes` | the account's own fine-tuning jobs, and it accepts **Workers AI Read** as well as Write. Its summary says it "lists all fine-tuning jobs created by the account, including status and metrics" while its published 200 example answers **one object** carrying neither, so both kinds are read: an array is the list, an object a list of one, and a null no jobs at all. `WorkersAiFinetune` names `id`, `name`, `model`, `description`, `public`, `created_at` and `modified_at`, and keeps anything else - the promised status and metrics first among them |
-| `ListPublicFinetunesAsync(WorkersAiPublicFinetuneListParameters?, accountId)` | `GET /accounts/{account_id}/ai/finetunes/public` | the fine-tuned models Cloudflare publishes for every account, answering the same `WorkersAiFinetune` with `public` set. Paged by **`limit` and `offset`** rather than `page` and `per_page`, and ordered by **`orderBy`, camelCase on the wire**, so its parameters are their own class instead of this library's usual paging |
+| `ListFinetunesAsync(accountId)` | `GET /accounts/{account_id}/ai/finetunes` | the account's own fine-tuning jobs, and it accepts **Workers AI Read** as well as Write. Its summary says it "lists all fine-tuning jobs created by the account, including status and metrics" while its published 200 example answers **one object** carrying neither, so both kinds are read: an array is the list, an object a list of one, and a null no jobs at all. `WorkersAiFinetune` names `id`, `name`, `model`, `description`, `public`, `created_at` and `modified_at`, and keeps anything else - the promised status and metrics first among them. **Verified live**: 200 for an account that has created no fine-tunes |
+| `ListPublicFinetunesAsync(WorkersAiPublicFinetuneListParameters?, accountId)` | `GET /accounts/{account_id}/ai/finetunes/public` | the fine-tuned models Cloudflare publishes for every account, answering the same `WorkersAiFinetune` with `public` set. Paged by **`limit` and `offset`** rather than `page` and `per_page`, and ordered by **`orderBy`, camelCase on the wire**, so its parameters are their own class instead of this library's usual paging. **Verified live, and the published shape was wrong twice**: every item answered `"public": 1` - a number, not the boolean its shape declares - and both timestamps as `2024-05-08 02:23:55.897`, a space where ISO 8601 puts a `T` and no offset at all, the same form the model catalogue writes. So `Public` reads a boolean, a number or a word through `TolerantBooleanConverter`; the timestamps stay the strings that arrived, and `CreatedAtUtc` and `ModifiedAtUtc` read those through `CloudflareTimestamps`, which takes a timestamp with no offset to be UTC and brings one that has an offset to UTC as well |
 | `ListToMarkdownFormatsAsync(accountId)` | `GET /accounts/{account_id}/ai/tomarkdown/supported` | the file formats the to-markdown conversion accepts: a bare array of `{extension, mimeType}` with no filters, and **`mimeType` camelCase**, which nearly nothing else Cloudflare answers is - so it is named explicitly rather than left to the snake_case policy |
+| `ConvertToMarkdownAsync(IEnumerable<WorkersAiToMarkdownFile>, accountId)` | `POST /accounts/{account_id}/ai/tomarkdown` | the conversion itself, and a **multipart/form-data** upload in which every part is named `files`, one per file - Cloudflare reads a file from its part's filename and content type rather than from anything in a body, so both go out on the part. It is the same `MultipartRequestBody` a Worker script upload sends. Answers a bare array of `WorkersAiToMarkdownConversion`, whose `data` is the Markdown and whose `tokens` is a **string** that `TokenCount` reads as a number. `WorkersAiToMarkdownFile.OfText`, `.OfHtml` and `.OfBytes` make a file; a conversion with none in it, a file with no name, or a file with nothing in it is refused locally |
 
 **The published schema types the items of all three searches as `unknown`** — Cloudflare documents these
 endpoints' query parameters and then answers with `result: array of unknown`, its own 200 example being
@@ -745,15 +746,13 @@ path intact and checks the name rather than escaping it.
 with `shape: [1,768]` and the vector itself. Both were addressed by the name spelled out — the escaped form
 never reached a model at all.
 
-⛔ `POST …/ai/finetunes` and `POST …/ai/finetunes/{finetune_id}/finetune-assets` — both need **Workers AI
-Write**, which the token template here does not ask for, and the second is a **multipart upload** of a training
-file besides. Creating a fine-tune also starts billable training, so neither is wrapped and the two lists above
-are the readable half of the area. `POST …/ai/tomarkdown` is not wrapped either: it uploads `files` as
-multipart/form-data and this library's request body is JSON — though its answer's shape is known
-(`{data, format, mimeType, name, tokens}`, with `tokens` a **string**), so the day the transport grows a
-multipart body the model is a small addition rather than a research project. The AI Gateway is a resource of
-its own, not part of this one. Streaming inference is not wrapped either, and would need a transport that
-reads server-sent events rather than one envelope.
+⛔ `POST …/ai/finetunes` and `POST …/ai/finetunes/{finetune_id}/finetune-assets`: both need **Workers AI
+Write**, which the token template here does not ask for, and creating a fine-tune starts billable training, so
+they belong to the paid half of the product rather than to the next increment. Wrapping them is no structural
+problem — the asset upload is a multipart form, and `MultipartRequestBody` is what `ConvertToMarkdownAsync` and
+a Worker script upload already send — it is only that nothing here could verify them against a live account.
+The AI Gateway is a resource of its own, not part of this one. Streaming inference is not wrapped either, and
+would need a transport that reads server-sent events rather than one envelope.
 
 ---
 
@@ -1069,7 +1068,7 @@ ruleset overrides an `execute` rule carries, and rate limit rule parameters.
 | Query strings | `QueryStringBuilder` (`Uri.EscapeDataString` for values; `.`/`[`/`]` left readable in names) |
 | URL construction | `CloudflareUrl`, `CloudflareRequest` |
 | Bodies | `JsonRequestBody`, `TextRequestBody`, `BinaryRequestBody`, `MultipartRequestBody` |
-| Serialization | `CloudflareJson.Default`, `CloudflareValueAttribute`, `CloudflareEnumConverter<T>` |
+| Serialization | `CloudflareJson.Default`, `CloudflareValueAttribute`, `CloudflareEnumConverter<T>`, `TolerantBooleanConverter` (a flag Cloudflare wrote as a number or a word), `CloudflareTimestamps` (the two ways it writes a timestamp) |
 | Retry / backoff | `CloudflareTransport` — 408, 429, 5xx; `Retry-After` wins; exponential + jitter; clamped |
 | Auth headers | `CloudflareTransport` — exactly one scheme per call |
 | Diagnostics | `CloudflareResponse<T>.RayId` from `CF-RAY`; `CloudflareApiException.RayId` |

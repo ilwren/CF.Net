@@ -1,6 +1,7 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using CFNet.Http;
+using CFNet.Serialization;
 
 namespace CFNet.Models.WorkersAi;
 
@@ -75,6 +76,14 @@ public sealed class WorkersAiModel
     /// </summary>
     [JsonPropertyName("created_at")]
     public string? CreatedAt { get; set; }
+
+    /// <summary>
+    /// When the model was added to the catalogue, as an instant at offset zero, when the string Cloudflare
+    /// wrote can be read as one. It has no offset in it, so it is read as UTC; see
+    /// <see cref="CloudflareTimestamps"/>.
+    /// </summary>
+    [JsonIgnore]
+    public DateTimeOffset? CreatedAtUtc => CloudflareTimestamps.Read(CreatedAt);
 
     /// <summary>Captures any field Cloudflare adds, which for this endpoint is not a small possibility.</summary>
     [JsonExtensionData]

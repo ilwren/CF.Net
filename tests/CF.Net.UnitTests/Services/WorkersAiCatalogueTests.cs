@@ -393,6 +393,9 @@ public class WorkersAiCatalogueTests
         // Not ISO 8601: a space where the standard puts a T, and no offset. System.Text.Json reads a DateTime
         // by the standard alone, so this stays the string that arrived.
         Assert.Equal("2024-05-22 19:27:09.781", model.CreatedAt);
+        Assert.Equal(
+            new DateTimeOffset(2024, 5, 22, 19, 27, 9, 781, TimeSpan.Zero),
+            model.CreatedAtUtc!.Value);
 
         // A property's value is the JSON it arrived as, whichever kind that is: a number written as a string
         // here, and a list of prices there.

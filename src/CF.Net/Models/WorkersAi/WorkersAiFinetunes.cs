@@ -1,6 +1,7 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using CFNet.Http;
+using CFNet.Serialization;
 
 namespace CFNet.Models.WorkersAi;
 
@@ -18,7 +19,10 @@ namespace CFNet.Models.WorkersAi;
 /// <para>
 /// The endpoint's own summary promises "status and metrics" for a fine-tuning job, and its published shape
 /// carries neither, so whatever else arrives is preserved in <see cref="AdditionalData"/> and reported by the
-/// integration run rather than guessed at here.
+/// integration run rather than guessed at here. Two more of the published shape's claims did not survive a
+/// live answer either: <c>public</c> arrived as the number <c>1</c> rather than as a boolean, and the two
+/// timestamps arrived without an offset and with a space in them, so both are read tolerantly - see
+/// <see cref="Public"/> and <see cref="CreatedAt"/>.
 /// </para>
 /// </remarks>
 public sealed class WorkersAiFinetune
@@ -39,17 +43,40 @@ public sealed class WorkersAiFinetune
     [JsonPropertyName("description")]
     public string? Description { get; set; }
 
-    /// <summary>Whether the job is one of Cloudflare's public ones. Not every list answers it.</summary>
+    /// <summary>
+    /// Whether the job is one of Cloudflare's public ones. Not every list answers it, and the published shape
+    /// and a live answer disagree about its kind: the shape says <c>boolean</c> and
+    /// <c>GET …/ai/finetunes/public</c> answered <c>"public": 1</c>, so this reads either.
+    /// </summary>
     [JsonPropertyName("public")]
+    [JsonConverter(typeof(TolerantBooleanConverter))]
     public bool? Public { get; set; }
 
-    /// <summary>When the job was created.</summary>
+    /// <summary>
+    /// When the job was created, exactly as Cloudflare wrote it. A live answer wrote
+    /// <c>2024-05-08 02:23:55.897</c> - a space where ISO 8601 puts a <c>T</c>, and no offset - where this
+    /// endpoint's published example writes <c>2019-12-27T18:11:19.117Z</c>. Both arrive from one endpoint, so
+    /// neither is parsed on the way in and the string is what is kept; <see cref="CreatedAtUtc"/> reads it.
+    /// </summary>
     [JsonPropertyName("created_at")]
-    public DateTimeOffset? CreatedAt { get; set; }
+    public string? CreatedAt { get; set; }
 
-    /// <summary>When the job last changed.</summary>
+    /// <summary>
+    /// When the job was created, as an instant at offset zero, when the string Cloudflare wrote can be read as
+    /// one. A timestamp with no offset in it is read as UTC; see <see cref="CloudflareTimestamps"/>.
+    /// </summary>
+    [JsonIgnore]
+    public DateTimeOffset? CreatedAtUtc => CloudflareTimestamps.Read(CreatedAt);
+
+    /// <summary>When the job last changed, exactly as Cloudflare wrote it. See <see cref="CreatedAt"/>.</summary>
     [JsonPropertyName("modified_at")]
-    public DateTimeOffset? ModifiedAt { get; set; }
+    public string? ModifiedAt { get; set; }
+
+    /// <summary>
+    /// When the job last changed, as an instant at offset zero, when the string can be read as one.
+    /// </summary>
+    [JsonIgnore]
+    public DateTimeOffset? ModifiedAtUtc => CloudflareTimestamps.Read(ModifiedAt);
 
     /// <summary>Captures any field Cloudflare adds, including the status and metrics its summary promises.</summary>
     [JsonExtensionData]
@@ -89,31 +116,4 @@ public sealed class WorkersAiPublicFinetuneListParameters : ICloudflareQueryPara
         query.Add("offset", Offset);
         query.AddIfNotEmpty("orderBy", OrderBy);
     }
-}
-
-/// <summary>
-/// One of the formats <c>POST …/ai/tomarkdown</c> accepts: a file extension and the MIME type that goes with
-/// it.
-/// </summary>
-/// <remarks>
-/// <c>mimeType</c> is camelCase on the wire, which nearly nothing else Cloudflare answers is, so it is named
-/// explicitly rather than left to this library's snake_case policy.
-/// </remarks>
-public sealed class WorkersAiToMarkdownFormat
-{
-    /// <summary>The file's extension, without its dot, such as <c>pdf</c>.</summary>
-    [JsonPropertyName("extension")]
-    public string? Extension { get; set; }
-
-    /// <summary>The MIME type that goes with the extension, such as <c>application/pdf</c>.</summary>
-    [JsonPropertyName("mimeType")]
-    public string? MimeType { get; set; }
-
-    /// <summary>Captures any field Cloudflare adds.</summary>
-    [JsonExtensionData]
-    public IDictionary<string, JsonElement>? AdditionalData { get; set; }
-
-    /// <summary>Extension and MIME type, on one line.</summary>
-    /// <returns>The format described in one line.</returns>
-    public override string ToString() => $"{Extension} ({MimeType})";
 }

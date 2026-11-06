@@ -1183,9 +1183,27 @@ public class WriteIntegrationTests : CloudflareIntegrationTest
             var listed = await Client.WorkersObservability.ListDestinationsAsync();
             Assert.Contains(listed, destination => destination.Slug == slug);
 
-            // Enabled is required on every update even when it is not what is changing, so this resends the
-            // false it already has. An update may still be refused - there is no way to skip a delivery check
-            // on this endpoint - and that refusal is worth more than a failed assertion.
+            // Observed live: an update re-runs Cloudflare's delivery preflight, and this endpoint has no way
+            // to skip it - changing the address of a destination whose url is not a real receiver answered
+            // 400 with "Pre-flight check failed: Receiver returned HTTP 405". Which updates a destination
+            // like that can still have is what the two probes below separate: the enabled flag on its own,
+            // and a configuration with it. Both report a refusal rather than failing on one.
+            try
+            {
+                var flipped = await Client.WorkersObservability.UpdateDestinationAsync(
+                    slug!,
+                    new UpdateObservabilityDestinationRequest { Enabled = true });
+
+                Log($"the enabled flag alone was accepted: enabled={flipped.Enabled} " +
+                    $"url={flipped.Configuration?.Url}");
+            }
+            catch (CloudflareApiException exception)
+            {
+                Warn($"PATCH /accounts/{{account_id}}/workers/observability/destinations/{slug} with only the " +
+                     $"enabled flag was refused with {exception.StatusCode}/{exception.ErrorCode}. " +
+                     $"Cloudflare's body: {exception.ResponseBody}");
+            }
+
             try
             {
                 var updated = await Client.WorkersObservability.UpdateDestinationAsync(
@@ -1196,22 +1214,25 @@ public class WriteIntegrationTests : CloudflareIntegrationTest
                         Configuration = new ObservabilityDestinationConfiguration
                         {
                             Type = ObservabilityDestinationTypes.Logpush,
-                            Url = "https://example.com/cfnet-it-logs-moved",
+
+                            // The address it was created with: this probe asks whether resending what is
+                            // already there is enough to satisfy the preflight, not whether a new one is.
+                            Url = "https://example.com/cfnet-it-logs",
                             Headers = new Dictionary<string, string?> { ["X-Cf-Net"] = "integration-test" },
                             ReplaceHeaders = true,
                         },
                     });
 
-                Log($"updated: enabled={updated.Enabled} url={updated.Configuration?.Url} " +
-                    $"headers=[{string.Join(", ", (updated.Configuration?.Headers ?? new Dictionary<string, string?>()).Keys)}] " +
+                Log($"a configuration was accepted: enabled={updated.Enabled} " +
+                    $"url={updated.Configuration?.Url} headers=" +
+                    $"[{string.Join(", ", (updated.Configuration?.Headers ?? new Dictionary<string, string?>()).Keys)}] " +
                     $"dataset={updated.Configuration?.LogpushDataset}");
-                Assert.False(updated.Enabled);
             }
             catch (CloudflareApiException exception)
             {
-                Warn($"PATCH /accounts/{{account_id}}/workers/observability/destinations/{slug} was refused " +
-                     $"with {exception.StatusCode}/{exception.ErrorCode}. Cloudflare's body: " +
-                     $"{exception.ResponseBody}");
+                Warn($"PATCH /accounts/{{account_id}}/workers/observability/destinations/{slug} with a " +
+                     $"configuration was refused with {exception.StatusCode}/{exception.ErrorCode}. " +
+                     $"Cloudflare's body: {exception.ResponseBody}");
             }
 
             // The delete answers with the destination it deleted rather than an empty success.

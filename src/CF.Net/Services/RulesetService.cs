@@ -18,8 +18,8 @@ namespace CFNet.Services;
 /// <para>
 /// <b>Scope.</b> Cloudflare serves the identical resource from an account path and from a zone path, which
 /// its own schema spells <c>{accounts_or_zones}</c>. Every method here therefore takes both an
-/// <paramref name="accountId"/> and a <paramref name="zoneId"/>, and works against the zone <em>only when a
-/// zone id is passed explicitly</em>: the configured default <c>ZoneId</c> is deliberately not consulted,
+/// <c>accountId</c> and a <c>zoneId</c>, and works against the zone <em>only when a zone id is passed
+/// explicitly</em>: the configured default <c>ZoneId</c> is deliberately not consulted,
 /// because a method that silently changed scope depending on how the client was configured would be worse
 /// than one that asks. Leaving both null means "this account".
 /// </para>

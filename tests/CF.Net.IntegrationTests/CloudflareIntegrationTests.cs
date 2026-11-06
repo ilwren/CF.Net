@@ -150,10 +150,10 @@ public class ReadOnlyIntegrationTests : CloudflareIntegrationTest
                          "parameters are declared; the rest is readable from AdditionalData.");
                 }
 
-                if (rule.AdditionalData is { Count: > 0 } extra)
+                if (rule.AdditionalData is { Count: > 0 } ruleExtra)
                 {
                     Warn($"GET /accounts/{{account_id}}/rulesets/{ruleset.Id} returned rule fields this " +
-                         $"library does not model, on rule '{rule.Id}': {JsonSerializer.Serialize(extra)}.");
+                         $"library does not model, on rule '{rule.Id}': {JsonSerializer.Serialize(ruleExtra)}.");
                 }
             }
 
@@ -169,10 +169,10 @@ public class ReadOnlyIntegrationTests : CloudflareIntegrationTest
                 Assert.Equal(versions[^1].Version, oldest!.Version);
             }
 
-            if (ruleset.AdditionalData is { Count: > 0 } extra)
+            if (ruleset.AdditionalData is { Count: > 0 } rulesetExtra)
             {
                 Warn($"GET /accounts/{{account_id}}/rulesets/{ruleset.Id} returned fields this library does " +
-                     $"not model, on '{ruleset.Name}': {JsonSerializer.Serialize(extra)}.");
+                     $"not model, on '{ruleset.Name}': {JsonSerializer.Serialize(rulesetExtra)}.");
             }
         }
 

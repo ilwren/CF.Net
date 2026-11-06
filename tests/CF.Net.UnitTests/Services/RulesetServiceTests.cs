@@ -289,7 +289,7 @@ public class RulesetServiceTests
         harness.RespondWithError(HttpStatusCode.NotFound, 7003, "Ruleset not found");
 
         // No entrypoint yet is the normal state for a phase nobody has configured, not a failure.
-        Assert.Null(await harness.Client.Rulesets.GetEntrypointAsync(RulesetPhase.HttpRequestRatelimit));
+        Assert.Null(await harness.Client.Rulesets.GetEntrypointAsync(RulesetPhase.HttpRatelimit));
     }
 
     [Fact]

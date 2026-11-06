@@ -404,4 +404,53 @@ public class WorkersAiCatalogueTests
         // Nothing is left over: source and created_at are the whole of what the documentation omits.
         Assert.True(model.AdditionalData is not { Count: > 0 });
     }
+
+    [Fact]
+    public void A_task_name_and_a_slug_are_one_task()
+    {
+        // The catalogue writes a task's name for a person and the documentation writes a slug, and both turn
+        // up in one answer - so matching a model against a task has to bridge them.
+        Assert.True(WorkersAiTaskNames.Same("Text Generation", "text-generation"));
+        Assert.True(WorkersAiTaskNames.Same("text_generation", "Text Generation"));
+        Assert.True(WorkersAiTaskNames.Same("  Text-to-Image ", "text to image"));
+        Assert.False(WorkersAiTaskNames.Same("Text Generation", "Text Embeddings"));
+
+        // Nothing said is not a task, so two empty names are not one task said twice.
+        Assert.False(WorkersAiTaskNames.Same(null, null));
+        Assert.False(WorkersAiTaskNames.Same("   ", string.Empty));
+        Assert.False(WorkersAiTaskNames.Same(null, "text-generation"));
+        Assert.Equal("text generation", WorkersAiTaskNames.Normalise(" Text-Generation "));
+        Assert.Equal(string.Empty, WorkersAiTaskNames.Normalise(null));
+    }
+
+    [Fact]
+    public async Task A_model_answers_whether_it_performs_a_task_in_either_spelling()
+    {
+        using var harness = CloudflareHarness.Create();
+        harness.RespondWithPage($"[{LiveModelJson}]", page: 1, totalPages: 1, count: 1, totalCount: 1);
+
+        var model = Assert.Single((await harness.Client.WorkersAi.ListModelsAsync()).Items);
+
+        Assert.True(model.PerformsTask("Text Embeddings"));
+        Assert.True(model.PerformsTask("text-embeddings"));
+        Assert.False(model.PerformsTask("text-generation"));
+        Assert.False(model.PerformsTask("  "));
+    }
+
+    [Fact]
+    public async Task A_task_from_the_task_list_filters_the_model_search_by_its_name()
+    {
+        using var harness = CloudflareHarness.Create();
+        harness.RespondWithResult(
+            """[{"id":"c329a1f9-323d-4e91-b2aa-582dd4188d34","name":"Text Generation"}]""");
+        harness.RespondWithResult("[]");
+
+        var tasks = await harness.Client.WorkersAi.ListTasksAsync();
+        await harness.Client.WorkersAi.ListModelsAsync(
+            new WorkersAiModelListParameters { Task = Assert.Single(tasks).Name });
+
+        // The name a task list gives is what the filter takes: a live search for it answered 39 models, where
+        // the slug and the task's id each answered an empty page.
+        Assert.Equal("task=Text%20Generation", harness.LastRequest.Query.TrimStart('?'));
+    }
 }

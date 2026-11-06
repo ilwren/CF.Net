@@ -642,9 +642,8 @@ public class ReadOnlyIntegrationTests : CloudflareIntegrationTest
             }
         }
 
-        // Unfiltered on purpose. Filtering by the first task's name - which reads "Feature Extraction" rather
-        // than a slug - answered a page with nothing in it and a total_count of 331, so what the task filter
-        // takes is its own question, and the inference fact asks it instead of this one assuming an answer.
+        // Unfiltered on purpose: this fact is about what a model item reads as. Filtering by a task is the
+        // inference fact's business, and it asserts what the filter takes there.
         var parameters = new WorkersAiModelListParameters { PerPage = 5 };
 
         var page = await Client.WorkersAi.ListModelsAsync(parameters);
@@ -664,18 +663,21 @@ public class ReadOnlyIntegrationTests : CloudflareIntegrationTest
             }
         }
 
-        // One Warn slot, spent once, and the reason is a surprise worth writing down: a run that walked the
-        // whole catalogue found no model reporting the task name 'text-generation', and no task by that name
-        // in the task list either, so what these three endpoints answer is not what their published shape
-        // implies. This reports what the first item of two of them really reads as - and becomes assertions,
-        // with the slot going back, once it has.
-        var firstTask = tasks.Count > 0 ? tasks[0] : null;
-        var firstModel = page.Items.Count > 0 ? page.Items[0] : null;
-        Warn($"the AI catalogue read {tasks.Count} task(s), {authors.Count} author(s) and " +
-             $"{page.TotalCount ?? page.Count} model(s). The first task reads " +
-             $"{(firstTask is null ? "nothing" : JsonSerializer.Serialize(firstTask, CFNet.Serialization.CloudflareJson.Default))}; " +
-             $"the first model reads " +
-             $"{(firstModel is null ? "nothing" : JsonSerializer.Serialize(firstModel, CFNet.Serialization.CloudflareJson.Default))}");
+        // These three searches have answered enough times to assert what they answer: a task list whose names
+        // are written for a person, a model list whose items carry a name and a task, and the two model fields
+        // no documentation mentions - source and a created_at that is not ISO 8601. An author list this
+        // account's answer left empty is an answer rather than a failure, so nothing is asserted of it.
+        Assert.NotEmpty(tasks);
+        Assert.False(string.IsNullOrEmpty(tasks[0].Name));
+        Assert.All(tasks, task => Assert.False(string.IsNullOrEmpty(task.Id)));
+        Assert.NotEmpty(page.Items);
+        Assert.All(page.Items, model => Assert.False(string.IsNullOrEmpty(model.Name)));
+        Assert.All(page.Items, model => Assert.False(string.IsNullOrEmpty(model.Task?.Name)));
+        Assert.Contains(
+            page.Items,
+            model => model.Source is not null && !string.IsNullOrEmpty(model.CreatedAt));
+        Log($"{authors.Count} author(s) answered; the first task reads {tasks[0]} and the first model " +
+            $"{page.Items[0].Name}, added {page.Items[0].CreatedAt}");
     }
 
     [Fact]
@@ -753,7 +755,7 @@ public class ReadOnlyIntegrationTests : CloudflareIntegrationTest
             // The task list answers names a person reads - "Feature Extraction" - rather than the slugs the
             // documentation and this filter use, so the two are compared with their separators and case out of
             // the way.
-            if (SameTask(task.Name, "text-generation"))
+            if (WorkersAiTaskNames.Same(task.Name, "text-generation"))
             {
                 generationTaskId = task.Id;
                 generationTaskName = task.Name;
@@ -779,22 +781,26 @@ public class ReadOnlyIntegrationTests : CloudflareIntegrationTest
         var taskNames = DistinctTasks(catalogue);
         var firstTask = catalogue.Count > 0 ? catalogue[0].Task : null;
 
-        // The filter answers 200 for every spelling of a task and reports the same total_count for all of
-        // them, so total_count here is not a count of what the filter matched - and a live page for one of
-        // those spellings was empty while the unfiltered walk of the same catalogue collected 73 models. What
-        // the filter does to a page's own items is still open, so it is asked once, with the same search
-        // unfiltered as the control, rather than assumed.
+        // The filter is answered now, and it answers the way the catalogue spells names: the task list's own
+        // "Text Generation" narrows the search to that task's models, while the documentation's slug and the
+        // task's id each answer an empty page. total_count is 331 whichever filter goes out and unfiltered too,
+        // so it is not a count of what matched and nothing here reads it as one.
         var unfiltered = await Client.WorkersAi.ListModelsAsync(
             new WorkersAiModelListParameters { PerPage = 1 });
 
-        Warn($"GET /accounts/{{account_id}}/ai/models/search?task=… answered {bySlug.Count} item(s) for the slug " +
-             $"'text-generation', {byName?.Count ?? -1} for the task's own name '{generationTaskName}' and " +
-             $"{byId?.Count ?? -1} for its id, all three reporting total_count {bySlug.TotalCount}; unfiltered " +
-             $"the same search answered {unfiltered.Count} item(s) and total_count {unfiltered.TotalCount}, and " +
-             $"walking every page collected {catalogue.Count} model(s).");
+        Assert.NotEmpty(byName!.Items);
+        Assert.All(
+            byName.Items,
+            model => Assert.True(
+                model.PerformsTask("text-generation"),
+                $"task={generationTaskName} answered {model.Name}, whose task is {model.Task?.Name}"));
+        Assert.Empty(bySlug.Items);
+        Assert.Empty(byId!.Items);
+        Assert.Equal(unfiltered.TotalCount, bySlug.TotalCount);
+        Assert.Equal(unfiltered.TotalCount, byName.TotalCount);
 
-        // What the catalogue says about itself is settled enough to assert: a model carries a task whose name
-        // is written for a person, and both tasks this fact runs are in it.
+        // What the catalogue says about itself is settled enough to assert too: a model carries a task whose
+        // name is written for a person, and both tasks this fact runs are in it.
         Assert.NotEmpty(catalogue);
         Assert.False(string.IsNullOrEmpty(catalogue[0].Name));
         Assert.NotNull(catalogue[0].Task);
@@ -803,7 +809,7 @@ public class ReadOnlyIntegrationTests : CloudflareIntegrationTest
         Assert.True(CountByTask(catalogue, "text-generation") > 0);
         Assert.True(CountByTask(catalogue, "text-embeddings") > 0);
         Log($"catalogue: {catalogue.Count} model(s) naming {taskNames.Count} task(s): " +
-            $"{string.Join(", ", taskNames)}");
+            $"{string.Join(", ", taskNames)}; the filter answered {byName.Count} of them");
 
         var generationModel = PickByTask(catalogue, "text-generation", "llama-3.2-1b", "llama-3.2-3b", "llama-3.1-8b");
         if (generationModel is null)
@@ -935,7 +941,7 @@ public class ReadOnlyIntegrationTests : CloudflareIntegrationTest
         var count = 0;
         foreach (var model in models)
         {
-            if (IsTask(model, task))
+            if (model.PerformsTask(task))
             {
                 count++;
             }
@@ -943,22 +949,6 @@ public class ReadOnlyIntegrationTests : CloudflareIntegrationTest
 
         return count;
     }
-
-    private static bool IsTask(WorkersAiModel model, string task) => SameTask(model.Task?.Name, task);
-
-    /// <summary>
-    /// Whether two task names name one task, ignoring case and the difference between a slug and the words a
-    /// person reads: the task list answers "Feature Extraction" where the documentation says
-    /// <c>feature-extraction</c>.
-    /// </summary>
-    private static bool SameTask(string? one, string? two)
-    {
-        var normalised = NormaliseTask(one);
-        return normalised.Length > 0 && normalised == NormaliseTask(two);
-    }
-
-    private static string NormaliseTask(string? task) =>
-        (task ?? string.Empty).Trim().ToLowerInvariant().Replace('-', ' ').Replace('_', ' ');
 
     /// <summary>The distinct task names a catalogue's models report, in the order the models report them.</summary>
     private static List<string> DistinctTasks(IReadOnlyList<WorkersAiModel> models)
@@ -994,7 +984,7 @@ public class ReadOnlyIntegrationTests : CloudflareIntegrationTest
         {
             foreach (var model in models)
             {
-                if (IsTask(model, task) && HasFragment(model, fragment))
+                if (model.PerformsTask(task) && HasFragment(model, fragment))
                 {
                     return model.Name;
                 }
@@ -1014,7 +1004,7 @@ public class ReadOnlyIntegrationTests : CloudflareIntegrationTest
 
         foreach (var model in models)
         {
-            if (IsTask(model, task))
+            if (model.PerformsTask(task))
             {
                 return model.Name;
             }

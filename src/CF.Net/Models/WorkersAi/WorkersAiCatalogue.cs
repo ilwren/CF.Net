@@ -80,6 +80,14 @@ public sealed class WorkersAiModel
     [JsonExtensionData]
     public IDictionary<string, JsonElement>? AdditionalData { get; set; }
 
+    /// <summary>
+    /// Whether the model performs a task, compared the way the catalogue spells task names: a slug and the
+    /// name a task list gives are one task to this method.
+    /// </summary>
+    /// <param name="task">The task, as a slug (<c>text-generation</c>) or as a name (<c>Text Generation</c>).</param>
+    /// <returns>True when the model's task says the same thing.</returns>
+    public bool PerformsTask(string task) => WorkersAiTaskNames.Same(Task?.Name, task);
+
     /// <summary>Whether the model carries one of the catalogue's tags.</summary>
     /// <param name="tag">The tag to look for.</param>
     /// <returns>True when the model is tagged with it.</returns>
@@ -219,7 +227,12 @@ public sealed class WorkersAiTask
     [JsonPropertyName("id")]
     public string? Id { get; set; }
 
-    /// <summary>The task's name, which is what a model search filters by.</summary>
+    /// <summary>
+    /// The task's name, which is what a model search filters by - and it is written for a person, observed
+    /// live as <c>Text Generation</c> and <c>Feature Extraction</c> rather than as the slugs the documentation
+    /// uses. Pass this name to <c>WorkersAiModelListParameters.Task</c>: the slug and the id each answer an
+    /// empty page. <see cref="WorkersAiTaskNames"/> compares one against either spelling.
+    /// </summary>
     [JsonPropertyName("name")]
     public string? Name { get; set; }
 
@@ -392,7 +405,11 @@ public sealed class WorkersAiModelListParameters : CloudflarePagedParameters
     /// <summary>Only models from this source, by its id.</summary>
     public long? Source { get; set; }
 
-    /// <summary>Only models performing this task, as <c>ListTasksAsync</c> names one.</summary>
+    /// <summary>
+    /// Only models performing this task, **as <c>ListTasksAsync</c> names one**: a live search for
+    /// <c>Text Generation</c> answered 39 models, where <c>text-generation</c> and the task's own id each
+    /// answered an empty page and the same <c>total_count</c> as an unfiltered search.
+    /// </summary>
     public string? Task { get; set; }
 
     /// <inheritdoc />
@@ -419,4 +436,38 @@ public static class WorkersAiModelFormats
 
     /// <summary>Every format the schema lists.</summary>
     public static readonly IReadOnlyList<string> All = new[] { OpenRouter };
+}
+
+/// <summary>
+/// Compares task names the way the Workers AI catalogue spells them.
+/// </summary>
+/// <remarks>
+/// The catalogue writes a task's name for a person - <c>Text Generation</c>, <c>Text-to-Image</c>,
+/// <c>Feature Extraction</c> - while its documentation, its model pages and most of what is written about
+/// Workers AI use a slug: <c>text-generation</c>. Both spellings turn up in one answer, and a caller matching
+/// a model against a task it read about somewhere has to bridge them. These two methods do, by taking the
+/// case and the separators out of the way: they are what let a live run find 39 generation models in a
+/// catalogue that a strict comparison said had none.
+/// </remarks>
+public static class WorkersAiTaskNames
+{
+    /// <summary>
+    /// Reduces a task's name to the form both spellings share: trimmed, lower-cased, with <c>-</c> and
+    /// <c>_</c> as spaces.
+    /// </summary>
+    /// <param name="task">A task's name, a slug, or null.</param>
+    /// <returns>The name reduced to what it says, or an empty string when there is nothing to say.</returns>
+    public static string Normalise(string? task) =>
+        (task ?? string.Empty).Trim().ToLowerInvariant().Replace('-', ' ').Replace('_', ' ');
+
+    /// <summary>Whether two names - in any of the spellings above - name one task.</summary>
+    /// <param name="one">The first name.</param>
+    /// <param name="two">The second name.</param>
+    /// <returns>True when both say something and say the same thing.</returns>
+    /// <remarks>Two empty names are not one task: nothing was said twice.</remarks>
+    public static bool Same(string? one, string? two)
+    {
+        var normalised = Normalise(one);
+        return normalised.Length > 0 && normalised == Normalise(two);
+    }
 }

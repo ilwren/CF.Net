@@ -361,20 +361,20 @@ public class CloudflareRequestBodyTests
         Assert.Equal("multipart/form-data", content.Headers.ContentType!.MediaType);
 
         // The metadata part is a plain form field: no filename, JSON media type.
-        Assert.Contains("name=metadata", text, StringComparison.Ordinal);
+        Assert.Contains("name=\"metadata\"", text, StringComparison.Ordinal);
         Assert.Contains("application/json", text, StringComparison.Ordinal);
         Assert.Contains("\"main_module\":\"worker.mjs\"", text, StringComparison.Ordinal);
 
         // Each module is a file part named after the module, with the Workers module media type.
         // A plain string field instead of a file part is what makes Cloudflare answer
         // "10021 Main module name is not present in bundle", so the filename matters.
-        Assert.Contains("name=worker.mjs", text, StringComparison.Ordinal);
+        Assert.Contains("name=\"worker.mjs\"", text, StringComparison.Ordinal);
         Assert.Contains("filename", text, StringComparison.Ordinal);
         Assert.Contains("application/javascript+module", text, StringComparison.Ordinal);
         Assert.Contains("export default { fetch() {} }", text, StringComparison.Ordinal);
 
         // Metadata first, then the modules: the legacy "script" flow depends on that ordering.
-        Assert.True(text.IndexOf("name=metadata", StringComparison.Ordinal) < text.IndexOf("name=worker.mjs", StringComparison.Ordinal));
+        Assert.True(text.IndexOf("name=\"metadata\"", StringComparison.Ordinal) < text.IndexOf("name=\"worker.mjs\"", StringComparison.Ordinal));
     }
 
     [Fact]
@@ -407,8 +407,8 @@ public class CloudflareRequestBodyTests
         using var content = body.CreateContent(CloudflareJson.Default);
         var text = await content.ReadAsStringAsync();
 
-        Assert.Contains("name=file; filename=zone.txt", text, StringComparison.Ordinal);
-        Assert.Contains("name=proxied", text, StringComparison.Ordinal);
+        Assert.Contains("name=\"file\"; filename=\"zone.txt\"", text, StringComparison.Ordinal);
+        Assert.Contains("name=\"proxied\"", text, StringComparison.Ordinal);
         Assert.Contains("false", text, StringComparison.Ordinal);
 
         // Exactly one filename in the whole body: the plain field must not carry one.

@@ -160,14 +160,14 @@ public class WorkersScriptsServiceTests
         var body = harness.LastRequest.Body!;
 
         // The metadata part carries the Cloudflare fields and nothing else.
-        Assert.Contains("name=metadata", body, StringComparison.Ordinal);
+        Assert.Contains("name=\"metadata\"", body, StringComparison.Ordinal);
         Assert.Contains("\"main_module\":\"worker.mjs\"", body, StringComparison.Ordinal);
         Assert.Contains("\"compatibility_date\":\"2025-01-01\"", body, StringComparison.Ordinal);
         Assert.DoesNotContain("\"script_name\"", body, StringComparison.Ordinal);
         Assert.DoesNotContain("\"modules\"", body, StringComparison.Ordinal);
 
         // The module travels as a file part named after the module, with the ES module media type.
-        Assert.Contains("name=worker.mjs", body, StringComparison.Ordinal);
+        Assert.Contains("name=\"worker.mjs\"", body, StringComparison.Ordinal);
         Assert.Contains("filename", body, StringComparison.Ordinal);
         Assert.Contains("application/javascript+module", body, StringComparison.Ordinal);
         Assert.Contains("return new Response('hi')", body, StringComparison.Ordinal);
@@ -260,8 +260,8 @@ public class WorkersScriptsServiceTests
 
         var body = harness.LastRequest.Body!;
 
-        Assert.Contains("name=entry.py", body, StringComparison.Ordinal);
-        Assert.Contains("name=helper.py", body, StringComparison.Ordinal);
+        Assert.Contains("name=\"entry.py\"", body, StringComparison.Ordinal);
+        Assert.Contains("name=\"helper.py\"", body, StringComparison.Ordinal);
         Assert.Contains("text/x-python", body, StringComparison.Ordinal);
         Assert.Contains("\"python_workers\"", body, StringComparison.Ordinal);
         Assert.Contains("\"main_module\":\"entry.py\"", body, StringComparison.Ordinal);
@@ -2079,12 +2079,12 @@ public class WorkerVersionUploadTests
         Assert.Equal(string.Empty, harness.LastRequest.Query);
 
         var body = harness.LastRequest.Body!;
-        Assert.Contains("name=metadata", body, StringComparison.Ordinal);
+        Assert.Contains("name=\"metadata\"", body, StringComparison.Ordinal);
         Assert.Contains("\"main_module\":\"worker.mjs\"", body, StringComparison.Ordinal);
         Assert.Contains("\"compatibility_date\":\"2026-10-01\"", body, StringComparison.Ordinal);
         Assert.Contains("\"workers/message\":\"second try\"", body, StringComparison.Ordinal);
         Assert.Contains("\"workers/tag\":\"v2\"", body, StringComparison.Ordinal);
-        Assert.Contains("name=worker.mjs", body, StringComparison.Ordinal);
+        Assert.Contains("name=\"worker.mjs\"", body, StringComparison.Ordinal);
         Assert.Contains("application/javascript+module", body, StringComparison.Ordinal);
 
         Assert.NotNull(version);

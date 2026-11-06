@@ -771,9 +771,9 @@ public class DnsRecordsServiceTests
 
         // The BIND config goes in the "file" part, and "proxied" is a plain field carrying the
         // strings the API documents, not a JSON boolean.
-        Assert.Contains("name=file", harness.LastRequest.Body, StringComparison.Ordinal);
-        Assert.Contains("filename=zone.txt", harness.LastRequest.Body, StringComparison.Ordinal);
-        Assert.Contains("name=proxied", harness.LastRequest.Body, StringComparison.Ordinal);
+        Assert.Contains("name=\"file\"", harness.LastRequest.Body, StringComparison.Ordinal);
+        Assert.Contains("filename=\"zone.txt\"", harness.LastRequest.Body, StringComparison.Ordinal);
+        Assert.Contains("name=\"proxied\"", harness.LastRequest.Body, StringComparison.Ordinal);
         Assert.Contains("true", harness.LastRequest.Body, StringComparison.Ordinal);
         Assert.Contains("198.51.100.1", harness.LastRequest.Body, StringComparison.Ordinal);
     }
@@ -786,7 +786,7 @@ public class DnsRecordsServiceTests
 
         await harness.Client.DnsRecords.ImportAsync("a.test.\t300\tIN\tA\t198.51.100.1");
 
-        Assert.Contains("name=file", harness.LastRequest.Body, StringComparison.Ordinal);
+        Assert.Contains("name=\"file\"", harness.LastRequest.Body, StringComparison.Ordinal);
         Assert.DoesNotContain("proxied", harness.LastRequest.Body, StringComparison.Ordinal);
     }
 

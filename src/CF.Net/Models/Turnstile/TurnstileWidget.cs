@@ -60,7 +60,12 @@ public class TurnstileWidgetSummary
     [JsonPropertyName("bot_fight_mode")]
     public bool? BotFightMode { get; set; }
 
-    /// <summary>Whether the widget hands out a one-time token id rather than a reusable one.</summary>
+    /// <summary>
+    /// Whether the widget hands out a one-time token id rather than a reusable one. Setting it to
+    /// <see langword="true"/> is an entitlement a free account does not have - a live <c>PUT</c> answered 400
+    /// with <c>not entitled to create widgets with `ephemeral_id` set to true</c> - where
+    /// <see langword="false"/> is accepted.
+    /// </summary>
     [JsonPropertyName("ephemeral_id")]
     public bool? EphemeralId { get; set; }
 

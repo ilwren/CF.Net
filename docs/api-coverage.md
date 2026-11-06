@@ -1108,10 +1108,13 @@ confirmed answer rather than an assumption, and a single widget's answer carries
 A refused `PUT` is reported by the run rather than failed, because the offline suite pins that call's method,
 path and exact body and a live run only adds what Cloudflare accepts.
 
-⛔ `offlabel: true` — serving the challenge without Cloudflare's branding — is **entitlement-gated**: a live
-`PUT` answered 400 with `not entitled to create widgets with `offlabel` set to true`. `offlabel: false` is
-accepted on a free account, so the field stays wrapped and the live run leaves it alone, in line with paid
-features being out of scope.
+⛔ Two of the widget's flags are **entitlement-gated**, and Cloudflare refuses each in the same words: a live
+`PUT` with `offlabel: true` — serving the challenge without Cloudflare's branding — answered 400 with
+`not entitled to create widgets with `offlabel` set to true`, and one with `ephemeral_id: true` — one-time
+token ids — answered `not entitled to create widgets with `ephemeral_id` set to true`. Both are accepted as
+`false` on a free account, which is how the live run creates a widget, so both fields stay wrapped and the run
+changes a name and a mode instead, in line with paid features being out of scope. `bot_fight_mode` and
+`clearance_level` have not been probed for the same gate.
 
 ⛔ Nothing else is left out of this resource: those six methods are all of `challenges/widgets`. Verifying a
 token (`siteverify`) is not part of this API at all — it lives on `challenges.cloudflare.com`, and belongs to

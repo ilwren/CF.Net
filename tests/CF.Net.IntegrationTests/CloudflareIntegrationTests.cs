@@ -3626,6 +3626,7 @@ public class WriteIntegrationTests : CloudflareIntegrationTest
         }
 
         var name = UniqueSuffix("cfnet-it-widget");
+        var renamed = $"{name}-upd";
 
         // Created first and on its own, because everything below needs the site key it answers - and because
         // a refusal to create is worth reporting rather than failing: it is either a missing Turnstile Sites
@@ -3676,12 +3677,14 @@ public class WriteIntegrationTests : CloudflareIntegrationTest
                 $"bot_fight_mode={read.BotFightMode} last_modified_via={read.LastModifiedVia}");
             ReportWidgetFields("GET /accounts/{account_id}/challenges/widgets/{sitekey}", read);
 
-            // Updating is a PUT that replaces the whole widget, so the required fields go again beside the two
-            // that are changing: the mode and the hostnames it may run on. offlabel stays out of it - a live
-            // run reported that setting it to true is refused as an entitlement, and paid features are out of
-            // scope here, so the field is wrapped and left alone. A refusal is reported rather than failed and
-            // does not stop the rotation, the list or the delete below it: the offline suite pins this call's
-            // method, path and exact body, so what a live run adds is what Cloudflare accepts.
+            // Updating is a PUT that replaces the whole widget, so the required fields go again beside the
+            // name and the mode that are changing - and the name is what proves a replacement took rather than
+            // an answer that merely looks like one. Both offlabel and ephemeral_id stay out of it: two live
+            // runs reported that setting either to true is refused as an entitlement, in the same words for
+            // each, and paid features are out of scope here, so both fields are wrapped and left alone. A
+            // refusal is reported rather than failed and does not stop the rotation, the list or the delete
+            // below it: the offline suite pins this call's method, path and exact body, so what a live run
+            // adds is what Cloudflare accepts.
             TurnstileWidget? updated = null;
             try
             {
@@ -3689,11 +3692,10 @@ public class WriteIntegrationTests : CloudflareIntegrationTest
                     sitekey!,
                     new TurnstileWidgetRequest
                     {
-                        Name = name,
+                        Name = renamed,
                         Mode = TurnstileWidgetMode.NonInteractive,
                         Domains = new List<string> { "example.com", "www.example.com" },
                         Region = TurnstileRegion.World,
-                        EphemeralId = true,
                     });
             }
             catch (CloudflareApiException exception)
@@ -3705,9 +3707,9 @@ public class WriteIntegrationTests : CloudflareIntegrationTest
 
             if (updated is not null)
             {
+                Assert.Equal(renamed, updated.Name);
                 Assert.Equal(TurnstileWidgetMode.NonInteractive, updated.Mode);
                 Assert.Equal(2, updated.Domains?.Count ?? 0);
-                Assert.True(updated.EphemeralId);
                 Log($"updated it: {updated} mode={updated.Mode} offlabel={updated.Offlabel} " +
                     $"domains={string.Join(",", updated.Domains ?? new List<string>())} " +
                     $"modified_on={updated.ModifiedOn}");
@@ -3728,20 +3730,23 @@ public class WriteIntegrationTests : CloudflareIntegrationTest
                 $"{listed.Count}");
             var found = listed.Items.FirstOrDefault(widget => widget.Sitekey == sitekey);
             Assert.NotNull(found);
-            Assert.Equal(name, found!.Name);
+
+            // The point of the two types: a list item is not a widget, and has no secret to read.
+            Assert.IsNotType<TurnstileWidget>(found);
+
             if (updated is not null)
             {
                 // Only assert the replacement took when the replacement was accepted: a refused PUT leaves the
-                // widget as it was created, which is the mode below.
+                // widget exactly as it was created, which is the name and the mode below.
+                Assert.Equal(renamed, found!.Name);
                 Assert.Equal(TurnstileWidgetMode.NonInteractive, found.Mode);
             }
             else
             {
+                Assert.Equal(name, found!.Name);
                 Assert.Equal(TurnstileWidgetMode.Managed, found.Mode);
             }
 
-            // The point of the two types: a list item is not a widget, and has no secret to read.
-            Assert.IsNotType<TurnstileWidget>(found);
             ReportWidgetFields("GET /accounts/{account_id}/challenges/widgets", found);
         }
         finally

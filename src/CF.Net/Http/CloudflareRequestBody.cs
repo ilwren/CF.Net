@@ -169,20 +169,30 @@ public sealed class MultipartRequestBody : CloudflareRequestBody
         {
             var content = part.CreateContent(serializerOptions);
 
-            // The 3 argument overload throws on a null file name, so a plain form field
-            // (the "metadata" part) has to go through the 2 argument overload.
-            if (part.FileName is null)
+            // The part's name and file name are set here, quoted, rather than left to the Add overload that
+            // takes them: .NET quotes a header parameter only when the value needs it, and a name like "files"
+            // or a file name like "page.html" is a plain HTTP token, so it goes out bare. Cloudflare's Workers
+            // script upload accepts that and its AI endpoints do not - a live POST …/ai/tomarkdown with bare
+            // names answered 400 with error 6005, "Request body is not valid multipart/form-data", where the
+            // same request quoted is what curl and a browser send and what RFC 7578's own examples show.
+            content.Headers.ContentDisposition = new ContentDispositionHeaderValue("form-data")
             {
-                form.Add(content, part.Name);
-            }
-            else
-            {
-                form.Add(content, part.Name, part.FileName);
-            }
+                Name = QuoteHeaderValue(part.Name),
+                FileName = part.FileName is null ? null : QuoteHeaderValue(part.FileName),
+            };
+            form.Add(content);
         }
 
         return form;
     }
+
+    /// <summary>Quotes a header parameter's value, unless it is quoted already.</summary>
+    /// <param name="value">The value to quote.</param>
+    /// <returns>The value, quoted and with any quotes and backslashes in it escaped.</returns>
+    private static string QuoteHeaderValue(string value) =>
+        value.Length > 1 && value[0] == '"' && value[^1] == '"'
+            ? value
+            : "\"" + value.Replace("\\", "\\\\").Replace("\"", "\\\"") + "\"";
 }
 
 /// <summary>One part of a <see cref="MultipartRequestBody"/>.</summary>

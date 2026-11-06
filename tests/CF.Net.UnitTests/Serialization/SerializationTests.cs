@@ -903,9 +903,15 @@ public class ZonePublishedExampleTests
             jobs.Select(job => job.Public).ToArray());
 
         // Whichever way a flag was read, it is written as a flag - and a null is written as null by the
-        // converter, though this library's writer omits a null property before ever asking it.
-        Assert.Equal("true", JsonSerializer.Serialize((bool?)true, new TolerantBooleanConverter()));
-        Assert.Equal("null", JsonSerializer.Serialize((bool?)null, new TolerantBooleanConverter()));
+        // converter, though this library's writer omits a null property before ever asking it, which is why the
+        // converter's own writing is pinned on a holder with plain options.
+        var writing = new JsonSerializerOptions();
+        Assert.Equal(
+            """{"public":true}""",
+            JsonSerializer.Serialize(new TolerantFlagHolder { Public = true }, writing));
+        Assert.Equal(
+            """{"public":null}""",
+            JsonSerializer.Serialize(new TolerantFlagHolder(), writing));
         Assert.Equal(
             """{"public":true}""",
             JsonSerializer.Serialize(
@@ -954,4 +960,16 @@ public class ZonePublishedExampleTests
         Assert.Null(CloudflareTimestamps.Read("   "));
         Assert.Null(CloudflareTimestamps.Read("not a timestamp"));
     }
+}
+
+/// <summary>
+/// A holder whose flag is written even when it is null, so <see cref="TolerantBooleanConverter"/>'s own writing
+/// can be pinned: this library's writer omits a null property before ever asking a converter about it.
+/// </summary>
+internal sealed class TolerantFlagHolder
+{
+    /// <summary>The flag, written whichever way it was read.</summary>
+    [JsonPropertyName("public")]
+    [JsonConverter(typeof(TolerantBooleanConverter))]
+    public bool? Public { get; set; }
 }

@@ -787,13 +787,22 @@ public class ReadOnlyIntegrationTests : CloudflareIntegrationTest
         if (conversions is not null)
         {
             Assert.NotEmpty(conversions);
-            Log($"{conversions.Count} conversion(s); the first read {conversions[0].Name} as " +
-                $"{conversions[0].Format} in {conversions[0].Tokens} token(s): " +
-                $"{Truncate(conversions[0].Data, 200)}");
+            var conversion = conversions[0];
+            Log($"{conversions.Count} conversion(s); the first read {conversion.Name} as {conversion.Format} " +
+                $"in {conversion.TokenCount} token(s): {Truncate(conversion.Data, 200)}");
+            if (!conversion.Succeeded)
+            {
+                // A file that does not convert is answered inside a 200, one entry per file, so it is worth a
+                // line of its own rather than an assertion: the call worked and the file did not.
+                Warn($"POST /accounts/{{account_id}}/ai/tomarkdown answered 200 but the file did not convert: " +
+                     $"{conversion.Format}/{conversion.Error}. The entry as read: " +
+                     $"{Truncate(JsonSerializer.Serialize(conversion, CFNet.Serialization.CloudflareJson.Default), 600)}");
+            }
+
             ReportUnmodelled(
                 "POST /accounts/{account_id}/ai/tomarkdown",
                 conversions,
-                conversion => conversion.AdditionalData);
+                item => item.AdditionalData);
         }
 
         var formats = await TryReadAsync(

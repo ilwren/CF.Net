@@ -713,23 +713,30 @@ public class ReadOnlyIntegrationTests : CloudflareIntegrationTest
         // A run echoes the query it executed. Its filters are read as raw JSON because a leaf may come back
         // with no "kind", which is what the request always writes; say which it was, so that hedge can be
         // dropped if Cloudflare always sends one.
-        if (events.Run.Query?.Parameters?.Filters is { Count: > 0 } echoed)
-        {
-            Log($"{echoed.Count} echoed filter(s), {echoed.Count(filter => filter.TryGetProperty("kind", out _))} " +
-                $"of them carrying a kind");
-        }
-        else
-        {
-            Log("the run echoed no filters back");
-        }
+        var echoedFilters = events.Run.Query?.Parameters?.Filters;
+        var echoedSummary = echoedFilters is { Count: > 0 }
+            ? $"{echoedFilters.Count(filter => filter.TryGetProperty("kind", out _))}/{echoedFilters.Count} " +
+              "echoed filter(s) carry a kind"
+            : "no filters echoed back";
+        Log(echoedSummary);
 
+        // One Warn slot, spent once: the transcript shows these two calls answered 200 but not what came
+        // back, and the shape of an answer is what the coverage doc claims. Once a run has reported it, this
+        // becomes an assertion and the slot is free again.
+        Warn($"POST /accounts/{{account_id}}/workers/observability/telemetry/query (events view) answered: " +
+             $"run {events.Run.Status} dry={events.Run.Dry}, {events.Statistics}, " +
+             $"{events.AllEvents.Count} event(s) of a reported {events.Events?.Count}, {echoedSummary}, " +
+             $"{events.AdditionalData?.Count ?? 0} unmodelled result field(s), " +
+             $"{events.Events?.Fields?.Count ?? 0} field(s) discovered.");
+
+        var firstEvent = events.AllEvents.Count > 0 ? events.AllEvents[0] : null;
         foreach (var unmodelled in new[]
                  {
                      ("result", events.AdditionalData),
                      ("run", events.Run.AdditionalData),
                      ("events", events.Events?.AdditionalData),
-                     ("event", events.AllEvents.FirstOrDefault()?.AdditionalData),
-                     ("$metadata", events.AllEvents.FirstOrDefault()?.Metadata?.AdditionalData),
+                     ("event", firstEvent?.AdditionalData),
+                     ("$metadata", firstEvent?.Metadata?.AdditionalData),
                  }.Where(pair => pair.Item2 is { Count: > 0 }))
         {
             Warn($"POST /accounts/{{account_id}}/workers/observability/telemetry/query answered " +

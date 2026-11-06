@@ -1144,6 +1144,17 @@ public sealed class ObservabilityTelemetryEventSeries
     [JsonExtensionData]
     public IDictionary<string, JsonElement>? AdditionalData { get; set; }
 
+    /// <summary>The bucket's start, as a date, when Cloudflare sent one this can read.</summary>
+    [JsonIgnore]
+    public DateTimeOffset? TimeUtc =>
+        DateTimeOffset.TryParse(
+            Time,
+            System.Globalization.CultureInfo.InvariantCulture,
+            System.Globalization.DateTimeStyles.AdjustToUniversal | System.Globalization.DateTimeStyles.AssumeUniversal,
+            out var parsed)
+            ? parsed
+            : null;
+
     /// <summary>Bucket and point count, on one line.</summary>
     /// <returns>The series bucket described in one line.</returns>
     public override string ToString() => $"{Time} ({Data?.Count ?? 0})";

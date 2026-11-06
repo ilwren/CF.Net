@@ -585,6 +585,13 @@ A plain count needs no `key` and everything else does, which `EnsureValid()` che
 `orderBy` only apply to the calculations view, and a having's operation *is* a closed set of six, so that one
 is validated.
 
+**Verified live**: a dry `events` query (one filter, one needle, `limit` 5) and a dry `calculations` query (a
+`count` aliased `hits`, a `p99` over `$metadata.duration`, a group-by on `$metadata.service`, a having of
+`hits > 0` and a descending ordering on `hits`, with `chart` and `granularity` 10) both answered **200** over
+an hour's span, each with a `run` and its `statistics`. The account has no traffic, so what came back for the
+views themselves is reported by the run rather than asserted - the shape of an empty answer is still the
+shape.
+
 ⛔ Unexercised live: an update that sends a destination `configuration`, which needs a receiver that answers
 Cloudflare's preflight. The suite has none; a Worker of the account's own, uploaded and left answering 200,
 would serve as one.

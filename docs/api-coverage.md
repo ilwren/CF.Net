@@ -568,8 +568,9 @@ place a request type is *not* reused: the request always writes a filter's `kind
 schema makes it optional on a leaf, so an echo can carry a filter with no `kind` at all - and reading that
 into the polymorphic tree would fail on a field Cloudflare merely left out.
 `ObservabilityTelemetryRunQueryParameters` therefore keeps the echoed filters as raw `JsonElement`s and
-shares every other type with the request. The integration run logs how many of the echoed filters carried a
-`kind`, so that hedge can be dropped if Cloudflare always sends one.
+shares every other type with the request. A live dry run echoed its one filter with the `kind` intact, and
+the integration fact logs how many arrive that way; the raw reading stays, because one answer carrying it is
+not the schema promising it.
 
 An aggregate's numbers are estimates when the events behind them were sampled: `sampleInterval` is 1 when
 nothing was and above 1 when `count` and `value` were extrapolated (`IsSampled` says which), `interval` is a
@@ -588,8 +589,12 @@ is validated.
 **Verified live**: a dry `events` query (one filter, one needle, `limit` 5) and a dry `calculations` query (a
 `count` aliased `hits`, a `p99` over `$metadata.duration`, a group-by on `$metadata.service`, a having of
 `hits > 0` and a descending ordering on `hits`, with `chart` and `granularity` 10) both answered **200** over
-an hour's span, each with a `run` and its `statistics`. The account has no traffic, so what came back for the
-views themselves is reported by the run rather than asserted - the shape of an empty answer is still the
+an hour's span, each with a `run` and its `statistics`. A **dry run completes synchronously** - `run.status`
+came back `COMPLETED`, not `STARTED` - and the statistics are real work: an hour that matched nothing still
+scanned `3609623 rows` and `28876984 bytes` in `0.101s`, because the platform's own telemetry sits in the
+same tables. That is why a query is worth narrowing with a timeframe and a filter, and why the suite asserts
+the scanned counts rather than the matched ones. The account has no traffic, so what came back for the views
+themselves was empty - `0` events, `0` fields discovered - and the shape of an empty answer is still the
 shape.
 
 ⛔ Unexercised live: an update that sends a destination `configuration`, which needs a receiver that answers

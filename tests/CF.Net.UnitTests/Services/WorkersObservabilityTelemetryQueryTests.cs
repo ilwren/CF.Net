@@ -573,7 +573,7 @@ public class WorkersObservabilityTelemetryQueryTests
     {
         using var harness = CloudflareHarness.Create();
         harness.RespondWithResult(
-            """{"run":{"id":"run-t","status":"COMPLETED","timeframe":{"from":1,"to":2}},"statistics":{"bytes_read":1,"elapsed":0.2,"rows_read":1},"traces":[{"traceId":"t-1","rootSpanName":"fetch","rootTransactionName":"GET /","service":["cfnet-demo","cfnet-other"],"spans":7,"traceDurationMs":120.5,"traceStartMs":1793955600000,"traceEndMs":1793984400120,"errors":["boom"]}]}""");
+            """{"run":{"id":"run-t","status":"COMPLETED","timeframe":{"from":1,"to":2}},"statistics":{"bytes_read":1,"elapsed":0.2,"rows_read":1},"traces":[{"traceId":"t-1","rootSpanName":"fetch","rootTransactionName":"GET /","service":["cfnet-demo","cfnet-other"],"spans":7,"traceDurationMs":120.5,"traceStartMs":1793955600000,"traceEndMs":1793955600120,"errors":["boom"]}]}""");
 
         var result = await harness.Client.WorkersObservability.QueryTelemetryAsync(
             ObservabilityTelemetryQueryRequest.AdHoc(
@@ -590,6 +590,7 @@ public class WorkersObservabilityTelemetryQueryTests
 
         var span = trace.Span!.Value;
         Assert.Equal(new DateTimeOffset(2026, 11, 6, 9, 0, 0, TimeSpan.Zero), span.Start);
+        Assert.Equal(new DateTimeOffset(2026, 11, 6, 9, 0, 0, TimeSpan.Zero).AddMilliseconds(120), span.End);
         Assert.Equal(120, (span.End - span.Start).TotalMilliseconds);
         Assert.Equal("GET / (7 spans, 120.5ms)", trace.ToString());
     }

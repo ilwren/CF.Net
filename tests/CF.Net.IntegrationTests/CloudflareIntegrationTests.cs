@@ -720,14 +720,22 @@ public class ReadOnlyIntegrationTests : CloudflareIntegrationTest
             : "no filters echoed back";
         Log(echoedSummary);
 
-        // One Warn slot, spent once: the transcript shows these two calls answered 200 but not what came
-        // back, and the shape of an answer is what the coverage doc claims. Once a run has reported it, this
-        // becomes an assertion and the slot is free again.
-        Warn($"POST /accounts/{{account_id}}/workers/observability/telemetry/query (events view) answered: " +
-             $"run {events.Run.Status} dry={events.Run.Dry}, {events.Statistics}, " +
-             $"{events.AllEvents.Count} event(s) of a reported {events.Events?.Count}, {echoedSummary}, " +
-             $"{events.AdditionalData?.Count ?? 0} unmodelled result field(s), " +
-             $"{events.Events?.Fields?.Count ?? 0} field(s) discovered.");
+        // Learned from the run that first asked, and now asserted: a dry query completes synchronously
+        // rather than answering STARTED, and its statistics are real work - an hour's span that matched
+        // nothing still scanned some 3.6M rows and 29MB in about 0.1s, because the platform's own telemetry
+        // is in the same tables. Which is why a query is worth narrowing.
+        Assert.Equal(ObservabilityTelemetryRunStatuses.Completed, events.Run.Status);
+        Assert.True(events.IsComplete);
+        Assert.True(events.Run.Dry);
+        Assert.True(events.Statistics!.RowsRead > 0, "a completed query should report the rows it scanned");
+        Assert.True(events.Statistics.BytesRead > 0, "a completed query should report the bytes it read");
+
+        // The run echoes the query it executed, so the one filter that was sent comes back. The schema makes
+        // a leaf's "kind" optional and types the deepest level as unknown, which is why the echo is read as
+        // raw JSON rather than into the filter tree - the count is asserted, the spelling only logged.
+        Assert.Equal(1, events.Run.Query?.Parameters?.Filters?.Count);
+        Log($"{events.Statistics}; {events.AllEvents.Count} event(s) of a reported {events.Events?.Count}; " +
+            $"{events.Events?.Fields?.Count ?? 0} field(s) discovered");
 
         var firstEvent = events.AllEvents.Count > 0 ? events.AllEvents[0] : null;
         foreach (var unmodelled in new[]

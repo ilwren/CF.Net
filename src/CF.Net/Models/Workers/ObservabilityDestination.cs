@@ -66,6 +66,12 @@ public sealed class ObservabilityDestination
 /// arrives, the second is only ever sent.
 /// </para>
 /// <para>
+/// <see cref="Headers"/> is required on a create and on any update that sends a configuration, and required
+/// to be an object: a destination with no headers sends <c>{}</c>. Observed live, leaving it out answers 400
+/// with <c>invalid_type</c> at <c>configuration.headers</c>, and the camelCase names above were echoed back
+/// unchanged in the same answer, so they are what the endpoint really spells them.
+/// </para>
+/// <para>
 /// Because this library never writes a JSON <c>null</c>, a header whose value is set to <c>null</c> is
 /// dropped from the request rather than sent as null. Removing a header therefore means sending
 /// <see cref="ReplaceHeaders"/> as <c>true</c> together with the headers that should remain.
@@ -220,6 +226,9 @@ public sealed class CreateObservabilityDestinationRequest
                 Type = ObservabilityDestinationTypes.Logpush,
                 Url = url,
                 LogpushDataset = logpushDataset,
+
+                // Required, and required to be an object: a destination with no headers still has to say so.
+                Headers = new Dictionary<string, string?>(),
             },
         };
 
@@ -262,6 +271,14 @@ public sealed class CreateObservabilityDestinationRequest
                 problems.Add("Configuration.Url is required: it is the address telemetry is delivered to.");
             }
 
+            if (Configuration.Headers is null)
+            {
+                problems.Add(
+                    "Configuration.Headers is required and has to be an object, so a destination that carries " +
+                    "no headers sends an empty one. Observed live: leaving it out answers 400 with " +
+                    "'invalid_type' at configuration.headers, expecting a record.");
+            }
+
             if (string.IsNullOrWhiteSpace(Configuration.LogpushDataset))
             {
                 problems.Add(
@@ -300,13 +317,41 @@ public sealed class UpdateObservabilityDestinationRequest
     /// <exception cref="Exceptions.CloudflareConfigurationException">The enabled flag is missing.</exception>
     public void EnsureValid()
     {
+        var problems = new List<string>();
+
         if (Enabled is null)
         {
-            throw new Exceptions.CloudflareConfigurationException(new[]
-            {
+            problems.Add(
                 "Enabled is required on every update of a destination, even when it is not the field being " +
-                "changed. Send the value it already has to leave it alone.",
-            });
+                "changed. Send the value it already has to leave it alone.");
+        }
+
+        if (Configuration is not null)
+        {
+            if (string.IsNullOrWhiteSpace(Configuration.Type))
+            {
+                problems.Add(
+                    $"Configuration.Type is required whenever a configuration is sent; " +
+                    $"{ObservabilityDestinationTypes.Logpush} is the only kind published.");
+            }
+
+            if (string.IsNullOrWhiteSpace(Configuration.Url))
+            {
+                problems.Add("Configuration.Url is required whenever a configuration is sent.");
+            }
+
+            if (Configuration.Headers is null)
+            {
+                problems.Add(
+                    "Configuration.Headers is required whenever a configuration is sent, and has to be an " +
+                    "object. Send the headers that should remain with ReplaceHeaders set, or an empty object " +
+                    "with it unset to leave the destination's headers alone.");
+            }
+        }
+
+        if (problems.Count > 0)
+        {
+            throw new Exceptions.CloudflareConfigurationException(problems);
         }
     }
 }

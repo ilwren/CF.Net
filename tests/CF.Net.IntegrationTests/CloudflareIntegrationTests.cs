@@ -1157,7 +1157,9 @@ public class WriteIntegrationTests : CloudflareIntegrationTest
                 // hide the field Cloudflare objected to.
                 Warn($"POST /accounts/{{account_id}}/workers/observability/destinations was refused with " +
                      $"{exception.StatusCode}/{exception.ErrorCode}. Cloudflare's body: {exception.ResponseBody} " +
-                     $"This library sent: {JsonSerializer.Serialize(request)}. {exception.Message}");
+                     $"This library sent: " +
+                     $"{JsonSerializer.Serialize(request, CFNet.Serialization.CloudflareJson.Default)}. " +
+                     $"{exception.Message}");
 
                 SkipUnless(
                     false,

@@ -39,9 +39,10 @@ public class WorkersObservabilityServiceTests
             harness.LastRequest.Path,
             StringComparison.Ordinal);
 
-        // logpushDataset is camelCase on the wire, and an unset skipPreflightCheck is absent rather than false.
+        // logpushDataset is camelCase on the wire, headers is present even though it carries nothing, and an
+        // unset skipPreflightCheck is absent rather than false.
         Assert.Equal(
-            """{"name":"my-destination","enabled":true,"configuration":{"type":"logpush","url":"https://logs.example.com/ingest","logpushDataset":"opentelemetry-logs"}}""",
+            """{"name":"my-destination","enabled":true,"configuration":{"type":"logpush","url":"https://logs.example.com/ingest","headers":{},"logpushDataset":"opentelemetry-logs"}}""",
             harness.LastRequest.Body);
 
         Assert.Equal("dest-1", created.Slug);
@@ -102,9 +103,11 @@ public class WorkersObservabilityServiceTests
                     Configuration = new ObservabilityDestinationConfiguration(),
                 }));
 
-        // Type, Url and the dataset - which cannot be changed after the create, so it has to be right here.
-        Assert.Equal(3, exception.Problems.Count);
-        Assert.Contains("LogpushDataset", exception.Problems[2], StringComparison.Ordinal);
+        // Type, Url, Headers and the dataset - which cannot be changed after the create, so it has to be
+        // right here.
+        Assert.Equal(4, exception.Problems.Count);
+        Assert.Contains("Headers", exception.Problems[2], StringComparison.Ordinal);
+        Assert.Contains("LogpushDataset", exception.Problems[3], StringComparison.Ordinal);
 
         Assert.Equal(0, harness.RequestCount);
     }
@@ -168,11 +171,55 @@ public class WorkersObservabilityServiceTests
                     {
                         Type = ObservabilityDestinationTypes.Logpush,
                         Url = "https://logs.example.com/other",
+                        Headers = new Dictionary<string, string?>(),
                     },
                 }));
 
         Assert.Contains("Enabled", Assert.Single(exception.Problems), StringComparison.Ordinal);
         Assert.Equal(0, harness.RequestCount);
+    }
+
+    [Fact]
+    public async Task An_update_that_sends_a_configuration_has_to_send_a_complete_one()
+    {
+        using var harness = CloudflareHarness.Create();
+
+        // A configuration on an update is held to the same shape as one on a create: type, url and headers,
+        // all of them, even though the only field being changed here is the address.
+        var exception = await Assert.ThrowsAsync<CloudflareConfigurationException>(
+            () => harness.Client.WorkersObservability.UpdateDestinationAsync(
+                "dest-1",
+                new UpdateObservabilityDestinationRequest
+                {
+                    Enabled = false,
+                    Configuration = new ObservabilityDestinationConfiguration
+                    {
+                        Url = "https://logs.example.com/other",
+                    },
+                }));
+
+        Assert.Equal(2, exception.Problems.Count);
+        Assert.Contains("Type", exception.Problems[0], StringComparison.Ordinal);
+        Assert.Contains("Headers", exception.Problems[1], StringComparison.Ordinal);
+
+        Assert.Equal(0, harness.RequestCount);
+    }
+
+    [Fact]
+    public async Task A_destination_with_no_headers_still_sends_an_empty_object()
+    {
+        using var harness = CloudflareHarness.Create();
+        harness.RespondWithResult(LiveDestination);
+
+        // Observed live: configuration.headers is required and has to be an object, so a destination that
+        // authenticates with nothing at all still sends {} rather than leaving the field out.
+        await harness.Client.WorkersObservability.CreateDestinationAsync(
+            CreateObservabilityDestinationRequest.ForLogpush(
+                "my-destination",
+                "https://logs.example.com/ingest",
+                ObservabilityLogpushDatasets.OpenTelemetryMetrics));
+
+        Assert.Contains(""headers":{}", harness.LastRequest.Body, StringComparison.Ordinal);
     }
 
     [Fact]

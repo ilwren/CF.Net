@@ -666,6 +666,19 @@ public class ReadOnlyIntegrationTests : CloudflareIntegrationTest
                      $"{JsonSerializer.Serialize(model, CFNet.Serialization.CloudflareJson.Default)}");
             }
         }
+
+        // One Warn slot, spent once, and the reason is a surprise worth writing down: a run that walked the
+        // whole catalogue found no model reporting the task name 'text-generation', and no task by that name
+        // in the task list either, so what these three endpoints answer is not what their published shape
+        // implies. This reports what the first item of two of them really reads as - and becomes assertions,
+        // with the slot going back, once it has.
+        var firstTask = tasks.Count > 0 ? tasks[0] : null;
+        var firstModel = page.Items.Count > 0 ? page.Items[0] : null;
+        Warn($"the AI catalogue read {tasks.Count} task(s), {authors.Count} author(s) and " +
+             $"{page.TotalCount ?? page.Count} model(s). The first task reads " +
+             $"{(firstTask is null ? "nothing" : JsonSerializer.Serialize(firstTask, CFNet.Serialization.CloudflareJson.Default))}; " +
+             $"the first model reads " +
+             $"{(firstModel is null ? "nothing" : JsonSerializer.Serialize(firstModel, CFNet.Serialization.CloudflareJson.Default))}");
     }
 
     [Fact]
@@ -739,7 +752,7 @@ public class ReadOnlyIntegrationTests : CloudflareIntegrationTest
         string? generationTaskId = null;
         foreach (var task in tasks)
         {
-            if (task.Name == "text-generation")
+            if (string.Equals(task.Name, "text-generation", StringComparison.OrdinalIgnoreCase))
             {
                 generationTaskId = task.Id;
             }
@@ -899,7 +912,7 @@ public class ReadOnlyIntegrationTests : CloudflareIntegrationTest
         var count = 0;
         foreach (var model in models)
         {
-            if (model.Task?.Name == task)
+            if (IsTask(model, task))
             {
                 count++;
             }
@@ -908,9 +921,18 @@ public class ReadOnlyIntegrationTests : CloudflareIntegrationTest
         return count;
     }
 
+    private static bool IsTask(WorkersAiModel model, string task) =>
+        string.Equals(model.Task?.Name, task, StringComparison.OrdinalIgnoreCase);
+
+    private static bool HasFragment(WorkersAiModel model, string fragment) =>
+        model.Name?.Contains(fragment, StringComparison.OrdinalIgnoreCase) == true;
+
     /// <summary>
-    /// Chooses a model that performs a task, preferring the smallest of the names it recognises, so a run
-    /// costs as few neurons as it can.
+    /// Chooses a model to run, preferring the smallest name it recognises so a run costs as few neurons as it
+    /// can. A model that reports the task wins; failing that, a recognised name wins whatever the model says
+    /// its task is - a live catalogue reported no task names at all, and "cannot find a model by task" is not
+    /// a reason to skip inference. The last resort is the catalogue's own first model, whose answer the fact
+    /// then reports rather than asserts on.
     /// </summary>
     private static string? PickByTask(
         IReadOnlyList<WorkersAiModel> models,
@@ -921,8 +943,18 @@ public class ReadOnlyIntegrationTests : CloudflareIntegrationTest
         {
             foreach (var model in models)
             {
-                if (model.Task?.Name == task &&
-                    model.Name?.Contains(fragment, StringComparison.OrdinalIgnoreCase) == true)
+                if (IsTask(model, task) && HasFragment(model, fragment))
+                {
+                    return model.Name;
+                }
+            }
+        }
+
+        foreach (var fragment in preferred)
+        {
+            foreach (var model in models)
+            {
+                if (HasFragment(model, fragment))
                 {
                     return model.Name;
                 }
@@ -931,13 +963,13 @@ public class ReadOnlyIntegrationTests : CloudflareIntegrationTest
 
         foreach (var model in models)
         {
-            if (model.Task?.Name == task)
+            if (IsTask(model, task))
             {
                 return model.Name;
             }
         }
 
-        return null;
+        return models.Count > 0 ? models[0].Name : null;
     }
 
     /// <summary>The first three numbers of an embedding answer, which is all of it worth reporting.</summary>

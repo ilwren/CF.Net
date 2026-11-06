@@ -11,6 +11,7 @@ using CFNet.Models.R2;
 using CFNet.Models.Rules;
 using CFNet.Models.Ssl;
 using CFNet.Models.Workers;
+using CFNet.Models.WorkersAi;
 using CFNet.Models.Zones;
 using CFNet.Services;
 using Xunit;
@@ -564,6 +565,152 @@ public class ReadOnlyIntegrationTests : CloudflareIntegrationTest
         {
             Log($"  {script.Name} modified={script.ModifiedOn:O} handlers={string.Join(",", script.Handlers ?? new List<string>())}");
         }
+    }
+
+    [Fact]
+    public async Task Workers_ai_models_tasks_and_authors_can_be_searched()
+    {
+        if (!SkipWithoutAccount())
+        {
+            return;
+        }
+
+        // All three of these are catalogues of what Cloudflare offers rather than of what the account owns,
+        // so a read permission is the whole of what they need. The published schema types the items of all
+        // three as "unknown", which is why each answer is reported field by field rather than just counted:
+        // the models are deliberately narrow and anything they do not name is what these lines are for.
+        IReadOnlyList<WorkersAiTask> tasks;
+        try
+        {
+            tasks = await Client.WorkersAi.ListTasksAsync();
+        }
+        catch (CloudflareApiException exception)
+            when (exception.StatusCode is System.Net.HttpStatusCode.Forbidden or System.Net.HttpStatusCode.NotFound)
+        {
+            SkipUnless(
+                false,
+                $"GET /accounts/{{account_id}}/ai/tasks/search was refused with " +
+                $"{exception.StatusCode}/{exception.ErrorCode}: {exception.Message}");
+            return;
+        }
+        catch (Exception exception) when (exception is not CloudflareApiException)
+        {
+            Warn($"GET /accounts/{{account_id}}/ai/tasks/search answered something this library could not read " +
+                 $"as a task list: {exception.GetType().Name}: {exception.Message}");
+            return;
+        }
+
+        Log($"{tasks.Count} task(s): {string.Join(", ", tasks.Take(10).Select(task => task.ToString()))}");
+        foreach (var task in tasks.Take(3))
+        {
+            if (task.AdditionalData is { Count: > 0 })
+            {
+                Warn($"GET /accounts/{{account_id}}/ai/tasks/search answered task fields this library does not " +
+                     $"model: {string.Join(", ", task.AdditionalData.Keys)}. The item as read: " +
+                     $"{JsonSerializer.Serialize(task, CFNet.Serialization.CloudflareJson.Default)}");
+            }
+        }
+
+        IReadOnlyList<WorkersAiAuthor> authors;
+        try
+        {
+            authors = await Client.WorkersAi.ListAuthorsAsync();
+        }
+        catch (CloudflareApiException exception)
+        {
+            // The task search just succeeded, so a refusal here is about this endpoint and not about the
+            // token - worth a line of its own rather than a failure.
+            Warn($"GET /accounts/{{account_id}}/ai/authors/search was refused with " +
+                 $"{exception.StatusCode}/{exception.ErrorCode}. Cloudflare's body: {exception.ResponseBody}");
+            return;
+        }
+        catch (Exception exception) when (exception is not CloudflareApiException)
+        {
+            Warn($"GET /accounts/{{account_id}}/ai/authors/search answered something this library could not " +
+                 $"read as an author list: {exception.GetType().Name}: {exception.Message}");
+            return;
+        }
+
+        Log($"{authors.Count} author(s): {string.Join(", ", authors.Take(10).Select(author => author.ToString()))}");
+        foreach (var author in authors.Take(3))
+        {
+            if (author.AdditionalData is { Count: > 0 })
+            {
+                Warn($"GET /accounts/{{account_id}}/ai/authors/search answered author fields this library does " +
+                     $"not model: {string.Join(", ", author.AdditionalData.Keys)}. The item as read: " +
+                     $"{JsonSerializer.Serialize(author, CFNet.Serialization.CloudflareJson.Default)}");
+            }
+        }
+
+        // One filter that the two lists above can supply: the first task's name.
+        var parameters = new WorkersAiModelListParameters { PerPage = 5 };
+        if (tasks.Count > 0 && !string.IsNullOrEmpty(tasks[0].Name))
+        {
+            parameters.Task = tasks[0].Name;
+        }
+
+        var page = await Client.WorkersAi.ListModelsAsync(parameters);
+        Log($"{page.Count} model(s) on page 1 of a reported {page.TotalCount}, filtered by " +
+            $"{parameters.Task ?? "no task"}: " +
+            $"{string.Join(", ", page.Items.Take(5).Select(model => model.ToString()))}");
+
+        foreach (var model in page.Items.Take(3))
+        {
+            Log($"model {model.Name} tags={string.Join(",", model.Tags ?? new List<string>())} " +
+                $"properties={string.Join(",", (model.Properties ?? new List<WorkersAiModelProperty>()).Select(property => property.ToString()))} " +
+                $"limits={model.Limits} batching={model.Batching}");
+            if (model.AdditionalData is { Count: > 0 })
+            {
+                Warn($"GET /accounts/{{account_id}}/ai/models/search answered model fields this library does " +
+                     $"not model: {string.Join(", ", model.AdditionalData.Keys)}. The item as read: " +
+                     $"{JsonSerializer.Serialize(model, CFNet.Serialization.CloudflareJson.Default)}");
+            }
+        }
+    }
+
+    [Fact]
+    public async Task A_workers_ai_model_schema_can_be_read()
+    {
+        if (!SkipWithoutAccount())
+        {
+            return;
+        }
+
+        var page = await Client.WorkersAi.ListModelsAsync(new WorkersAiModelListParameters { PerPage = 1 });
+        var model = page.Items.Count > 0 ? page.Items[0] : null;
+        if (model?.Name is not { } name)
+        {
+            Log("no model in the catalogue to read a schema for");
+            return;
+        }
+
+        WorkersAiModelSchema schema;
+        try
+        {
+            schema = await Client.WorkersAi.GetModelSchemaAsync(name);
+        }
+        catch (CloudflareApiException exception)
+            when (exception.StatusCode is System.Net.HttpStatusCode.Forbidden or System.Net.HttpStatusCode.NotFound)
+        {
+            SkipUnless(
+                false,
+                $"GET /accounts/{{account_id}}/ai/models/schema was refused with " +
+                $"{exception.StatusCode}/{exception.ErrorCode}: {exception.Message}");
+            return;
+        }
+        catch (CloudflareApiException exception)
+        {
+            Warn($"GET /accounts/{{account_id}}/ai/models/schema?model={name} was refused with " +
+                 $"{exception.StatusCode}/{exception.ErrorCode}. Cloudflare's body: {exception.ResponseBody}");
+            return;
+        }
+
+        // The published shape of a schema side is three fields, which is not a usable JSON Schema on its own;
+        // the useful half is whatever else arrives, so that is what gets reported.
+        Log($"schema for {name}: {schema}; input extra=" +
+            $"{string.Join(",", (schema.Input?.AdditionalData ?? new Dictionary<string, JsonElement>()).Keys)}; " +
+            $"output extra=" +
+            $"{string.Join(",", (schema.Output?.AdditionalData ?? new Dictionary<string, JsonElement>()).Keys)}");
     }
 
     [Fact]

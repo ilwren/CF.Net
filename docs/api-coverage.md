@@ -603,6 +603,45 @@ would serve as one.
 
 ---
 
+## Workers AI
+
+`IWorkersAiService` — `client.WorkersAi`
+
+The catalogue of models an account can run inference against. These live under `/accounts/{account_id}/ai/` —
+a **sibling** of the Workers paths rather than one of them, even though the product is Workers AI — and all
+three searches are catalogues of what Cloudflare offers rather than of what the account owns, so read access
+is the whole of what they need.
+
+| Method | Endpoint | Notes |
+| --- | --- | --- |
+| `ListModelsAsync(WorkersAiModelListParameters?, accountId)` | `GET /accounts/{account_id}/ai/models/search` | page-numbered, with `author`, `format`, `hide_experimental`, `include_deprecated`, `search`, `source` and `task` filters — all snake_case, and all optional, so no filters is no query string at all. `format=openrouter` asks for a marketplace-shaped answer (`{data: […]}`) which this library passes through but does **not** read: the default array is the only shape it types. |
+| `ListAllModelsAsync(...)` | `GET …/ai/models/search` | walks every page, keeping the filters and replacing only `page`; stops on a short page as well as on `result_info`, because a catalogue that fits in one page is the common case |
+| `GetModelSchemaAsync(model, accountId)` | `GET …/ai/models/schema?model={model}` | the model's own input and output JSON Schema, which is the only published source for what an inference call takes — the shapes differ per task. `model` is the full name, namespace included (`@cf/meta/llama-3.2-3b-instruct`), so it goes out escaped |
+| `ListTasksAsync(accountId)` | `GET …/ai/tasks/search` | the task types — `text-generation`, `text-embeddings` and the rest. Takes **only** the account id: no filters at all, not even a search term, despite the path saying `search`. Answers a bare array |
+| `ListAuthorsAsync(accountId)` | `GET …/ai/authors/search` | the authors and organisations behind the models, likewise a bare array with no filters. An author's name is what the model search's `author` filter takes, as a task's name is what its `task` filter takes |
+
+**The published schema types the items of all three searches as `unknown`** — Cloudflare documents these
+endpoints' query parameters and then answers with `result: array of unknown`, its own 200 example being
+`[{}]`. So `WorkersAiModel`, `WorkersAiTask` and `WorkersAiAuthor` are deliberately narrow: they name the
+fields the Workers AI documentation describes (`id`, `name`, `description`, `task`, `tags`, `properties`,
+`limits`, `batching`) and preserve everything else in `AdditionalData`, which is the opposite of guessing —
+a field this library has not named is reported by the integration run rather than silently dropped, and the
+type is widened against a real answer. `WorkersAiModelProperty.Value` is the JSON it arrived as, because the
+same property carries a boolean for `beta`, a string for `deprecation_date` and a number for
+`context_window`.
+
+`GET …/ai/models/schema` is published in full but thinly: each side is `{additionalProperties, description,
+type}`, which is three fields and not a usable JSON Schema on its own. The half that says what a model
+actually takes — `properties`, `required`, `oneOf` — arrives alongside and is preserved in
+`WorkersAiJsonSchema.AdditionalData`, so a caller can read it as raw JSON today and the type can be widened
+when a live answer says what Cloudflare really sends.
+
+⛔ `POST …/ai/run/{model_name}` — inference itself, whose request and response are each a union of a dozen
+task-specific shapes — plus `…/ai/finetunes` (and their assets, which need `Workers AI Write`),
+`…/ai/tomarkdown`, and the AI Gateway. None of these is a paid feature; they are simply the next increments.
+
+---
+
 ## Pages
 
 `IPagesProjectsService` — `client.Pages`

@@ -339,6 +339,7 @@ public class CloudflareClientTests
         Assert.IsAssignableFrom<IRulesListService>(client.Lists);
         Assert.IsAssignableFrom<IRulesetService>(client.Rulesets);
         Assert.IsAssignableFrom<IWorkersObservabilityService>(client.WorkersObservability);
+        Assert.IsAssignableFrom<IWorkersAiService>(client.WorkersAi);
     }
 
     [Fact]
@@ -541,6 +542,7 @@ public class ServiceCollectionExtensionsTests
         Assert.Same(client.Lists, provider.GetRequiredService<IRulesListService>());
         Assert.Same(client.Rulesets, provider.GetRequiredService<IRulesetService>());
         Assert.Same(client.WorkersObservability, provider.GetRequiredService<IWorkersObservabilityService>());
+        Assert.Same(client.WorkersAi, provider.GetRequiredService<IWorkersAiService>());
         Assert.Same(client.Transport, provider.GetRequiredService<ICloudflareTransport>());
         Assert.Same(client, provider.GetRequiredService<CloudflareClient>());
         Assert.NotNull(provider.GetRequiredService<ICloudflareClientFactory>());

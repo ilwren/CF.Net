@@ -94,6 +94,12 @@ public interface ICloudflareClient : IDisposable
     IWorkersObservabilityService WorkersObservability { get; }
 
     /// <summary>
+    /// Workers AI: the model catalogue an account can run inference against - models, tasks, authors, and
+    /// each model's own input and output schema.
+    /// </summary>
+    IWorkersAiService WorkersAi { get; }
+
+    /// <summary>
     /// Cheap connectivity check that never throws: verifies the credentials using whichever scheme is
     /// configured and reports the outcome.
     /// </summary>

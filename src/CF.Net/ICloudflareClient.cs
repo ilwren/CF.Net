@@ -82,6 +82,12 @@ public interface ICloudflareClient : IDisposable
     IRulesListService Lists { get; }
 
     /// <summary>
+    /// The ruleset engine: rulesets, the rules inside them, their versions, and the phase entrypoints -
+    /// from an account path or a zone one.
+    /// </summary>
+    IRulesetService Rulesets { get; }
+
+    /// <summary>
     /// Cheap connectivity check that never throws: verifies the credentials using whichever scheme is
     /// configured and reports the outcome.
     /// </summary>

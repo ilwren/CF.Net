@@ -96,6 +96,111 @@ public class ReadOnlyIntegrationTests : CloudflareIntegrationTest
     }
 
     [Fact]
+    public async Task Rulesets_can_be_listed_and_read()
+    {
+        if (!SkipWithoutCredentials() || !SkipWithoutAccount())
+        {
+            return;
+        }
+
+        var page = await Client.Rulesets.ListAsync();
+
+        Log($"{page.Count} ruleset(s) in this account");
+        Assert.All(page.Items, ruleset => Assert.False(string.IsNullOrEmpty(ruleset.Id)));
+
+        // The kind and phase constants are wire values, and a phase Cloudflare adds would be read as an
+        // unknown string rather than refused - so both are checked against what this account really holds,
+        // once for the whole set rather than once per ruleset.
+        var knownKinds = ConstantValues(typeof(RulesetKind));
+        var knownPhases = ConstantValues(typeof(RulesetPhase));
+        var unknownKinds = page.Items
+            .Select(ruleset => ruleset.Kind)
+            .Where(kind => kind is { Length: > 0 } && !knownKinds.Contains(kind))
+            .Distinct(StringComparer.Ordinal)
+            .ToList();
+        var unknownPhases = page.Items
+            .Select(ruleset => ruleset.Phase)
+            .Where(phase => phase is { Length: > 0 } && !knownPhases.Contains(phase))
+            .Distinct(StringComparer.Ordinal)
+            .ToList();
+
+        if (unknownKinds.Count > 0 || unknownPhases.Count > 0)
+        {
+            Warn($"GET /accounts/{{account_id}}/rulesets reported values this library does not list as " +
+                 $"constants - kinds: {string.Join(", ", unknownKinds)}; phases: {string.Join(", ", unknownPhases)}. " +
+                 "RulesetKind and RulesetPhase are behind.");
+        }
+
+        foreach (var summary in page.Items.Take(3))
+        {
+            var ruleset = await Client.Rulesets.GetAsync(summary.Id!);
+            Assert.NotNull(ruleset);
+            Log($"ruleset {ruleset}");
+
+            // A list omits the rules; reading one ruleset is what brings them back.
+            foreach (var rule in ruleset!.Rules ?? new List<RulesetRule>())
+            {
+                Assert.False(string.IsNullOrEmpty(rule.Action), $"rule {rule.Id} has no action");
+                Assert.False(string.IsNullOrEmpty(rule.Expression), $"rule {rule.Id} has no expression");
+
+                if (rule.ActionParameters?.AdditionalData is { Count: > 0 } untyped)
+                {
+                    Warn($"A {rule.Action} rule in ruleset {ruleset.Name} carried action parameters this " +
+                         $"library does not type: {JsonSerializer.Serialize(untyped)}. Only the redirect " +
+                         "parameters are declared; the rest is readable from AdditionalData.");
+                }
+
+                if (rule.AdditionalData is { Count: > 0 } extra)
+                {
+                    Warn($"GET /accounts/{{account_id}}/rulesets/{ruleset.Id} returned rule fields this " +
+                         $"library does not model, on rule '{rule.Id}': {JsonSerializer.Serialize(extra)}.");
+                }
+            }
+
+            var versions = await Client.Rulesets.ListVersionsAsync(summary.Id!);
+            Log($"{versions.Count} version(s) of {ruleset.Name}");
+            Assert.All(versions, version => Assert.Equal(ruleset.Id, version.Id));
+
+            if (versions.Count > 0)
+            {
+                // A version is a frozen ruleset, so it reads back through the same model.
+                var oldest = await Client.Rulesets.GetVersionAsync(summary.Id!, versions[^1].Version!);
+                Assert.NotNull(oldest);
+                Assert.Equal(versions[^1].Version, oldest!.Version);
+            }
+
+            if (ruleset.AdditionalData is { Count: > 0 } extra)
+            {
+                Warn($"GET /accounts/{{account_id}}/rulesets/{ruleset.Id} returned fields this library does " +
+                     $"not model, on '{ruleset.Name}': {JsonSerializer.Serialize(extra)}.");
+            }
+        }
+
+        // The entrypoint of the phase Bulk Redirects runs at, which is either the account's root ruleset for
+        // it or nothing at all - both are normal, and which one it is decides whether redirects are live.
+        var entrypoint = await Client.Rulesets.GetEntrypointAsync(RulesetPhase.HttpRequestRedirect);
+        Log(entrypoint is null
+            ? "no account entrypoint for http_request_redirect, so no Bulk Redirects are running"
+            : $"account entrypoint for http_request_redirect: {entrypoint}");
+
+        // The same resource under a zone path, which is where custom WAF rules and zone redirects live.
+        var zone = await ReadableZoneAsync();
+        if (zone is not null)
+        {
+            var zonePage = await Client.Rulesets.ListAsync(zoneId: zone.Id);
+            Log($"{zonePage.Count} ruleset(s) on zone {zone.Name}");
+            Assert.All(zonePage.Items, ruleset => Assert.False(string.IsNullOrEmpty(ruleset.Id)));
+
+            var zoneEntrypoint = await Client.Rulesets.GetEntrypointAsync(
+                RulesetPhase.HttpRequestFirewallCustom,
+                zoneId: zone.Id);
+            Log(zoneEntrypoint is null
+                ? $"zone {zone.Name} has no custom WAF rules"
+                : $"zone {zone.Name} custom WAF entrypoint: {zoneEntrypoint}");
+        }
+    }
+
+    [Fact]
     public async Task Rules_lists_can_be_listed()
     {
         if (!SkipWithoutCredentials() || !SkipWithoutAccount())
@@ -942,6 +1047,146 @@ public class WriteIntegrationTests : CloudflareIntegrationTest
         }
 
         Assert.Null(await Client.Kv.GetNamespaceAsync(namespaceId));
+    }
+
+    [Fact]
+    public async Task A_redirect_ruleset_can_be_created_given_a_rule_and_removed()
+    {
+        if (!SkipWithoutAccount() || !SkipWithoutWritePermission())
+        {
+            return;
+        }
+
+        var marker = Guid.NewGuid().ToString("N")[..8];
+        var listName = $"cfnet_it_{DateTime.UtcNow:yyyyMMddHHmmss}_{marker}";
+
+        // A redirect rule points at a list by name, so the list has to exist first. Both are created here
+        // and both are removed below: this test never touches a resource the account already had.
+        var list = await Client.Lists.CreateAsync(new CreateRulesListRequest
+        {
+            Name = listName,
+            Kind = RulesListKind.Redirect,
+            Description = "CF.Net integration test list for a redirect ruleset",
+        });
+
+        try
+        {
+            var added = await Client.Lists.CreateItemsAsync(
+                list.Id!,
+                new[]
+                {
+                    CreateRulesListItemRequest.ForRedirect($"cfnet-{marker}.example.com/old", "https://example.com/new", 301),
+                });
+            var itemOperation = await Client.Lists.WaitForBulkOperationAsync(
+                added.OperationId!,
+                timeout: TimeSpan.FromSeconds(60),
+                pollInterval: TimeSpan.FromSeconds(2));
+            Assert.False(itemOperation.HasFailed, $"Cloudflare refused the list item: {itemOperation.Error}");
+
+            // A custom ruleset is the safe thing to create against a live account: nothing serves it until a
+            // root ruleset executes it, so no request this account receives changes behaviour.
+            Ruleset ruleset;
+            try
+            {
+                ruleset = await Client.Rulesets.CreateAsync(new CreateRulesetRequest
+                {
+                    Name = $"cfnet-it-{marker}",
+                    Kind = RulesetKind.Custom,
+                    Phase = RulesetPhase.HttpRequestRedirect,
+                    Description = "CF.Net integration test ruleset",
+                    Rules = new List<CreateRulesetRuleRequest>
+                    {
+                        CreateRulesetRuleRequest.ForRedirectFromList(listName, "true", "bulk redirects"),
+                    },
+                });
+            }
+            catch (CloudflareApiException exception) when (exception.StatusCode == System.Net.HttpStatusCode.Forbidden)
+            {
+                // Reading rulesets only needs Rulesets Read; creating them needs Write. The list is still
+                // cleaned up by the finally below.
+                SkipUnless(
+                    false,
+                    "POST /accounts/{account_id}/rulesets was refused, so this token can read Account " +
+                    "Rulesets but not write them. " + exception.Message);
+                return;
+            }
+
+            try
+            {
+                Assert.Equal(RulesetKind.Custom, ruleset.Kind);
+                Assert.Equal(RulesetPhase.HttpRequestRedirect, ruleset.Phase);
+                Assert.False(ruleset.IsRoot);
+                Log($"created ruleset {ruleset}");
+
+                // The rule went in with the ruleset, so it is already in what came back.
+                var rule = Assert.Single(ruleset.Rules!);
+                Assert.Equal("redirect", rule.Action);
+                Assert.Equal("true", rule.Expression);
+                Assert.Equal(listName, rule.ActionParameters!.FromList!.Name);
+                Assert.Equal("target_url", rule.ActionParameters.FromList.Key);
+
+                var read = await Client.Rulesets.GetAsync(ruleset.Id!);
+                Assert.NotNull(read);
+                Assert.Equal(ruleset.Version, read!.Version);
+
+                var versions = await Client.Rulesets.ListVersionsAsync(ruleset.Id!);
+                Assert.NotEmpty(versions);
+                Log($"{versions.Count} version(s) after creating it with a rule");
+
+                // A rule change answers with the whole ruleset, not the rule, so the change is read back
+                // out of what came back.
+                var afterAdd = await Client.Rulesets.CreateRuleAsync(
+                    ruleset.Id!,
+                    CreateRulesetRuleRequest.ForRedirectFromList(
+                        listName,
+                        """starts_with(http.request.uri.path, "/second")""",
+                        "second rule"));
+                Assert.Equal(2, afterAdd.RuleCount);
+
+                var second = afterAdd.Rules!.Single(candidate => candidate.Description == "second rule");
+                var afterEdit = await Client.Rulesets.EditRuleAsync(
+                    ruleset.Id!,
+                    second.Id!,
+                    new CreateRulesetRuleRequest { Enabled = false });
+                Assert.False(afterEdit.Rules!.Single(candidate => candidate.Id == second.Id).Enabled);
+
+                var afterRemove = await Client.Rulesets.DeleteRuleAsync(ruleset.Id!, second.Id!);
+                Assert.Equal(1, afterRemove.RuleCount);
+                Assert.False(
+                    afterRemove.Rules!.Any(candidate => candidate.Id == second.Id),
+                    $"rule {second.Id} should have been removed, and it is still in {afterRemove}");
+
+                var finalVersions = await Client.Rulesets.ListVersionsAsync(ruleset.Id!);
+                Log($"{finalVersions.Count} version(s) after appending, editing and removing a rule");
+                Assert.True(
+                    finalVersions.Count > versions.Count,
+                    $"every change makes a version, so {versions.Count} should have grown, and it is {finalVersions.Count}");
+            }
+            finally
+            {
+                try
+                {
+                    await Client.Rulesets.DeleteAsync(ruleset.Id!);
+                    Log($"deleted ruleset {ruleset.Id}");
+                }
+                catch (CloudflareApiException exception) when (exception.IsNotFound)
+                {
+                    Log("ruleset was already gone");
+                }
+            }
+        }
+        finally
+        {
+            try
+            {
+                var deleted = await Client.Lists.DeleteAsync(list.Id!);
+                Log($"deleted list {deleted}");
+            }
+            catch (CloudflareApiException exception) when (exception.IsNotFound)
+            {
+                Log("list was already gone");
+            }
+        }
     }
 
     [Fact]

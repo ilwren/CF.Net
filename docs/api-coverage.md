@@ -716,9 +716,52 @@ Redirect entries (`RulesListRedirect`) carry `source_url`, `target_url`, `status
 own default applies instead of a `false` this library invented. Hostname entries carry `url_hostname` and
 `exclude_exact_hostname`, which matches subdomains but not the name itself.
 
-⛔ Not wrapped yet: the ruleset rule that turns a redirect list into actual redirects
-(`POST /accounts/{account_id}/rulesets` with `phase: http_request_redirect` and a `from_list` action
-parameter). This section is the data half of Bulk Redirects; the ruleset half is next.
+The rule that turns one of these lists into actual redirects is in the next section: a ruleset in the
+`http_request_redirect` phase with a `from_list` action parameter naming the list.
+
+---
+
+## Rulesets (the ruleset engine)
+
+`IRulesetService` — `client.Rulesets`
+
+A ruleset is an ordered set of rules Cloudflare runs at one phase of the request lifecycle. The API serves
+the identical resource from an account path and a zone path - its own schema spells that
+`{accounts_or_zones}` - so **every method takes both an `accountId` and a `zoneId`** and works against the
+zone only when a zone id is passed explicitly. The configured default `ZoneId` is deliberately not
+consulted, because a method that changed scope depending on how the client was configured would be worse
+than one that asks.
+
+| Method | Endpoint | Notes |
+| --- | --- | --- |
+| `ListAsync(RulesetListParameters?, accountId, zoneId)` | `GET {accounts_or_zones}/{id}/rulesets` | cursor paged; no kind or phase filter exists, so narrowing is the caller's job. Rules are not included in a list |
+| `GetAsync(rulesetId, accountId, zoneId)` | `GET …/rulesets/{ruleset_id}` | `null` on 404. This is the call that brings the rules back |
+| `CreateAsync(CreateRulesetRequest, dryRun?, accountId, zoneId)` | `POST …/rulesets` | `name`, `kind`, `phase` and optionally `rules`, so a ruleset and its first rules land in one version. A missing name, kind or phase is refused locally. `kind: custom` is inert until a root ruleset executes it |
+| `UpdateAsync(rulesetId, UpdateRulesetRequest, dryRun?, …)` | `PUT …/rulesets/{ruleset_id}` | a **whole-ruleset replacement**: omitting `rules` removes them all, so a request with nothing set is refused locally and an empty `Rules` list is how you clear them on purpose |
+| `DeleteAsync(rulesetId, dryRun?, …)` | `DELETE …/rulesets/{ruleset_id}` | |
+| `GetEntrypointAsync(phase, accountId, zoneId)` | `GET …/rulesets/phases/{phase}/entrypoint` | `null` when the scope has no root ruleset for that phase, which is the normal state for an unconfigured one |
+| `UpdateEntrypointAsync(phase, UpdateRulesetRequest, dryRun?, …)` | `PUT …/rulesets/phases/{phase}/entrypoint` | changes what live traffic does; read it first |
+| `CreateRuleAsync(rulesetId, CreateRulesetRuleRequest, dryRun?, …)` | `POST …/rulesets/{ruleset_id}/rules` | appends. **Answers with the whole ruleset**, not the rule |
+| `EditRuleAsync(rulesetId, ruleId, CreateRulesetRuleRequest, dryRun?, …)` | `PATCH …/rulesets/{ruleset_id}/rules/{rule_id}` | a patch: unset fields are left alone. An edit with nothing set is refused locally |
+| `DeleteRuleAsync(rulesetId, ruleId, dryRun?, …)` | `DELETE …/rulesets/{ruleset_id}/rules/{rule_id}` | answers with the ruleset as it now stands |
+| `ListVersionsAsync(rulesetId, …)` | `GET …/rulesets/{ruleset_id}/versions` | a version is a frozen ruleset, so it reads back through the same model |
+| `GetVersionAsync(rulesetId, version, …)` | `GET …/rulesets/{ruleset_id}/versions/{version}` | `null` on 404, which is what a pruned version looks like |
+| `DeleteVersionAsync(rulesetId, version, …)` | `DELETE …/rulesets/{ruleset_id}/versions/{version}` | prunes one; the version in force and the one before it cannot be pruned |
+
+`Ruleset.Version` is a **string** in Cloudflare's own schema even though it reads like a number, and every
+change makes a new one. `RulesetKind` covers `root`, `managed`, `custom` and `zone`; `RulesetPhase` covers
+the 23 phases the API publishes, from `http_request_redirect` (Bulk Redirects) through
+`http_request_firewall_custom` (custom WAF rules) to `magic_transit`.
+
+Rules come in twenty-odd action-specific shapes. `RulesetRule` declares the fields every rule shares, plus
+the **redirect** parameters - `from_list` (`name` + `key`, the Bulk Redirects case, built by
+`CreateRulesetRuleRequest.ForRedirectFromList`) and `from_value` (a literal or expression target with
+`status_code` and `preserve_query_string`, the Dynamic Redirect case). Any other action's parameters arrive
+in `RulesetActionParameters.AdditionalData` as they came rather than being guessed at, and the integration
+test reports which ones those were so a later release can type them from evidence.
+
+⛔ Not wrapped yet: `POST …/rulesets/{ruleset_id}/import` (importing a whole set of rules), the managed
+ruleset overrides an `execute` rule carries, and rate limit rule parameters.
 
 ---
 

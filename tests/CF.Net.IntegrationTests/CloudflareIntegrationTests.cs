@@ -705,12 +705,25 @@ public class ReadOnlyIntegrationTests : CloudflareIntegrationTest
             return;
         }
 
-        // The published shape of a schema side is three fields, which is not a usable JSON Schema on its own;
-        // the useful half is whatever else arrives, so that is what gets reported.
-        Log($"schema for {name}: {schema}; input extra=" +
-            $"{string.Join(",", (schema.Input?.AdditionalData ?? new Dictionary<string, JsonElement>()).Keys)}; " +
-            $"output extra=" +
-            $"{string.Join(",", (schema.Output?.AdditionalData ?? new Dictionary<string, JsonElement>()).Keys)}");
+        // All three fields of a side are required by the published schema, so that much is safe to assert.
+        Assert.NotNull(schema.Input);
+        Assert.NotNull(schema.Output);
+        Assert.False(string.IsNullOrEmpty(schema.Input?.Type));
+        Assert.False(string.IsNullOrEmpty(schema.Output?.Type));
+
+        var inputExtras = (schema.Input?.AdditionalData ?? new Dictionary<string, JsonElement>()).Keys;
+        var outputExtras = (schema.Output?.AdditionalData ?? new Dictionary<string, JsonElement>()).Keys;
+        Log($"schema for {name}: {schema}; input extra={string.Join(",", inputExtras)}; " +
+            $"output extra={string.Join(",", outputExtras)}");
+
+        // One Warn slot, spent once. Cloudflare publishes three fields per side and a 200 example whose
+        // description field reads "JSON Schema definition for the model's input parameters" - a description
+        // of a schema rather than the model-specific schema the endpoint's own summary promises.
+        // AdditionalData keeps whichever really arrives; this reports which that was, so the coverage doc's
+        // claim can be replaced by an assertion on the next run.
+        Warn($"GET /accounts/{{account_id}}/ai/models/schema?model={name} answered: {schema}; input extras " +
+             $"[{string.Join(",", inputExtras)}], output extras [{string.Join(",", outputExtras)}]; as read: " +
+             $"{JsonSerializer.Serialize(schema, CFNet.Serialization.CloudflareJson.Default)}");
     }
 
     [Fact]

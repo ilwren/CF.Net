@@ -187,9 +187,10 @@ public interface IRulesetService
     /// <param name="cancellationToken">Cancellation token.</param>
     /// <returns>The ruleset as it now stands, with the changed rule in <see cref="Ruleset.Rules"/>.</returns>
     /// <remarks>
-    /// Unlike <see cref="UpdateAsync"/> this is a patch: only the fields set on <paramref name="rule"/> are
-    /// sent, because the serializer omits nulls. A request with nothing set is refused locally, since
-    /// sending it would be an empty object Cloudflare rejects anyway.
+    /// Cloudflare requires the action and the expression on an edit as well as on a create - it refuses one
+    /// without them with <c>20015</c> and <c>20125</c>, observed live - so the rule has to be sent back
+    /// whole with whatever changed, which is why this takes the same type a create does. The remaining
+    /// fields are genuinely optional: the serializer omits what is unset, so they are left alone.
     /// </remarks>
     Task<Ruleset> EditRuleAsync(
         string rulesetId,
@@ -430,22 +431,7 @@ public sealed class RulesetService : CloudflareService, IRulesetService
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(rule);
-
-        var problems = new List<string>();
-        if (string.IsNullOrWhiteSpace(rule.Action))
-        {
-            problems.Add("A rule needs an action, e.g. redirect, block, skip or execute.");
-        }
-
-        if (string.IsNullOrWhiteSpace(rule.Expression))
-        {
-            problems.Add("A rule needs an expression deciding when it matches. \"true\" matches every request.");
-        }
-
-        if (problems.Count > 0)
-        {
-            throw new Exceptions.CloudflareConfigurationException(problems);
-        }
+        RequireAMatchableRule(rule);
 
         var send = CloudflareRequest.Post(
             $"{RulesetPath(ScopePath(accountId, zoneId), rulesetId)}/rules",
@@ -469,16 +455,9 @@ public sealed class RulesetService : CloudflareService, IRulesetService
     {
         ArgumentNullException.ThrowIfNull(rule);
 
-        // A patch with nothing in it would be an empty object, which Cloudflare rejects; saying so here
-        // names the mistake instead of the refusal.
-        if (IsEmpty(rule))
-        {
-            throw new Exceptions.CloudflareConfigurationException(new[]
-            {
-                "Editing a rule needs at least one field to change. Every field left null is left alone, so " +
-                "an edit with none set changes nothing.",
-            });
-        }
+        // Cloudflare answers an edit that omits them with 20015 and 20125, so the requirement is the same
+        // as for a create: an edit is the rule sent back whole, not a sparse patch.
+        RequireAMatchableRule(rule);
 
         var send = CloudflareRequest.Patch(
             $"{RulePath(ScopePath(accountId, zoneId), rulesetId, ruleId)}",
@@ -591,11 +570,25 @@ public sealed class RulesetService : CloudflareService, IRulesetService
         && request.Phase is null
         && request.Rules is null;
 
-    private static bool IsEmpty(CreateRulesetRuleRequest rule) =>
-        rule.Action is null
-        && rule.Expression is null
-        && rule.Description is null
-        && rule.Enabled is null
-        && rule.Logging is null
-        && rule.ActionParameters is null;
+    /// <summary>
+    /// Refuses a rule that could not match anything. Cloudflare asks for both on a create and on an edit.
+    /// </summary>
+    private static void RequireAMatchableRule(CreateRulesetRuleRequest rule)
+    {
+        var problems = new List<string>();
+        if (string.IsNullOrWhiteSpace(rule.Action))
+        {
+            problems.Add("A rule needs an action, e.g. redirect, block, skip or execute.");
+        }
+
+        if (string.IsNullOrWhiteSpace(rule.Expression))
+        {
+            problems.Add("A rule needs an expression deciding when it matches. \"true\" matches every request.");
+        }
+
+        if (problems.Count > 0)
+        {
+            throw new Exceptions.CloudflareConfigurationException(problems);
+        }
+    }
 }

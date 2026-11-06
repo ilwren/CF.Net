@@ -742,7 +742,7 @@ than one that asks.
 | `GetEntrypointAsync(phase, accountId, zoneId)` | `GET …/rulesets/phases/{phase}/entrypoint` | `null` when the scope has no root ruleset for that phase, which is the normal state for an unconfigured one |
 | `UpdateEntrypointAsync(phase, UpdateRulesetRequest, dryRun?, …)` | `PUT …/rulesets/phases/{phase}/entrypoint` | changes what live traffic does; read it first |
 | `CreateRuleAsync(rulesetId, CreateRulesetRuleRequest, dryRun?, …)` | `POST …/rulesets/{ruleset_id}/rules` | appends. **Answers with the whole ruleset**, not the rule |
-| `EditRuleAsync(rulesetId, ruleId, CreateRulesetRuleRequest, dryRun?, …)` | `PATCH …/rulesets/{ruleset_id}/rules/{rule_id}` | a patch: unset fields are left alone. An edit with nothing set is refused locally |
+| `EditRuleAsync(rulesetId, ruleId, CreateRulesetRuleRequest, dryRun?, …)` | `PATCH …/rulesets/{ruleset_id}/rules/{rule_id}` | not the sparse patch it looks like: Cloudflare requires the **action and the expression** on an edit too (`20015`/`20125` observed live), so the rule goes back whole with what changed. Other unset fields are left alone, and an edit missing either is refused locally |
 | `DeleteRuleAsync(rulesetId, ruleId, dryRun?, …)` | `DELETE …/rulesets/{ruleset_id}/rules/{rule_id}` | answers with the ruleset as it now stands |
 | `ListVersionsAsync(rulesetId, …)` | `GET …/rulesets/{ruleset_id}/versions` | a version is a frozen ruleset, so it reads back through the same model |
 | `GetVersionAsync(rulesetId, version, …)` | `GET …/rulesets/{ruleset_id}/versions/{version}` | `null` on 404, which is what a pruned version looks like |

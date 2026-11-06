@@ -1195,10 +1195,22 @@ public class WriteIntegrationTests : CloudflareIntegrationTest
                 Assert.Equal(2, afterAdd.RuleCount);
 
                 var second = afterAdd.Rules!.Single(candidate => candidate.Description == "second rule");
+
+                // Cloudflare requires the action and the expression on an edit as well as on a create,
+                // refusing one without them with 20015 and 20125, so an edit is the rule sent back whole
+                // with the one change on top. The action parameters come back as the same type the request
+                // takes, which is what makes that round trip a single assignment.
                 var afterEdit = await Client.Rulesets.EditRuleAsync(
                     ruleset.Id!,
                     second.Id!,
-                    new CreateRulesetRuleRequest { Enabled = false });
+                    new CreateRulesetRuleRequest
+                    {
+                        Action = second.Action,
+                        Expression = second.Expression,
+                        Description = second.Description,
+                        ActionParameters = second.ActionParameters,
+                        Enabled = false,
+                    });
                 Assert.False(afterEdit.Rules!.Single(candidate => candidate.Id == second.Id).Enabled);
 
                 var afterRemove = await Client.Rulesets.DeleteRuleAsync(ruleset.Id!, second.Id!);

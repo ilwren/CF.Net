@@ -494,9 +494,10 @@ public sealed class UpdateRulesetRequest
 /// <c>POST …/rulesets/{ruleset_id}/rules</c> and <c>PATCH …/rulesets/{ruleset_id}/rules/{rule_id}</c>.
 /// </summary>
 /// <remarks>
-/// One type serves both because the serializer omits what is unset: a create sends everything it is given,
-/// and an edit sends only the fields being changed. An edit that sets nothing sends an empty object, which
-/// Cloudflare refuses, so this library refuses it first.
+/// One type serves both, and the serializer omits what is unset, so an edit carries only the fields being
+/// changed - except the action and the expression, which Cloudflare requires on an edit too and refuses
+/// with <c>20015</c> and <c>20125</c> when they are missing. An edit is therefore the rule read back and
+/// sent again with what changed on top, not a sparse patch.
 /// </remarks>
 public sealed class CreateRulesetRuleRequest
 {

@@ -356,7 +356,7 @@ public class RulesetServiceTests
     }
 
     [Fact]
-    public async Task EditRuleAsync_patches_only_what_was_set()
+    public async Task EditRuleAsync_sends_the_rule_back_whole_with_what_changed()
     {
         using var harness = CloudflareHarness.Create();
         harness.RespondWithResult(RulesetWithRule);
@@ -364,23 +364,39 @@ public class RulesetServiceTests
         await harness.Client.Rulesets.EditRuleAsync(
             "rs-1",
             "rule-1",
-            new CreateRulesetRuleRequest { Enabled = false, Description = "off for now" });
+            new CreateRulesetRuleRequest
+            {
+                Action = "redirect",
+                Expression = "http.request.full_uri in $my_redirects",
+                Description = "off for now",
+                Enabled = false,
+            });
 
         Assert.Equal(HttpMethod.Patch, harness.LastRequest.Method);
         Assert.Contains("/rulesets/rs-1/rules/rule-1", harness.LastRequest.Path, StringComparison.Ordinal);
-        // A patch, unlike the ruleset's own update: what is left null is left alone.
-        Assert.Equal("""{"description":"off for now","enabled":false}""", harness.LastRequest.Body);
+        // The action and expression ride along because Cloudflare asks for them on an edit too; the fields
+        // left null are still left out, so this is not the whole-ruleset replacement UpdateAsync is.
+        Assert.Equal(
+            """{"action":"redirect","expression":"http.request.full_uri in $my_redirects","description":"off for now","enabled":false}""",
+            harness.LastRequest.Body);
     }
 
     [Fact]
-    public async Task EditRuleAsync_refuses_an_edit_that_changes_nothing()
+    public async Task EditRuleAsync_refuses_an_edit_cloudflare_would_refuse()
     {
         using var harness = CloudflareHarness.Create();
 
+        // Observed live as 20015 and 20125: the action is required to create or update a rule, and the
+        // expression cannot be blank. Saying so here saves a round trip and names what is missing.
         var exception = await Assert.ThrowsAsync<CloudflareConfigurationException>(
-            () => harness.Client.Rulesets.EditRuleAsync("rs-1", "rule-1", new CreateRulesetRuleRequest()));
+            () => harness.Client.Rulesets.EditRuleAsync(
+                "rs-1",
+                "rule-1",
+                new CreateRulesetRuleRequest { Enabled = false }));
 
-        Assert.Contains("at least one field", exception.Problems[0], StringComparison.OrdinalIgnoreCase);
+        Assert.Equal(2, exception.Problems.Count);
+        Assert.Contains("action", exception.Problems[0], StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("expression", exception.Problems[1], StringComparison.OrdinalIgnoreCase);
         Assert.Equal(0, harness.RequestCount);
     }
 
@@ -526,9 +542,9 @@ public class RulesetServiceTests
         // An expression given explicitly wins, for a rule that matches something narrower than the list.
         var explicitExpression = CreateRulesetRuleRequest.ForRedirectFromList(
             "my_redirects",
-            """http.host eq "example.com"""");
+            "http.host eq \"example.com\"");
 
-        Assert.Equal("""http.host eq "example.com"""", explicitExpression.Expression);
+        Assert.Equal("http.host eq \"example.com\"", explicitExpression.Expression);
         Assert.Equal("http.request.full_uri", explicitExpression.ActionParameters!.FromList!.Key);
     }
 

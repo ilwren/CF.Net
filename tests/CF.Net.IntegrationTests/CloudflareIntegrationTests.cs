@@ -567,6 +567,89 @@ public class ReadOnlyIntegrationTests : CloudflareIntegrationTest
     }
 
     [Fact]
+    public async Task Workers_observability_telemetry_keys_and_values_can_be_read()
+    {
+        if (!SkipWithoutAccount())
+        {
+            return;
+        }
+
+        IReadOnlyList<ObservabilityTelemetryKey> keys;
+        try
+        {
+            keys = await Client.WorkersObservability.ListTelemetryKeysAsync(
+                new ObservabilityTelemetryKeysRequest { Limit = 10 });
+        }
+        catch (CloudflareApiException exception)
+            when (exception.StatusCode is System.Net.HttpStatusCode.Forbidden or System.Net.HttpStatusCode.NotFound)
+        {
+            SkipUnless(
+                false,
+                $"POST /accounts/{{account_id}}/workers/observability/telemetry/keys was refused with " +
+                $"{exception.StatusCode}/{exception.ErrorCode}: {exception.Message}");
+            return;
+        }
+
+        Log($"{keys.Count} telemetry key(s)");
+        foreach (var key in keys.Take(5))
+        {
+            // lastSeenAt is an epoch timestamp whose unit the published schema does not state, so its
+            // magnitude is the evidence - and from and to want the same clock.
+            Log($"key {key} lastSeenAt={key.LastSeenAt}");
+            if (key.AdditionalData is { Count: > 0 })
+            {
+                Warn($"POST /accounts/{{account_id}}/workers/observability/telemetry/keys answered fields this " +
+                     $"library does not model yet: {JsonSerializer.Serialize(key.AdditionalData)}.");
+            }
+        }
+
+        var first = keys.FirstOrDefault(key =>
+            key.Type == ObservabilityTelemetryValueTypes.String &&
+            key.LastSeenAt is > 0 &&
+            !string.IsNullOrEmpty(key.Key));
+        if (first is null)
+        {
+            Log("no string-typed key with a lastSeenAt to list values for");
+            return;
+        }
+
+        // The timeframe has to be in whatever unit lastSeenAt counts in, which is guessed from its magnitude
+        // here and reported below, so the pair of numbers settles it rather than leaving it assumed.
+        var to = first.LastSeenAt!.Value;
+        var looksLikeMilliseconds = to > 100_000_000_000L;
+        var from = to - (looksLikeMilliseconds ? 86_400_000L : 86_400L);
+        var unit = looksLikeMilliseconds ? "milliseconds" : "seconds";
+        Log($"asking for the values of {first.Key} over {from}..{to} ({unit})");
+
+        try
+        {
+            var values = await Client.WorkersObservability.ListTelemetryValuesAsync(
+                new ObservabilityTelemetryValuesRequest
+                {
+                    // Required to be present, and empty means the default datasets.
+                    Datasets = new List<string>(),
+                    Key = first.Key!,
+                    Type = first.Type!,
+                    Timeframe = ObservabilityTelemetryTimeframe.Between(from, to),
+                    Limit = 10,
+                });
+
+            Log($"{values.Count} value(s): " +
+                $"{string.Join(", ", values.Take(5).Select(value => value.ValueText ?? "(null)"))}");
+            Warn($"POST /accounts/{{account_id}}/workers/observability/telemetry/values answered " +
+                 $"{values.Count} value(s) for key '{first.Key}' over {from}..{to}, a day in the unit " +
+                 $"lastSeenAt itself counts in, which its magnitude ({to}) says is {unit}. The dataset the " +
+                 $"values named was '{values.FirstOrDefault()?.Dataset}'.");
+        }
+        catch (CloudflareApiException exception)
+        {
+            Warn($"POST /accounts/{{account_id}}/workers/observability/telemetry/values was refused with " +
+                 $"{exception.StatusCode}/{exception.ErrorCode}. Cloudflare's body: {exception.ResponseBody} " +
+                 $"The timeframe sent was {from}..{to}, a day in {unit}.");
+        }
+    }
+
+    [Fact]
     public async Task Workers_observability_destinations_can_be_listed()
     {
         if (!SkipWithoutAccount())
@@ -1122,6 +1205,54 @@ public class WriteIntegrationTests : CloudflareIntegrationTest
         }
 
         Assert.Null(await Client.Kv.GetNamespaceAsync(namespaceId));
+    }
+
+    [Fact]
+    public async Task An_observability_live_tail_can_be_prepared_and_kept_alive()
+    {
+        if (!SkipWithoutAccount() || !SkipWithoutWritePermission())
+        {
+            return;
+        }
+
+        ObservabilityLiveTail tail;
+        try
+        {
+            tail = await Client.WorkersObservability.PrepareLiveTailAsync();
+        }
+        catch (CloudflareApiException exception)
+        {
+            Warn($"POST /accounts/{{account_id}}/workers/observability/telemetry/live-tail was refused with " +
+                 $"{exception.StatusCode}/{exception.ErrorCode}. Cloudflare's body: {exception.ResponseBody}");
+            SkipUnless(
+                false,
+                "preparing a live tail was refused; the Learned line says what Cloudflare answered.");
+            return;
+        }
+
+        Log($"live tail prepared: {tail}");
+        Assert.False(string.IsNullOrEmpty(tail.WsUrl));
+
+        // The address is what a consumer connects to, so it has to be one. The scheme is not asserted: which
+        // one Cloudflare hands out is its choice, and the log says what arrived.
+        Assert.True(
+            Uri.TryCreate(tail.WsUrl, UriKind.Absolute, out var wsUrl),
+            $"the live tail url '{tail.WsUrl}' is not an absolute URI");
+        Log($"the tail streams from {wsUrl!.Scheme}://{wsUrl.Host}");
+
+        // A session that stops getting heartbeats is dropped, and there is nothing to delete afterwards: a
+        // prepared session expires on its own, which is why this test has no finally block.
+        try
+        {
+            await Client.WorkersObservability.SendLiveTailHeartbeatAsync();
+            Log("heartbeat accepted");
+        }
+        catch (CloudflareApiException exception)
+        {
+            Warn($"POST /accounts/{{account_id}}/workers/observability/telemetry/live-tail/heartbeat was " +
+                 $"refused with {exception.StatusCode}/{exception.ErrorCode}. Cloudflare's body: " +
+                 $"{exception.ResponseBody}");
+        }
     }
 
     [Fact]

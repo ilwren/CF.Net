@@ -82,6 +82,64 @@ public interface IWorkersObservabilityService
         string slug,
         string? accountId = null,
         CancellationToken cancellationToken = default);
+
+    /// <summary>Lists the attribute keys that have appeared in the account's telemetry.</summary>
+    /// <param name="request">Filters, a span, search terms and a limit, or null to ask with no conditions.</param>
+    /// <param name="accountId">Account id; falls back to the configured default when null.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>The keys, each with the type its values carry and when it was last seen.</returns>
+    /// <remarks>
+    /// <c>POST /accounts/{account_id}/workers/observability/telemetry/keys</c> - a list that is posted rather
+    /// than got, because what narrows it is a filter tree too large for a query string. An empty body asks
+    /// for the keys of the default datasets, which is what passing null sends.
+    /// </remarks>
+    Task<IReadOnlyList<ObservabilityTelemetryKey>> ListTelemetryKeysAsync(
+        ObservabilityTelemetryKeysRequest? request = null,
+        string? accountId = null,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>Lists the values one attribute key has been seen with.</summary>
+    /// <param name="request">The key, its type and a timeframe, which are all required, plus any filters.</param>
+    /// <param name="accountId">Account id; falls back to the configured default when null.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>The values, each with the dataset it was seen in.</returns>
+    /// <remarks>
+    /// <c>POST /accounts/{account_id}/workers/observability/telemetry/values</c>, posted for the same reason
+    /// the key list is. Its datasets are required to be there but may be empty, which the schema documents as
+    /// meaning the default ones.
+    /// </remarks>
+    Task<IReadOnlyList<ObservabilityTelemetryValue>> ListTelemetryValuesAsync(
+        ObservabilityTelemetryValuesRequest request,
+        string? accountId = null,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>Prepares a live tail of telemetry and gets the WebSocket address it streams from.</summary>
+    /// <param name="request">A script id and any filters, or null to tail everything the account can see.</param>
+    /// <param name="accountId">Account id; falls back to the configured default when null.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>The prepared tail, with the address to connect to.</returns>
+    /// <remarks>
+    /// <c>POST /accounts/{account_id}/workers/observability/telemetry/live-tail</c>. Opening the WebSocket is
+    /// the caller's part and not this library's; keeping the session alive is
+    /// <see cref="SendLiveTailHeartbeatAsync"/>. A session that stops getting heartbeats is dropped.
+    /// </remarks>
+    Task<ObservabilityLiveTail> PrepareLiveTailAsync(
+        ObservabilityLiveTailRequest? request = null,
+        string? accountId = null,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>Keeps a prepared live tail session alive.</summary>
+    /// <param name="scriptId">The Worker the session is tailing, when it was prepared for one.</param>
+    /// <param name="accountId">Account id; falls back to the configured default when null.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <remarks>
+    /// <c>POST /accounts/{account_id}/workers/observability/telemetry/live-tail/heartbeat</c>, which answers
+    /// with no result of its own: the call either succeeds or the session is gone.
+    /// </remarks>
+    Task SendLiveTailHeartbeatAsync(
+        string? scriptId = null,
+        string? accountId = null,
+        CancellationToken cancellationToken = default);
 }
 
 /// <inheritdoc />
@@ -163,6 +221,81 @@ public sealed class WorkersObservabilityService : CloudflareService, IWorkersObs
             .ConfigureAwait(false);
         return response.EnsureResult();
     }
+
+    /// <inheritdoc />
+    public async Task<IReadOnlyList<ObservabilityTelemetryKey>> ListTelemetryKeysAsync(
+        ObservabilityTelemetryKeysRequest? request = null,
+        string? accountId = null,
+        CancellationToken cancellationToken = default)
+    {
+        request?.EnsureValid();
+
+        // A list that is posted: an empty object asks with no conditions, which is what null means here.
+        var send = CloudflareRequest.Post(
+            $"{TelemetryPath(ResolveAccountId(accountId))}/keys",
+            request ?? new ObservabilityTelemetryKeysRequest());
+        send.OperationName = "List Observability Telemetry Keys";
+
+        var response = await Transport
+            .SendAsync<List<ObservabilityTelemetryKey>>(send, cancellationToken)
+            .ConfigureAwait(false);
+        return response.Result ?? new List<ObservabilityTelemetryKey>();
+    }
+
+    /// <inheritdoc />
+    public async Task<IReadOnlyList<ObservabilityTelemetryValue>> ListTelemetryValuesAsync(
+        ObservabilityTelemetryValuesRequest request,
+        string? accountId = null,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        request.EnsureValid();
+
+        var send = CloudflareRequest.Post($"{TelemetryPath(ResolveAccountId(accountId))}/values", request);
+        send.OperationName = "List Observability Telemetry Values";
+
+        var response = await Transport
+            .SendAsync<List<ObservabilityTelemetryValue>>(send, cancellationToken)
+            .ConfigureAwait(false);
+        return response.Result ?? new List<ObservabilityTelemetryValue>();
+    }
+
+    /// <inheritdoc />
+    public async Task<ObservabilityLiveTail> PrepareLiveTailAsync(
+        ObservabilityLiveTailRequest? request = null,
+        string? accountId = null,
+        CancellationToken cancellationToken = default)
+    {
+        request?.EnsureValid();
+
+        var send = CloudflareRequest.Post(
+            $"{TelemetryPath(ResolveAccountId(accountId))}/live-tail",
+            request ?? new ObservabilityLiveTailRequest());
+        send.OperationName = "Prepare Observability Live Tail";
+
+        var response = await Transport
+            .SendAsync<ObservabilityLiveTail>(send, cancellationToken)
+            .ConfigureAwait(false);
+        return response.EnsureResult();
+    }
+
+    /// <inheritdoc />
+    public async Task SendLiveTailHeartbeatAsync(
+        string? scriptId = null,
+        string? accountId = null,
+        CancellationToken cancellationToken = default)
+    {
+        var send = CloudflareRequest.Post(
+            $"{TelemetryPath(ResolveAccountId(accountId))}/live-tail/heartbeat",
+            new ObservabilityLiveTailHeartbeatRequest { ScriptId = scriptId });
+        send.OperationName = "Observability Live Tail Heartbeat";
+
+        // The published response type is "unknown": there is nothing to read back, only whether it worked.
+        await SendVoidAsync(send, cancellationToken).ConfigureAwait(false);
+    }
+
+    private static string TelemetryPath(string accountId) =>
+        $"{AccountPath(accountId)}/workers/observability/telemetry";
 
     private static string DestinationsPath(string accountId) =>
         $"{AccountPath(accountId)}/workers/observability/destinations";

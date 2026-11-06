@@ -515,8 +515,35 @@ strings because the schema types them as strings and an empty value would otherw
 Because this library never writes a JSON `null`, a header set to `null` is dropped rather than sent: removing
 a header means `replaceHeaders: true` with the headers that should remain.
 
-⛔ The telemetry itself - `…/observability/telemetry/{keys,values,query,live-tail,live-tail/heartbeat}` - and
-the shared queries behind it. Also unexercised live: an update that sends a configuration, which needs a
+### Telemetry
+
+The same service reaches the telemetry under `…/workers/observability/telemetry/`. Two of these are **lists
+that are posted rather than got**, because what narrows them is a filter tree rather than a query string, and
+their bodies are camelCase like the destinations' (`keyNeedle`, `scriptId`, `filterCombination`, `wsUrl`).
+
+| Method | Endpoint | Notes |
+| --- | --- | --- |
+| `ListTelemetryKeysAsync(ObservabilityTelemetryKeysRequest?, accountId)` | `POST …/telemetry/keys` | the attribute keys that have appeared, each with its `type` and `lastSeenAt`. Null sends `{}`, which asks with no conditions. `datasets` empty means the defaults. |
+| `ListTelemetryValuesAsync(ObservabilityTelemetryValuesRequest, accountId)` | `POST …/telemetry/values` | the values one key has been seen with. `key`, `type` and `timeframe` are required; `datasets` is **required to be present but may be empty**, which the schema documents as meaning the defaults - so leaving it out is refused locally as a different request from sending `[]`. |
+| `PrepareLiveTailAsync(ObservabilityLiveTailRequest?, accountId)` | `POST …/telemetry/live-tail` | prepares a WebSocket server and answers `{wsUrl}`. Opening it is the caller's part; a prepared session expires on its own and there is nothing to delete. |
+| `SendLiveTailHeartbeatAsync(scriptId?, accountId)` | `POST …/telemetry/live-tail/heartbeat` | keeps that session alive. The published response type is `unknown`, so this is a void call: it either works or the session is gone. |
+
+Filters are a union and modelled as one: `ObservabilityTelemetryFilterNode` is either an
+`ObservabilityTelemetryFilter` leaf (`key`, `operation`, `type`, `value`) or an
+`ObservabilityTelemetryFilterGroup` (`filterCombination`, `filters`), and the arm arrives as `kind` - which
+the serializer writes, so a caller never sets it. Groups nest, and the schema caps that at
+`ObservabilityTelemetryFilterNode.MaximumNestingDepth` (4), which the request validates locally. `value` is an
+`object`, so a number reaches Cloudflare as a number rather than as a quoted one. The operations are on
+`ObservabilityFilterOperations` - thirty spellings across three families, including symbolic ones like `>=` -
+and are deliberately **not** validated against that list, because refusing one Cloudflare accepts would be
+worse than passing it through.
+
+`lastSeenAt`, `from` and `to` are epoch numbers whose unit the published schema does not state, so they are
+left as numbers rather than converted from a date on a guess.
+
+⛔ `POST …/telemetry/query` - the query endpoint itself, whose response type runs to some 1700 lines of
+generated schema across five views (`events`, `calculations`, `invocations`, `traces`, `agents`) - and the
+shared query types behind it. Also unexercised live: an update that sends a configuration, which needs a
 receiver that answers Cloudflare's preflight. The suite has none; a Worker of the account's own, uploaded and
 left answering 200, would serve as one.
 

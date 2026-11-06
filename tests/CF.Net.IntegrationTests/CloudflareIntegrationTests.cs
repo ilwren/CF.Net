@@ -642,16 +642,13 @@ public class ReadOnlyIntegrationTests : CloudflareIntegrationTest
             }
         }
 
-        // One filter that the two lists above can supply: the first task's name.
+        // Unfiltered on purpose. Filtering by the first task's name - which reads "Feature Extraction" rather
+        // than a slug - answered a page with nothing in it and a total_count of 331, so what the task filter
+        // takes is its own question, and the inference fact asks it instead of this one assuming an answer.
         var parameters = new WorkersAiModelListParameters { PerPage = 5 };
-        if (tasks.Count > 0 && !string.IsNullOrEmpty(tasks[0].Name))
-        {
-            parameters.Task = tasks[0].Name;
-        }
 
         var page = await Client.WorkersAi.ListModelsAsync(parameters);
-        Log($"{page.Count} model(s) on page 1 of a reported {page.TotalCount}, filtered by " +
-            $"{parameters.Task ?? "no task"}: " +
+        Log($"{page.Count} model(s) on page 1 of a reported {page.TotalCount}: " +
             $"{string.Join(", ", page.Items.Take(5).Select(model => model.ToString()))}");
 
         foreach (var model in page.Items.Take(3))
@@ -750,33 +747,49 @@ public class ReadOnlyIntegrationTests : CloudflareIntegrationTest
         // inference is what Workers AI Read grants, so this needs no permission the catalogue did not.
         var tasks = await Client.WorkersAi.ListTasksAsync();
         string? generationTaskId = null;
+        string? generationTaskName = null;
         foreach (var task in tasks)
         {
-            if (string.Equals(task.Name, "text-generation", StringComparison.OrdinalIgnoreCase))
+            // The task list answers names a person reads - "Feature Extraction" - rather than the slugs the
+            // documentation and this filter use, so the two are compared with their separators and case out of
+            // the way.
+            if (SameTask(task.Name, "text-generation"))
             {
                 generationTaskId = task.Id;
+                generationTaskName = task.Name;
             }
         }
 
-        // The task filter is worth checking rather than trusting. If it takes a task's id rather than its
-        // name, a filtered search answers nothing at all - and a fact that quietly returned because it found
-        // no model would never say so, which is exactly what happened the first time this ran.
-        var byName = await Client.WorkersAi.ListModelsAsync(
-            new WorkersAiModelListParameters { Task = "text-generation", PerPage = 100 });
+        // The task filter is worth checking rather than trusting: a live run answered no models at all for
+        // task=text-generation, and no task in the list is called that, so which spelling the filter takes is
+        // unknown. Three spellings are tried against one page each, and total_count is what says whether any
+        // of them matched.
+        var bySlug = await Client.WorkersAi.ListModelsAsync(
+            new WorkersAiModelListParameters { Task = "text-generation", PerPage = 1 });
+        var byName = generationTaskName is null
+            ? null
+            : await Client.WorkersAi.ListModelsAsync(
+                new WorkersAiModelListParameters { Task = generationTaskName, PerPage = 1 });
         var byId = generationTaskId is null
             ? null
             : await Client.WorkersAi.ListModelsAsync(
-                new WorkersAiModelListParameters { Task = generationTaskId, PerPage = 100 });
+                new WorkersAiModelListParameters { Task = generationTaskId, PerPage = 1 });
         var catalogue = await TakeAllAsync(
             Client.WorkersAi.ListAllModelsAsync(new WorkersAiModelListParameters { PerPage = 100 }));
+        var taskNames = DistinctTasks(catalogue);
+        var firstTask = catalogue.Count > 0 ? catalogue[0].Task : null;
 
-        // One Warn slot, spent once: what the task filter takes, so the coverage doc can say it rather than
-        // leave a caller to find out by getting an empty page.
-        Warn($"GET /accounts/{{account_id}}/ai/models/search?task=… answered {byName.Count} model(s) for the " +
-             $"name 'text-generation' and {byId?.Count ?? -1} for the id '{generationTaskId}', against a " +
-             $"catalogue of {catalogue.Count} walked unfiltered, of which " +
+        // One Warn slot, spent once: what the filter takes, what a model's task field really reads as, and how
+        // big the catalogue is. All three become sentences in the coverage doc once they have reported.
+        Warn($"GET /accounts/{{account_id}}/ai/models/search?task=… reported total_count " +
+             $"{bySlug.TotalCount ?? -1} for the slug 'text-generation', {byName?.TotalCount ?? -1} for the " +
+             $"task's own name '{generationTaskName}' and {byId?.TotalCount ?? -1} for its id " +
+             $"'{generationTaskId}'. Walked unfiltered, the catalogue is {catalogue.Count} model(s) naming " +
+             $"{taskNames.Count} distinct task(s) - {string.Join(", ", taskNames.Take(6))} - of which " +
              $"{CountByTask(catalogue, "text-generation")} are text-generation and " +
-             $"{CountByTask(catalogue, "text-embeddings")} are text-embeddings.");
+             $"{CountByTask(catalogue, "text-embeddings")} text-embeddings. The first model is " +
+             $"{(catalogue.Count > 0 ? catalogue[0].Name : "none")} with task " +
+             $"{(firstTask is null ? "no task field at all" : JsonSerializer.Serialize(firstTask, CFNet.Serialization.CloudflareJson.Default))}.");
 
         var generationModel = PickByTask(catalogue, "text-generation", "llama-3.2-1b", "llama-3.2-3b", "llama-3.1-8b");
         if (generationModel is null)
@@ -921,8 +934,36 @@ public class ReadOnlyIntegrationTests : CloudflareIntegrationTest
         return count;
     }
 
-    private static bool IsTask(WorkersAiModel model, string task) =>
-        string.Equals(model.Task?.Name, task, StringComparison.OrdinalIgnoreCase);
+    private static bool IsTask(WorkersAiModel model, string task) => SameTask(model.Task?.Name, task);
+
+    /// <summary>
+    /// Whether two task names name one task, ignoring case and the difference between a slug and the words a
+    /// person reads: the task list answers "Feature Extraction" where the documentation says
+    /// <c>feature-extraction</c>.
+    /// </summary>
+    private static bool SameTask(string? one, string? two)
+    {
+        var normalised = NormaliseTask(one);
+        return normalised.Length > 0 && normalised == NormaliseTask(two);
+    }
+
+    private static string NormaliseTask(string? task) =>
+        (task ?? string.Empty).Trim().ToLowerInvariant().Replace('-', ' ').Replace('_', ' ');
+
+    /// <summary>The distinct task names a catalogue's models report, in the order the models report them.</summary>
+    private static List<string> DistinctTasks(IReadOnlyList<WorkersAiModel> models)
+    {
+        var names = new List<string>();
+        foreach (var model in models)
+        {
+            if (model.Task?.Name is { } name && !names.Contains(name))
+            {
+                names.Add(name);
+            }
+        }
+
+        return names;
+    }
 
     private static bool HasFragment(WorkersAiModel model, string fragment) =>
         model.Name?.Contains(fragment, StringComparison.OrdinalIgnoreCase) == true;

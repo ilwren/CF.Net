@@ -38,11 +38,12 @@ public class WorkersAiRunTests
         Assert.Equal(HttpMethod.Post, harness.LastRequest.Method);
         Assert.Equal(1, harness.RequestCount);
 
-        // The model's name is a path segment carrying a namespace and a slash, so it goes out escaped - and
-        // Uri.AbsolutePath decodes %2F, so the encoding is checked on the Uri itself.
-        Assert.Contains(
-            "/accounts/acct-1234/ai/run/%40cf%2Fmeta%2Fllama-3.2-1b-instruct",
-            harness.LastRequest.Uri!.OriginalString,
+        // The model's name goes into the path exactly as it is written, its slashes and its @ included: the
+        // escaped form this library uses for every other path segment was refused live with 400 and error
+        // 7000, "No route for that URI", because Cloudflare routes inference on the name as it is spelled.
+        Assert.EndsWith(
+            "/accounts/acct-1234/ai/run/@cf/meta/llama-3.2-1b-instruct",
+            harness.LastRequest.Path,
             StringComparison.Ordinal);
 
         // The inputs go in the body directly, with no model/input/options wrapper around them.
@@ -352,6 +353,33 @@ public class WorkersAiRunTests
             AdditionalData = new Dictionary<string, object?> { ["query"] = "x" },
         };
         Assert.False(unmodelled.IsEmpty);
+    }
+
+    [Fact]
+    public async Task RunAsync_refuses_a_model_name_that_would_change_what_the_request_means()
+    {
+        using var harness = CloudflareHarness.Create();
+
+        // The name is checked rather than escaped, so these are what checking is for: each would put something
+        // into the path that is not part of a model's name.
+        var refused = new[]
+        {
+            "@cf/meta llama",
+            "@cf/meta\tllama",
+            "@cf/meta?x=1",
+            "@cf/meta#fragment",
+            "%40cf/meta",
+            "/@cf/meta",
+            "@cf/meta/",
+        };
+        foreach (var name in refused)
+        {
+            var exception = await Assert.ThrowsAsync<CloudflareConfigurationException>(
+                () => harness.Client.WorkersAi.RunAsync(name, WorkersAiRunRequest.ForPrompt("x")));
+            Assert.False(string.IsNullOrEmpty(exception.Problems[0]));
+        }
+
+        Assert.Equal(0, harness.RequestCount);
     }
 
     [Fact]

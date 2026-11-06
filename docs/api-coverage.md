@@ -616,12 +616,12 @@ feature.
 
 | Method | Endpoint | Notes |
 | --- | --- | --- |
-| `RunAsync(model, WorkersAiRunRequest, accountId)` | `POST /accounts/{account_id}/ai/run/{model_name}` | one inference call. The model's inputs go in the body **directly** — no model/input/options wrapper — and which fields a model takes is what `GetModelSchemaAsync` says. Answers `WorkersAiRunResult`, which holds the JSON that arrived and reads the arm asked for. See [Inference](#inference) |
-| `ListModelsAsync(WorkersAiModelListParameters?, accountId)` | `GET /accounts/{account_id}/ai/models/search` | page-numbered, with `author`, `format`, `hide_experimental`, `include_deprecated`, `search`, `source` and `task` filters — all snake_case, and all optional, so no filters is no query string at all. `format=openrouter` asks for a marketplace-shaped answer (`{data: […]}`) which this library passes through but does **not** read: the default array is the only shape it types. |
+| `RunAsync(model, WorkersAiRunRequest, accountId)` | `POST /accounts/{account_id}/ai/run/{model_name}` | one inference call. The model's inputs go in the body **directly** — no model/input/options wrapper — and which fields a model takes is what `GetModelSchemaAsync` says. Answers `WorkersAiRunResult`, which holds the JSON that arrived and reads the arm asked for. **The model's name goes into the path unescaped** - `…/ai/run/@cf/meta/llama-3.2-1b-instruct`, its slashes and its `@` intact: the escaped form this library uses for every other path segment was refused live with **400** and error **7000**, "No route for that URI". The name is therefore *checked* rather than escaped - whitespace, `?`, `#`, `%` and a leading or trailing slash are refused locally - and stays escaped where it is a query parameter, as in `GetModelSchemaAsync`. See [Inference](#inference) |
+| `ListModelsAsync(WorkersAiModelListParameters?, accountId)` | `GET /accounts/{account_id}/ai/models/search` | page-numbered, with `author`, `format`, `hide_experimental`, `include_deprecated`, `search`, `source` and `task` filters — all snake_case, and all optional, so no filters is no query string at all. `format=openrouter` asks for a marketplace-shaped answer (`{data: […]}`) which this library passes through but does **not** read: the default array is the only shape it types. **`task` is the one filter whose spelling is not settled**: a live call with `task=text-generation` answered no models, one with the task list's own `Feature Extraction` answered a `total_count` of **331** with no items in the page either, and an unfiltered walk of the same catalogue returned **73**. The integration run asks whether the filter wants the slug, the display name or the task's `id`, and this row says so once it answers |
 | `ListAllModelsAsync(...)` | `GET …/ai/models/search` | walks every page, keeping the filters and replacing only `page`; stops on a short page as well as on `result_info`, because a catalogue that fits in one page is the common case |
-| `GetModelSchemaAsync(model, accountId)` | `GET …/ai/models/schema?model={model}` | the model's own input and output JSON Schema, which is the only published source for what an inference call takes — the shapes differ per task. `model` is the full name, namespace included (`@cf/meta/llama-3.2-3b-instruct`), so it goes out escaped |
-| `ListTasksAsync(accountId)` | `GET …/ai/tasks/search` | the task types — `text-generation`, `text-embeddings` and the rest. Takes **only** the account id: no filters at all, not even a search term, despite the path saying `search`. Answers a bare array |
-| `ListAuthorsAsync(accountId)` | `GET …/ai/authors/search` | the authors and organisations behind the models, likewise a bare array with no filters. An author's name is what the model search's `author` filter takes, as a task's name is what its `task` filter takes |
+| `GetModelSchemaAsync(model, accountId)` | `GET …/ai/models/schema?model={model}` | the model's own input and output JSON Schema, which is the only published source for what an inference call takes — the shapes differ per task. `model` is the full name, namespace included (`@cf/meta/llama-3.2-3b-instruct`), so it goes out escaped here, where it is a query parameter - the same name is **not** escaped in `RunAsync`'s path, where Cloudflare's router wants it spelled out |
+| `ListTasksAsync(accountId)` | `GET …/ai/tasks/search` | the task types — `text-generation`, `text-embeddings` and the rest, though **a live answer spells them for a person**, `Feature Extraction` rather than `feature-extraction`, so a caller comparing one against a slug has to normalise the case and the separators. Takes **only** the account id: no filters at all, not even a search term, despite the path saying `search`. Answers a bare array |
+| `ListAuthorsAsync(accountId)` | `GET …/ai/authors/search` | the authors and organisations behind the models, likewise a bare array with no filters. An author's name is what the model search's `author` filter takes - but **a live answer for this account carried no authors at all** (0 against a catalogue of 73 models), so that filter is worth trying before it is relied on, and the same is unresolved for `task` |
 
 **The published schema types the items of all three searches as `unknown`** — Cloudflare documents these
 endpoints' query parameters and then answers with `result: array of unknown`, its own 200 example being
@@ -654,6 +654,14 @@ not only as it is documented. The model search answered the catalogue's own firs
 `@cf/pipecat-ai/smart-turn-v2`, and `models/schema` answered 200 for it with the shape above. Both sides of
 that answer carried **only `type`** of the three published fields, so `additionalProperties` and `description`
 are optional in practice and the integration fact asserts no more than presence and a non-empty type.
+
+A later run asked the same three endpoints harder questions. `tasks/search` answered **40** tasks whose names
+are written for a person - the first reads `{"id":"eefd8baf-f3a5-4366-a03d-e53914f23ffb","name":"Feature
+Extraction"}` and carries no `description`, though the published shape allows one; `authors/search` answered
+**0** authors; and a model search filtered by that first task's name answered a `total_count` of **331** with
+**nothing in the page**, where the same search unfiltered walked **73** models and found none of them
+reporting the task name `text-generation` in any casing. So the catalogue is real and readable, and the
+`task` filter is not yet understood.
 
 ### Inference
 
@@ -691,6 +699,14 @@ words, whichever field of whichever arm carries them (`response`, `text`, `trans
 `description`, or the whole answer when it is a string). Every arm keeps fields it does not name in
 `AdditionalData`, and `WorkersAiToolCall.Arguments` stays raw JSON because Cloudflare publishes it as
 `unknown` — a model answers the object its own tool declared.
+
+**The path is the one thing this endpoint does differently, and a live run is what said so**:
+`POST …/ai/run/%40cf%2Fmeta%2Fllama-3.2-1b-instruct` — the model's name escaped the way every other path
+segment in this library escapes — answered **400** with error **7000**, "No route for that URI". Cloudflare
+routes inference on the name as it is spelled, so `RunAsync` writes `@cf/meta/llama-3.2-1b-instruct` into the
+path intact and checks the name rather than escaping it. A model that answers is still to be observed: what a
+generation and an embedding really carry is reported by the integration run until it is, and only then becomes
+assertions here.
 
 ⛔ `…/ai/finetunes` (and their assets, which need `Workers AI Write`), `…/ai/tomarkdown` — a multipart upload
 plus a `supported` list — and the AI Gateway. None of these is a paid feature; they are simply the next

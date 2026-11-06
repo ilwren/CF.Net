@@ -248,7 +248,7 @@ public sealed class WorkersAiService : CloudflareService, IWorkersAiService
         request.EnsureValid();
 
         var cloudflareRequest = CloudflareRequest.Post(
-            $"{AiPath(ResolveAccountId(accountId))}/run/{CloudflareUrl.EncodeSegment(Require(model, nameof(model)))}",
+            $"{AiPath(ResolveAccountId(accountId))}/run/{ModelInPath(model)}",
             request);
         cloudflareRequest.OperationName = "Run Workers AI Model";
 
@@ -260,6 +260,55 @@ public sealed class WorkersAiService : CloudflareService, IWorkersAiService
             .SendAsync<JsonElement>(cloudflareRequest, cancellationToken)
             .ConfigureAwait(false);
         return new WorkersAiRunResult(response.EnsureResult());
+    }
+
+    /// <summary>
+    /// Puts a model's name into a path exactly as it is written, which is the one path segment in this library
+    /// that is not escaped.
+    /// </summary>
+    /// <param name="model">The model's full name, namespace included.</param>
+    /// <returns>The name, checked rather than escaped.</returns>
+    /// <exception cref="CFNet.Exceptions.CloudflareConfigurationException">
+    /// Thrown when the name is blank, or carries a character that would change what the request means.
+    /// </exception>
+    /// <remarks>
+    /// A live run of <c>POST …/ai/run/%40cf%2Fmeta%2Fllama-3.2-1b-instruct</c> - the escaped form this library
+    /// uses for every other path segment - answered <b>400</b> with error <b>7000</b>, "No route for that URI".
+    /// Cloudflare routes inference on the model's name as it is spelled, <c>@cf/meta/llama-3.2-1b-instruct</c>
+    /// with its slashes and its <c>@</c>, so the name goes into the path verbatim. It is checked instead of
+    /// escaped: whitespace, <c>?</c>, <c>#</c> and <c>%</c> are refused locally, because the first two would
+    /// end the path and the third would start an escape this method is deliberately not making. The same name
+    /// is escaped when it is a query parameter, as it is for <see cref="GetModelSchemaAsync"/>, and that call
+    /// answers 200 either way.
+    /// </remarks>
+    private static string ModelInPath(string model)
+    {
+        var name = Require(model, nameof(model));
+        var problems = new List<string>();
+
+        if (name.Any(char.IsWhiteSpace))
+        {
+            problems.Add("a model name cannot contain whitespace.");
+        }
+
+        if (name.IndexOfAny(new[] { '?', '#', '%' }) >= 0)
+        {
+            problems.Add(
+                "a model name cannot contain '?', '#' or '%': the first two would end the path, and the third " +
+                "would start an escape that Cloudflare's own router answers with 400 and error 7000.");
+        }
+
+        if (name.StartsWith('/') || name.EndsWith('/'))
+        {
+            problems.Add("a model name cannot start or end with a slash.");
+        }
+
+        if (problems.Count > 0)
+        {
+            throw new CFNet.Exceptions.CloudflareConfigurationException(problems);
+        }
+
+        return name;
     }
 
     private static string AiPath(string accountId) => $"{AccountPath(accountId)}/ai";

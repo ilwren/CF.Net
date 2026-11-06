@@ -617,7 +617,7 @@ public class ReadOnlyIntegrationTests : CloudflareIntegrationTest
         // its magnitude, so a span of dates is what the timeframe takes.
         var to = DateTimeOffset.UtcNow;
         var from = to.AddDays(-1);
-        Log($"asking for the values of {first.Key} (last seen {first.LastSeenAt:O}) over the last day");
+        Log($"asking for the values of {first.Key} (last seen {first.LastSeen:O}) over the last day");
 
         try
         {

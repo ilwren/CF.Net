@@ -349,7 +349,7 @@ public sealed class ObservabilityDestinationListParameters : ICloudflareQueryPar
 
         if (Order is { Length: > 0 } order &&
             order != ObservabilityDestinationOrders.Ascending &&
-            order != ObservabilityDestinationOrders.Descing)
+            order != ObservabilityDestinationOrders.Descending)
         {
             problems.Add(
                 $"Order must be '{ObservabilityDestinationOrders.Ascending}' or " +

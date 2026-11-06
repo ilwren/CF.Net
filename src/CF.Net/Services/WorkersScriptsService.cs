@@ -249,10 +249,11 @@ public interface IWorkersScriptsService
     /// differently - see <see cref="ListTailsAsync"/>.
     /// </returns>
     /// <remarks>
+    /// <para>
     /// <c>POST /accounts/{account_id}/workers/scripts/{script_name}/tails</c> takes no body - the script in
     /// the path is the whole request. The events themselves arrive over the returned url rather than
     /// through this API, so what this gives a caller is the address and the tail's lifetime.
-    /// </remarks>
+    /// </para>
     /// <para>
     /// A script holds one tail at a time: creating a second replaces the one already running rather than
     /// adding to it, and answers with the new tail's id.

@@ -1058,6 +1058,107 @@ public class WriteIntegrationTests : CloudflareIntegrationTest
     }
 
     [Fact]
+    public async Task A_worker_script_settings_can_be_updated()
+    {
+        if (!SkipWithoutAccount() || !SkipWithoutWritePermission())
+        {
+            return;
+        }
+
+        var name = $"cfnet-it-{Guid.NewGuid().ToString("N")[..10]}";
+        var uploaded = await Client.Workers.UploadAsync(
+            name,
+            "export default { async fetch(request) { return new Response('cf-net'); } }",
+            "2025-01-01");
+        Log($"uploaded {uploaded.Name}");
+
+        try
+        {
+            var before = await Client.Workers.GetSettingsAsync(name);
+            Assert.NotNull(before);
+            Log($"settings before: logpush={before!.Logpush} observability={before.Observability?.Enabled} " +
+                $"tags=[{string.Join(", ", before.Tags ?? new List<string>())}]");
+            if (before.AdditionalData is { Count: > 0 } ||
+                before.Observability?.AdditionalData is { Count: > 0 })
+            {
+                Warn($"GET /accounts/{{account_id}}/workers/scripts/{name}/script-settings returned fields this " +
+                     $"library does not model yet - settings: {JsonSerializer.Serialize(before.AdditionalData)}, " +
+                     $"observability: {JsonSerializer.Serialize(before.Observability?.AdditionalData)}.");
+            }
+
+            // Tags are the safe thing to write here: they label a Worker and change nothing about how it runs.
+            var tag = $"cfnet-it-{Guid.NewGuid().ToString("N")[..8]}";
+            var tagged = await Client.Workers.UpdateSettingsAsync(
+                name,
+                new WorkerScriptSettings { Tags = new List<string> { tag } });
+            Log($"PATCH answered tags=[{string.Join(", ", tagged.Tags ?? new List<string>())}]");
+
+            var readBack = await Client.Workers.GetSettingsAsync(name);
+            Assert.NotNull(readBack);
+            Assert.Contains(tag, readBack!.Tags ?? new List<string>());
+            Log($"tag {tag} stuck");
+
+            // A PATCH carries only what is set, so clearing the tags is an empty list and leaves the rest of
+            // the script's settings alone - which the logpush and observability values below check.
+            await Client.Workers.UpdateSettingsAsync(
+                name,
+                new WorkerScriptSettings { Tags = new List<string>() });
+
+            var cleared = await Client.Workers.GetSettingsAsync(name);
+            Assert.Empty(cleared!.Tags ?? new List<string>());
+            Assert.Equal(before.Logpush, cleared.Logpush);
+            Assert.Equal(before.Observability?.Enabled, cleared.Observability?.Enabled);
+            Log("tags cleared with an empty list, and nothing else moved");
+
+            // Observability is a separate switch and may be gated by plan, so a refusal is reported rather
+            // than failed: what matters here is what a live answer carries.
+            try
+            {
+                var observability = await Client.Workers.UpdateSettingsAsync(
+                    name,
+                    new WorkerScriptSettings
+                    {
+                        Observability = new WorkerObservability
+                        {
+                            Enabled = true,
+                            HeadSamplingRate = 1,
+                            Logs = new WorkerObservabilityLogs { Enabled = true, InvocationLogs = true },
+                        },
+                    });
+
+                var after = await Client.Workers.GetSettingsAsync(name);
+                Log($"observability: answered enabled={observability.Observability?.Enabled}, read back " +
+                    $"enabled={after?.Observability?.Enabled} sampling={after?.Observability?.HeadSamplingRate} " +
+                    $"logs={after?.Observability?.Logs?.Enabled}/{after?.Observability?.Logs?.InvocationLogs} " +
+                    $"redact_query_string={after?.Observability?.RedactQueryString}");
+                if (after?.Observability?.AdditionalData is { Count: > 0 })
+                {
+                    Warn($"GET /accounts/{{account_id}}/workers/scripts/{name}/script-settings answered " +
+                         $"observability fields this library does not model yet: " +
+                         $"{JsonSerializer.Serialize(after.Observability.AdditionalData)}.");
+                }
+            }
+            catch (CloudflareApiException exception)
+            {
+                Warn($"PATCH /accounts/{{account_id}}/workers/scripts/{name}/script-settings with observability " +
+                     $"was refused with {exception.StatusCode}/{exception.ErrorCode}: {exception.Message}");
+            }
+        }
+        finally
+        {
+            try
+            {
+                await Client.Workers.DeleteAsync(name);
+                Log($"deleted script {name}");
+            }
+            catch (CloudflareApiException exception) when (exception.IsNotFound)
+            {
+                Log("script was already gone");
+            }
+        }
+    }
+
+    [Fact]
     public async Task A_worker_tail_can_be_started_and_stopped()
     {
         if (!SkipWithoutAccount() || !SkipWithoutWritePermission())

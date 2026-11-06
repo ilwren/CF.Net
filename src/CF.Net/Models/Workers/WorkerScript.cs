@@ -120,20 +120,138 @@ public sealed class WorkerNamedHandlers
     public IDictionary<string, JsonElement>? AdditionalData { get; set; }
 }
 
-/// <summary>Observability (invocation log) configuration of a Worker.</summary>
+/// <summary>
+/// Observability configuration of a Worker: invocation logs, traces and real-time Issues.
+/// </summary>
+/// <remarks>
+/// <para>
+/// Read on <c>WorkerScriptSettings.Observability</c> and written by
+/// <c>PATCH /accounts/{account_id}/workers/scripts/{script_name}/script-settings</c>, which is the only way
+/// to change any of it. The published schema marks <c>enabled</c> as required when sending this block, and
+/// <c>logs.enabled</c> and <c>logs.invocation_logs</c> as required when sending <see cref="Logs"/>, so a
+/// read-modify-write of what Cloudflare itself returned always carries them.
+/// </para>
+/// <para>
+/// A sampling rate is a fraction: 1 is every request, 0.1 is one in ten.
+/// </para>
+/// </remarks>
 public sealed class WorkerObservability
 {
-    /// <summary>Whether invocation logs are collected.</summary>
+    /// <summary>Whether observability is turned on for the Worker.</summary>
     [JsonPropertyName("enabled")]
     public bool? Enabled { get; set; }
 
-    /// <summary>Sampling rate between 0 and 1. <c>1</c> means every invocation.</summary>
+    /// <summary>Sampling rate for incoming requests, from 0 to 1. Defaults to 1.</summary>
     [JsonPropertyName("head_sampling_rate")]
     public double? HeadSamplingRate { get; set; }
+
+    /// <summary>Whether query strings are stripped from request URLs in logs and traces.</summary>
+    [JsonPropertyName("redact_query_string")]
+    public bool? RedactQueryString { get; set; }
+
+    /// <summary>Real-time Issues settings.</summary>
+    [JsonPropertyName("issues")]
+    public WorkerObservabilityIssues? Issues { get; set; }
+
+    /// <summary>Log settings.</summary>
+    [JsonPropertyName("logs")]
+    public WorkerObservabilityLogs? Logs { get; set; }
+
+    /// <summary>Trace settings.</summary>
+    [JsonPropertyName("traces")]
+    public WorkerObservabilityTraces? Traces { get; set; }
 
     /// <summary>Captures any field Cloudflare adds in the future.</summary>
     [JsonExtensionData]
     public IDictionary<string, JsonElement>? AdditionalData { get; set; }
+}
+
+/// <summary>Real-time Issues settings for a Worker.</summary>
+public sealed class WorkerObservabilityIssues
+{
+    /// <summary>Whether real-time Issues are turned on.</summary>
+    [JsonPropertyName("enabled")]
+    public bool? Enabled { get; set; }
+
+    /// <summary>Captures any field Cloudflare adds in the future.</summary>
+    [JsonExtensionData]
+    public IDictionary<string, JsonElement>? AdditionalData { get; set; }
+}
+
+/// <summary>Log settings for a Worker's observability.</summary>
+/// <remarks>
+/// <see cref="InvocationLogs"/> is the switch for
+/// <c>console.log</c>-style output as opposed to the request log alone, and the published schema requires it
+/// alongside <see cref="Enabled"/> when this block is sent.
+/// </remarks>
+public sealed class WorkerObservabilityLogs
+{
+    /// <summary>Whether logs are turned on.</summary>
+    [JsonPropertyName("enabled")]
+    public bool? Enabled { get; set; }
+
+    /// <summary>Whether invocation logs - what the Worker itself logs - are turned on.</summary>
+    [JsonPropertyName("invocation_logs")]
+    public bool? InvocationLogs { get; set; }
+
+    /// <summary>Destinations logs are exported to, by destination slug.</summary>
+    [JsonPropertyName("destinations")]
+    public List<string>? Destinations { get; set; }
+
+    /// <summary>Sampling rate for logs, from 0 to 1. Defaults to 1.</summary>
+    [JsonPropertyName("head_sampling_rate")]
+    public double? HeadSamplingRate { get; set; }
+
+    /// <summary>Whether logs are persisted, so they can be queried after the request ends.</summary>
+    [JsonPropertyName("persist")]
+    public bool? Persist { get; set; }
+
+    /// <summary>Captures any field Cloudflare adds in the future.</summary>
+    [JsonExtensionData]
+    public IDictionary<string, JsonElement>? AdditionalData { get; set; }
+}
+
+/// <summary>Trace settings for a Worker's observability.</summary>
+public sealed class WorkerObservabilityTraces
+{
+    /// <summary>Whether traces are turned on.</summary>
+    [JsonPropertyName("enabled")]
+    public bool? Enabled { get; set; }
+
+    /// <summary>Destinations traces are exported to, by destination slug.</summary>
+    [JsonPropertyName("destinations")]
+    public List<string>? Destinations { get; set; }
+
+    /// <summary>Sampling rate for traces, from 0 to 1. Defaults to 1.</summary>
+    [JsonPropertyName("head_sampling_rate")]
+    public double? HeadSamplingRate { get; set; }
+
+    /// <summary>Whether traces are persisted.</summary>
+    [JsonPropertyName("persist")]
+    public bool? Persist { get; set; }
+
+    /// <summary>
+    /// How inbound trace context (<c>traceparent</c>, <c>tracestate</c>) headers are treated: one of
+    /// <c>WorkerTracePropagationPolicies</c>, or <c>null</c> when the account does not have trace propagation.
+    /// </summary>
+    [JsonPropertyName("propagation_policy")]
+    public string? PropagationPolicy { get; set; }
+
+    /// <summary>Captures any field Cloudflare adds in the future.</summary>
+    [JsonExtensionData]
+    public IDictionary<string, JsonElement>? AdditionalData { get; set; }
+}
+
+/// <summary>The trace propagation policies <c>traces.propagation_policy</c> accepts.</summary>
+public static class WorkerTracePropagationPolicies
+{
+    /// <summary>
+    /// Honour inbound trace context only when it arrives with a valid trace auth token.
+    /// </summary>
+    public const string Authenticated = "authenticated";
+
+    /// <summary>Accept inbound trace context unconditionally.</summary>
+    public const string Accept = "accept";
 }
 
 /// <summary>Smart placement configuration of a Worker.</summary>

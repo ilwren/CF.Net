@@ -211,6 +211,35 @@ public interface IWorkersScriptsService
         string? accountId = null,
         CancellationToken cancellationToken = default);
 
+    /// <summary>Changes a Worker's script-level settings: Logpush, observability, tags, tail consumers.</summary>
+    /// <param name="scriptName">The Worker name.</param>
+    /// <param name="settings">The fields to change. Only what is set is sent.</param>
+    /// <param name="accountId">Account id; falls back to the configured default when null.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>The script's settings as Cloudflare now holds them.</returns>
+    /// <remarks>
+    /// <para>
+    /// <c>PATCH /accounts/{account_id}/workers/scripts/{script_name}/script-settings</c> - the same path
+    /// <see cref="GetSettingsAsync"/> reads, and the same type both ways. A PATCH changes only the fields that
+    /// are set: this library never writes a JSON <c>null</c>, so an unset field is left as it is, and clearing
+    /// <see cref="WorkerScriptSettings.Tags"/> or <see cref="WorkerScriptSettings.TailConsumers"/> means
+    /// sending an empty list rather than a null one.
+    /// </para>
+    /// <para>
+    /// A request with nothing set is refused locally, because it would send an empty body and change nothing
+    /// while still counting as a write.
+    /// </para>
+    /// <para>
+    /// Everything else about a script - bindings, compatibility date, modules - belongs to the upload, and
+    /// observability destinations of the account-wide kind are their own resource.
+    /// </para>
+    /// </remarks>
+    Task<WorkerScriptSettings> UpdateSettingsAsync(
+        string scriptName,
+        WorkerScriptSettings settings,
+        string? accountId = null,
+        CancellationToken cancellationToken = default);
+
     /// <summary>Starts a tail on a Worker: a live stream of its logs and exceptions.</summary>
     /// <param name="scriptName">The Worker to tail.</param>
     /// <param name="accountId">Account id; falls back to the configured default when null.</param>
@@ -727,6 +756,50 @@ public sealed class WorkersScriptsService : CloudflareService, IWorkersScriptsSe
 
         var response = await Transport.SendAsync<WorkerScriptSettings>(request, cancellationToken).ConfigureAwait(false);
         return response.Result;
+    }
+
+    /// <inheritdoc />
+    public async Task<WorkerScriptSettings> UpdateSettingsAsync(
+        string scriptName,
+        WorkerScriptSettings settings,
+        string? accountId = null,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(settings);
+        RequireSomethingToUpdate(settings);
+
+        var account = ResolveAccountId(accountId);
+        var name = Require(scriptName, nameof(scriptName));
+
+        var request = CloudflareRequest.Patch(
+            $"{AccountPath(account)}/workers/scripts/{CloudflareUrl.EncodeSegment(name)}/script-settings",
+            settings);
+        request.OperationName = "Update Worker Script Settings";
+
+        var response = await Transport.SendAsync<WorkerScriptSettings>(request, cancellationToken).ConfigureAwait(false);
+        return response.EnsureResult();
+    }
+
+    /// <summary>
+    /// Refuses a settings request with nothing in it. A PATCH only carries the fields that are set, and this
+    /// library never writes a JSON null, so an empty request would be an empty body: a write that cannot
+    /// change anything, and almost always a caller who meant to set a field and did not.
+    /// </summary>
+    /// <param name="settings">The request to check.</param>
+    private static void RequireSomethingToUpdate(WorkerScriptSettings settings)
+    {
+        if (settings.Logpush is null &&
+            settings.Observability is null &&
+            settings.Tags is null &&
+            settings.TailConsumers is null)
+        {
+            throw new Exceptions.CloudflareConfigurationException(new[]
+            {
+                "Updating a Worker's script settings sends only the fields that are set, and this request has " +
+                "none, so it would be an empty body. Set Logpush, Observability, Tags or TailConsumers - an " +
+                "empty list clears tags or tail consumers on purpose.",
+            });
+        }
     }
 
     /// <inheritdoc />

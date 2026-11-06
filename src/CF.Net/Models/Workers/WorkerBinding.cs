@@ -386,8 +386,20 @@ public static class WorkerModuleContentTypes
 
 /// <summary>
 /// Script level settings returned by
-/// <c>GET /accounts/{account_id}/workers/scripts/{script_name}/script-settings</c>.
+/// <c>GET /accounts/{account_id}/workers/scripts/{script_name}/script-settings</c>, and the body the
+/// <c>PATCH</c> on the same path takes.
 /// </summary>
+/// <remarks>
+/// <para>
+/// One type serves both calls because both carry the same four fields. A PATCH changes only what is set: this
+/// library never writes a JSON <c>null</c>, so an unset field is left alone rather than cleared, and clearing
+/// <see cref="Tags"/> or <see cref="TailConsumers"/> means sending an empty list.
+/// </para>
+/// <para>
+/// Everything else about a script - its bindings, compatibility date and modules - is set by the upload, not
+/// here.
+/// </para>
+/// </remarks>
 public sealed class WorkerScriptSettings
 {
     /// <summary>Whether Logpush is enabled.</summary>

@@ -272,11 +272,17 @@ public sealed class WorkersAiModelSchema
     public override string ToString() => $"{Input?.Type} in, {Output?.Type} out";
 }
 
-/// <summary>One side of a model's schema, as Cloudflare publishes it.</summary>
+/// <summary>One side of a model's schema - and, nested inside itself, one field of it.</summary>
 /// <remarks>
-/// The published shape is these three fields, which is a long way from a whole JSON Schema - the properties
-/// that say what a model actually takes are not in it. They are preserved in <see cref="AdditionalData"/>,
-/// which for this type is where the useful half is likely to be.
+/// Cloudflare publishes this as three fields (<c>additionalProperties</c>, <c>description</c>, <c>type</c>),
+/// which is a long way from a whole JSON Schema. What the endpoint actually answers is the model-specific
+/// schema its own summary promises: for <c>@cf/pipecat-ai/smart-turn-v2</c>, an input whose
+/// <c>oneOf</c> offers audio as either a readable stream or a base64 string, each with a <c>dtype</c> whose
+/// <c>enum</c> is <c>uint8</c>, <c>float32</c> or <c>float64</c>, and an output with
+/// <c>contentType: application/json</c> and properties <c>is_complete</c> and <c>probability</c>. Those fields
+/// are modelled here and recurse, because a schema nests; <c>additionalProperties</c> and <c>description</c>
+/// were absent from that answer, so every field of this type is optional and the ones Cloudflare has not sent
+/// yet stay in <see cref="AdditionalData"/>.
 /// </remarks>
 public sealed class WorkersAiJsonSchema
 {
@@ -284,21 +290,57 @@ public sealed class WorkersAiJsonSchema
     [JsonPropertyName("additionalProperties")]
     public bool? AdditionalProperties { get; set; }
 
-    /// <summary>What this side of the call is, as the schema words it.</summary>
+    /// <summary>
+    /// The media type this side is served as, such as <c>application/json</c>. Not a JSON Schema keyword:
+    /// Cloudflare adds it, and it says how to read the inference answer rather than what is in it.
+    /// </summary>
+    [JsonPropertyName("contentType")]
+    public string? ContentType { get; set; }
+
+    /// <summary>What this field is, as the schema words it.</summary>
     [JsonPropertyName("description")]
     public string? Description { get; set; }
 
-    /// <summary>The JSON type of this side, such as <c>object</c>.</summary>
+    /// <summary>
+    /// The values this field may take. Kept as the JSON that arrived rather than as strings, because a schema
+    /// may enumerate numbers or booleans as readily as the <c>uint8</c>/<c>float32</c>/<c>float64</c> of a
+    /// PCM data type.
+    /// </summary>
+    [JsonPropertyName("enum")]
+    public List<JsonElement>? EnumValues { get; set; }
+
+    /// <summary>The alternative shapes this field may take, one of which has to fit.</summary>
+    [JsonPropertyName("oneOf")]
+    public List<WorkersAiJsonSchema>? OneOf { get; set; }
+
+    /// <summary>
+    /// The fields of an object, by name. The names are the model's own wire names and are not renamed by this
+    /// library's naming policy, so <c>is_complete</c> reads as <c>is_complete</c>.
+    /// </summary>
+    [JsonPropertyName("properties")]
+    public Dictionary<string, WorkersAiJsonSchema>? Properties { get; set; }
+
+    /// <summary>The names in <see cref="Properties"/> that a call has to send.</summary>
+    [JsonPropertyName("required")]
+    public List<string>? Required { get; set; }
+
+    /// <summary>The JSON type of this field, such as <c>object</c>.</summary>
     [JsonPropertyName("type")]
     public string? Type { get; set; }
 
-    /// <summary>Captures the rest of the schema, which the published shape does not describe.</summary>
+    /// <summary>
+    /// Captures the rest of the schema - <c>anyOf</c>, <c>allOf</c>, <c>items</c>, <c>$schema</c> and anything
+    /// else Cloudflare has not sent this library yet.
+    /// </summary>
     [JsonExtensionData]
     public IDictionary<string, JsonElement>? AdditionalData { get; set; }
 
-    /// <summary>Type and whether it is open, on one line.</summary>
+    /// <summary>Type, openness and how much of the shape is described, on one line.</summary>
     /// <returns>The schema side described in one line.</returns>
-    public override string ToString() => $"{Type}{(AdditionalProperties == true ? " (open)" : string.Empty)}";
+    public override string ToString() =>
+        $"{Type}{(AdditionalProperties == true ? " (open)" : string.Empty)}" +
+        $"{(Properties is { Count: > 0 } ? $" {Properties.Count} field(s)" : string.Empty)}" +
+        $"{(OneOf is { Count: > 0 } ? $" {OneOf.Count} alternative(s)" : string.Empty)}";
 }
 
 /// <summary>Filters for a search of the Workers AI model catalogue.</summary>

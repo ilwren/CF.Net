@@ -190,23 +190,88 @@ public class WorkersAiCatalogueTests
     }
 
     [Fact]
-    public async Task A_model_schema_keeps_the_part_of_the_schema_cloudflare_does_not_publish()
+    public async Task A_model_schema_reads_the_model_specific_shape_cloudflare_really_answers()
+    {
+        using var harness = CloudflareHarness.Create();
+
+        // The answer the live suite recorded for @cf/pipecat-ai/smart-turn-v2 - not the three-field example
+        // Cloudflare publishes. The input offers two alternative shapes and the output names its media type
+        // and its two fields, so the published example understates this endpoint by a good deal.
+        harness.RespondWithResult(
+            """{"input":{"type":"object","oneOf":[{"properties":{"audio":{"type":"object","description":"readable stream with audio data and content-type specified for that data","properties":{"body":{"type":"object"},"contentType":{"type":"string"}},"required":["body","contentType"]},"dtype":{"type":"string","description":"type of data PCM data that's sent to the inference server as raw array","enum":["uint8","float32","float64"]}},"required":["audio"]},{"properties":{"audio":{"type":"string","description":"base64 encoded audio data"},"dtype":{"type":"string","description":"type of data PCM data that's sent to the inference server as raw array","enum":["uint8","float32","float64"]}},"required":["audio"]}]},"output":{"type":"object","contentType":"application/json","properties":{"is_complete":{"type":"boolean","description":"if true, end-of-turn was detected"},"probability":{"type":"number","description":"probability of the end-of-turn detection"}}}}""");
+
+        var schema = await harness.Client.WorkersAi.GetModelSchemaAsync("@cf/pipecat-ai/smart-turn-v2");
+
+        // Two of the three published fields were absent from this answer, and the type has to say so rather
+        // than invent them. Nothing was left over, either: every field of it is modelled.
+        Assert.Equal("object", schema.Input!.Type);
+        Assert.Null(schema.Input.Description);
+        Assert.Null(schema.Input.AdditionalProperties);
+        Assert.Null(schema.Input.AdditionalData);
+
+        // The input is a choice between a readable stream and base64 audio, and reading that choice is the
+        // whole reason to ask for a schema before building an inference call.
+        Assert.Equal(2, schema.Input.OneOf!.Count);
+        var streamed = schema.Input.OneOf[0];
+        Assert.Equal("audio", string.Join(",", streamed.Required!));
+        Assert.Equal("object", streamed.Properties!["audio"].Type);
+        Assert.Equal(
+            "readable stream with audio data and content-type specified for that data",
+            streamed.Properties["audio"].Description);
+        Assert.Equal("body,contentType", string.Join(",", streamed.Properties["audio"].Required!));
+        Assert.Equal("object", streamed.Properties["audio"].Properties!["body"].Type);
+        Assert.Equal("string", streamed.Properties["audio"].Properties["contentType"].Type);
+
+        var encoded = schema.Input.OneOf[1];
+        Assert.Equal("string", encoded.Properties!["audio"].Type);
+        Assert.Equal("base64 encoded audio data", encoded.Properties["audio"].Description);
+        Assert.Equal("audio", string.Join(",", encoded.Required!));
+
+        // The enumeration of a PCM data type arrives as strings here, but the type keeps the JSON it was
+        // given, because a schema may enumerate numbers or booleans as readily.
+        var dtype = streamed.Properties!["dtype"];
+        Assert.Equal(3, dtype.EnumValues!.Count);
+        Assert.Equal(
+            "uint8,float32,float64",
+            string.Join(",", dtype.EnumValues.Select(value => value.GetString())));
+
+        // The output names its media type and describes the two fields the model answers with, and the
+        // property names stay exactly as the model's wire names them.
+        Assert.Equal("application/json", schema.Output!.ContentType);
+        Assert.Equal("boolean", schema.Output.Properties!["is_complete"].Type);
+        Assert.Equal("if true, end-of-turn was detected", schema.Output.Properties["is_complete"].Description);
+        Assert.Equal("number", schema.Output.Properties["probability"].Type);
+        Assert.Null(schema.Output.AdditionalData);
+        Assert.Equal("object 2 field(s)", schema.Output.ToString());
+        Assert.Equal("object 2 alternative(s)", schema.Input.ToString());
+    }
+
+    [Fact]
+    public async Task A_model_schema_keeps_the_keywords_it_does_not_model()
     {
         using var harness = CloudflareHarness.Create();
         harness.RespondWithResult(
-            """{"input":{"additionalProperties":false,"description":"d","type":"object","properties":{"prompt":{"type":"string"}},"required":["prompt"],"oneOf":[{"a":1}]},"output":{"additionalProperties":true,"description":"d","type":"object"}}""");
+            """{"input":{"additionalProperties":false,"description":"d","type":"object","$schema":"https://json-schema.org/draft/2020-12/schema","title":"Input","anyOf":[{"type":"string"}],"items":{"type":"number"}},"output":{"additionalProperties":true,"description":"d","type":"object"}}""");
 
         var schema = await harness.Client.WorkersAi.GetModelSchemaAsync("@cf/meta/llama-3.2-3b-instruct");
 
-        // The published shape is three fields, which is not a usable JSON Schema on its own: the properties
-        // that say what a model takes are the useful half, and they are preserved rather than lost.
-        Assert.Equal(3, schema.Input!.AdditionalData!.Count);
-        Assert.True(schema.Input.AdditionalData.ContainsKey("properties"));
-        Assert.True(schema.Input.AdditionalData.ContainsKey("required"));
-        Assert.True(schema.Input.AdditionalData.ContainsKey("oneOf"));
+        // anyOf, allOf, items and $schema have not been seen in a live answer, so they are not modelled - and
+        // not modelling them has to cost nothing, which is what the extension data is for.
+        Assert.False(schema.Input!.AdditionalProperties);
+        Assert.Equal("d", schema.Input.Description);
+        Assert.Equal(4, schema.Input.AdditionalData!.Count);
+        Assert.True(schema.Input.AdditionalData.ContainsKey("$schema"));
+        Assert.True(schema.Input.AdditionalData.ContainsKey("title"));
+        Assert.True(schema.Input.AdditionalData.ContainsKey("anyOf"));
+        Assert.True(schema.Input.AdditionalData.ContainsKey("items"));
         Assert.Equal(
-            "prompt",
-            schema.Input.AdditionalData["required"].EnumerateArray().Single().GetString());
+            "string",
+            schema.Input.AdditionalData["anyOf"].EnumerateArray().Single().GetProperty("type").GetString());
+        Assert.Equal("number", schema.Input.AdditionalData["items"].GetProperty("type").GetString());
+
+        // The side with nothing extra reports nothing extra, rather than an empty bag.
+        Assert.True(schema.Output!.AdditionalProperties);
+        Assert.Null(schema.Output.AdditionalData);
     }
 
     [Fact]

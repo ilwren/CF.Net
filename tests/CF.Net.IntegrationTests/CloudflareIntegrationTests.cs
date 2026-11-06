@@ -705,7 +705,8 @@ public class ReadOnlyIntegrationTests : CloudflareIntegrationTest
             return;
         }
 
-        // All three fields of a side are required by the published schema, so that much is safe to assert.
+        // Both sides are present and typed. The published schema requires all three of its fields per side,
+        // but the live answer carried only "type" - so that is the one other thing safe to assert.
         Assert.NotNull(schema.Input);
         Assert.NotNull(schema.Output);
         Assert.False(string.IsNullOrEmpty(schema.Input?.Type));
@@ -713,17 +714,13 @@ public class ReadOnlyIntegrationTests : CloudflareIntegrationTest
 
         var inputExtras = (schema.Input?.AdditionalData ?? new Dictionary<string, JsonElement>()).Keys;
         var outputExtras = (schema.Output?.AdditionalData ?? new Dictionary<string, JsonElement>()).Keys;
-        Log($"schema for {name}: {schema}; input extra={string.Join(",", inputExtras)}; " +
-            $"output extra={string.Join(",", outputExtras)}");
 
-        // One Warn slot, spent once. Cloudflare publishes three fields per side and a 200 example whose
-        // description field reads "JSON Schema definition for the model's input parameters" - a description
-        // of a schema rather than the model-specific schema the endpoint's own summary promises.
-        // AdditionalData keeps whichever really arrives; this reports which that was, so the coverage doc's
-        // claim can be replaced by an assertion on the next run.
-        Warn($"GET /accounts/{{account_id}}/ai/models/schema?model={name} answered: {schema}; input extras " +
-             $"[{string.Join(",", inputExtras)}], output extras [{string.Join(",", outputExtras)}]; as read: " +
-             $"{JsonSerializer.Serialize(schema, CFNet.Serialization.CloudflareJson.Default)}");
+        // The endpoint answers a real, model-specific JSON Schema rather than the three-field description of
+        // one that Cloudflare publishes as its 200 example, so the shape is what is worth recording: how many
+        // of its fields this library names, and which it does not.
+        Log($"schema for {name}: {schema}; input {schema.Input}, " +
+            $"unmodelled [{string.Join(",", inputExtras)}]; output {schema.Output}, " +
+            $"unmodelled [{string.Join(",", outputExtras)}]");
     }
 
     [Fact]

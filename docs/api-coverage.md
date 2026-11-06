@@ -630,19 +630,27 @@ type is widened against a real answer. `WorkersAiModelProperty.Value` is the JSO
 same property carries a boolean for `beta`, a string for `deprecation_date` and a number for
 `context_window`.
 
-`GET …/ai/models/schema` is published in full but thinly, and the thinness is the interesting part: each side
-is `{additionalProperties, description, type}`, and Cloudflare's own 200 example answers
-`"description": "JSON Schema definition for the model's input parameters"` with `additionalProperties: true` —
-a description *of* a schema rather than the schema the endpoint's summary promises ("use these definitions to
-determine the model-specific request fields and response format"). Whatever else arrives per side is
-preserved in `WorkersAiJsonSchema.AdditionalData`, so a caller gets the model-specific half if Cloudflare
-sends one and loses nothing if it does not.
+`GET …/ai/models/schema` is published as three fields per side — `{additionalProperties, description, type}` —
+and Cloudflare's own 200 example answers `"description": "JSON Schema definition for the model's input
+parameters"` with `additionalProperties: true`, which reads as a description *of* a schema rather than the
+schema the endpoint's summary promises ("use these definitions to determine the model-specific request fields
+and response format"). **The summary is the honest one.** Asking for `@cf/pipecat-ai/smart-turn-v2` answered a
+real, model-specific JSON Schema: an input whose `oneOf` offers audio either as a readable stream
+(`{body, contentType}`) or as a base64 string, each with a `dtype` whose `enum` is `uint8`/`float32`/`float64`,
+and an output carrying `contentType: application/json` with properties `is_complete` (boolean) and
+`probability` (number). `WorkersAiJsonSchema` therefore models `properties`, `required`, `oneOf`, `enum` and
+`contentType`, and **recurses**, because a schema nests. Enumerated values stay as the JSON they arrived as,
+since a schema may enumerate numbers as readily as strings; `properties` keys are the model's own wire names
+and are untouched by this library's snake_case policy, so `is_complete` reads as `is_complete`. `anyOf`,
+`allOf`, `items` and `$schema` have not appeared in an answer, so they are deliberately not modelled — they
+land in `AdditionalData`, exactly as anything Cloudflare adds next will.
 
 **Verified live**: all three searches answered **200** and parsed, and the first three items of each carried
-**no field this library does not model** — so the narrow types match the catalogue as it is served, not only
-as it is documented. The model search answered the catalogue's own first model,
-`@cf/pipecat-ai/smart-turn-v2`, and `models/schema` answered 200 for it. What that schema really contained is
-being reported by one Warn slot on the next run, and will become an assertion once it is known.
+**no field this library does not model** — the deliberately narrow types match the catalogue as it is served,
+not only as it is documented. The model search answered the catalogue's own first model,
+`@cf/pipecat-ai/smart-turn-v2`, and `models/schema` answered 200 for it with the shape above. Both sides of
+that answer carried **only `type`** of the three published fields, so `additionalProperties` and `description`
+are optional in practice and the integration fact asserts no more than presence and a non-empty type.
 
 ⛔ `POST …/ai/run/{model_name}` — inference itself, whose request and response are each a union of a dozen
 task-specific shapes — plus `…/ai/finetunes` (and their assets, which need `Workers AI Write`),

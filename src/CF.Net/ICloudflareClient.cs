@@ -100,6 +100,12 @@ public interface ICloudflareClient : IDisposable
     IWorkersAiService WorkersAi { get; }
 
     /// <summary>
+    /// Turnstile: the account's challenge widgets - their hostnames and mode, their site keys, and the secret
+    /// a server verifies a visitor with.
+    /// </summary>
+    ITurnstileService Turnstile { get; }
+
+    /// <summary>
     /// Cheap connectivity check that never throws: verifies the credentials using whichever scheme is
     /// configured and reports the outcome.
     /// </summary>

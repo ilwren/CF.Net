@@ -85,7 +85,7 @@ Console.WriteLine($"{zones.Count} of {zones.TotalCount} zones");
 
 `CloudflareClient.CreateFromEnvironment()` does the same thing from environment variables, and `CloudflareClientFactory` is available when you need several clients over one set of defaults.
 
-### The thirteen services
+### The services
 
 | Property | Interface | Covers |
 | --- | --- | --- |
@@ -102,6 +102,11 @@ Console.WriteLine($"{zones.Count} of {zones.TotalCount} zones");
 | `client.D1` | `ID1DatabaseService` | databases, SQL queries, batches, backups |
 | `client.Kv` | `IKvService` | namespaces, key listings, values, bulk writes |
 | `client.R2` | `IR2Service` | buckets, including jurisdiction-restricted ones |
+| `client.Lists` | `IRulesListService` | account rule lists — IPs, hostnames, ASNs and redirect pairs — their items, and the bulk operations that change them |
+| `client.Rulesets` | `IRulesetService` | the ruleset engine at every phase, served from an account path or a zone path |
+| `client.WorkersObservability` | `IWorkersObservabilityService` | telemetry destinations, keys and values, live tail, and the telemetry query API |
+| `client.WorkersAi` | `IWorkersAiService` | the model catalogue, tasks, authors and model schemas, inference, fine-tune listings, to-markdown |
+| `client.Turnstile` | `ITurnstileService` | Turnstile widgets: their hostnames and mode, their site keys, and secret rotation |
 
 ---
 
@@ -150,7 +155,7 @@ builder.Services.AddCloudflare(options =>
 | `AddCloudflareHttpClient(configure?, httpClientName?, configureClient?)` | route through `IHttpClientFactory` |
 | `AddCloudflareClientFactory(configure?)` | several clients over shared defaults |
 
-Any of these registers `ICloudflareClient`, `CloudflareClient`, `ICloudflareTransport`, `ICloudflareClientFactory` and all thirteen service interfaces, so you can inject exactly the surface you need:
+Any of these registers `ICloudflareClient`, `CloudflareClient`, `ICloudflareTransport`, `ICloudflareClientFactory` and every service interface the client exposes, so you can inject exactly the surface you need:
 
 ```csharp
 public sealed class DnsProvisioner(IDnsRecordsService dns, IZonesService zones)

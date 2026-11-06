@@ -10,6 +10,7 @@ using CFNet.Models.Pages;
 using CFNet.Models.R2;
 using CFNet.Models.Rules;
 using CFNet.Models.Ssl;
+using CFNet.Models.Turnstile;
 using CFNet.Models.Workers;
 using CFNet.Models.WorkersAi;
 using CFNet.Models.Zones;
@@ -881,12 +882,6 @@ public class ReadOnlyIntegrationTests : CloudflareIntegrationTest
         }
     }
 
-    /// <summary>Cuts a diagnostic down to what a Warn has room for, saying that it did.</summary>
-    private static string Truncate(string? text, int longest) =>
-        string.IsNullOrEmpty(text) || text.Length <= longest
-            ? text ?? string.Empty
-            : text[..longest] + "…";
-
 
     [Fact]
     public async Task Workers_ai_models_can_be_run()
@@ -1661,8 +1656,9 @@ public class ReadOnlyIntegrationTests : CloudflareIntegrationTest
             return;
         }
 
-        // This is the smoke test for the facade: a single client, thirteen services, all wired to the
-        // same transport and options instance.
+        // This is the smoke test for the facade: a single client, every service it exposes, all wired to the
+        // same transport and options instance. The count is deliberately not in the sentence, because it has
+        // been wrong every time a module was added.
         Assert.NotNull(Client.User);
         Assert.NotNull(Client.Accounts);
         Assert.NotNull(Client.Zones);
@@ -1676,6 +1672,11 @@ public class ReadOnlyIntegrationTests : CloudflareIntegrationTest
         Assert.NotNull(Client.D1);
         Assert.NotNull(Client.Kv);
         Assert.NotNull(Client.R2);
+        Assert.NotNull(Client.Lists);
+        Assert.NotNull(Client.Rulesets);
+        Assert.NotNull(Client.WorkersObservability);
+        Assert.NotNull(Client.WorkersAi);
+        Assert.NotNull(Client.Turnstile);
 
         Assert.False(string.IsNullOrWhiteSpace(Client.Options.UserAgent));
         Assert.True(Client.Options.HasCredentials);
@@ -3615,4 +3616,125 @@ public class WriteIntegrationTests : CloudflareIntegrationTest
             SkipUnless(false, $"The token cannot list DNSSEC keys on this zone (HTTP 403, Cloudflare error {exception.ErrorCode}). It needs 'DNS Read'.");
         }
     }
+
+    [Fact]
+    public async Task A_turnstile_widget_can_be_created_read_updated_rotated_and_deleted()
+    {
+        if (!SkipWithoutAccount() || !SkipWithoutWritePermission())
+        {
+            return;
+        }
+
+        var name = UniqueSuffix("cfnet-it-widget");
+
+        // Created first and on its own, because everything below needs the site key it answers - and because
+        // a refusal to create is worth reporting rather than failing: it is either a missing Turnstile Sites
+        // permission or an account that has never used the product, and neither is a defect in this library.
+        TurnstileWidget created;
+        try
+        {
+            created = await Client.Turnstile.CreateAsync(
+                new TurnstileWidgetRequest
+                {
+                    Name = name,
+                    Mode = TurnstileWidgetMode.Managed,
+                    Domains = new List<string> { "example.com" },
+                    Region = TurnstileRegion.World,
+                    ClearanceLevel = TurnstileClearanceLevel.NoClearance,
+                    BotFightMode = false,
+                    EphemeralId = false,
+                    Offlabel = false,
+                });
+        }
+        catch (CloudflareApiException exception)
+        {
+            Warn($"POST /accounts/{{account_id}}/challenges/widgets was refused with " +
+                 $"{exception.StatusCode}/{exception.ErrorCode}: {Truncate(exception.Message, 300)} " +
+                 $"Cloudflare's body: {Truncate(exception.ResponseBody, 500)}");
+            return;
+        }
+
+        var sitekey = created.Sitekey;
+        Assert.False(string.IsNullOrEmpty(sitekey));
+        Assert.False(string.IsNullOrEmpty(created.Secret));
+
+        try
+        {
+            // A widget's secret is a credential, so what follows reports that one arrived and how long it is
+            // rather than what it says: a CI annotation is not where a secret belongs.
+            Log($"created {created}: mode={created.Mode} region={created.Region} " +
+                $"clearance={created.ClearanceLevel} deployed_via={created.DeployedVia} " +
+                $"created_on={created.CreatedOn} secret={created.Secret!.Length} chars");
+            ReportWidgetFields("POST /accounts/{account_id}/challenges/widgets", created);
+
+            var read = await Client.Turnstile.GetAsync(sitekey!);
+            Assert.NotNull(read);
+            Assert.Equal(name, read!.Name);
+            Assert.Equal(TurnstileWidgetMode.Managed, read.Mode);
+            Assert.Equal(created.Secret, read.Secret);
+            Log($"read it back: {read} offlabel={read.Offlabel} ephemeral_id={read.EphemeralId} " +
+                $"bot_fight_mode={read.BotFightMode} last_modified_via={read.LastModifiedVia}");
+            ReportWidgetFields("GET /accounts/{account_id}/challenges/widgets/{sitekey}", read);
+
+            // Updating is a PUT that replaces the whole widget, so the required fields go again beside the two
+            // that are changing: the mode and the hostnames it may run on.
+            var updated = await Client.Turnstile.UpdateAsync(
+                sitekey!,
+                new TurnstileWidgetRequest
+                {
+                    Name = name,
+                    Mode = TurnstileWidgetMode.NonInteractive,
+                    Domains = new List<string> { "example.com", "*.example.org" },
+                    Region = TurnstileRegion.World,
+                    Offlabel = true,
+                });
+            Assert.Equal(TurnstileWidgetMode.NonInteractive, updated.Mode);
+            Assert.Equal(2, updated.Domains?.Count ?? 0);
+            Assert.True(updated.Offlabel);
+            Log($"updated it: {updated} mode={updated.Mode} offlabel={updated.Offlabel} " +
+                $"domains={string.Join(",", updated.Domains ?? new List<string>())} " +
+                $"modified_on={updated.ModifiedOn}");
+            ReportWidgetFields("PUT /accounts/{account_id}/challenges/widgets/{sitekey}", updated);
+
+            // Rotating without the flag leaves the old secret working for a grace period, which is the point
+            // of not sending it: a deployment can be rolled without a gap in verification.
+            var rotated = await Client.Turnstile.RotateSecretAsync(sitekey!);
+            Assert.False(string.IsNullOrEmpty(rotated.Secret));
+            Assert.NotEqual(created.Secret, rotated.Secret);
+            Log($"rotated its secret: {rotated.Secret!.Length} chars, was {created.Secret!.Length}, and the " +
+                $"sitekey stayed {rotated.Sitekey}");
+
+            // A list answers every widget and no secrets, which is why the two shapes are typed apart.
+            var listed = await Client.Turnstile.ListAsync(new TurnstileWidgetListParameters { PerPage = 100 });
+            Log($"the account lists {listed.TotalCount ?? listed.Count} widget(s); this page carries " +
+                $"{listed.Count}");
+            var found = listed.Items.FirstOrDefault(widget => widget.Sitekey == sitekey);
+            Assert.NotNull(found);
+            Assert.Equal(name, found!.Name);
+            Assert.Equal(TurnstileWidgetMode.NonInteractive, found.Mode);
+            ReportWidgetFields("GET /accounts/{account_id}/challenges/widgets", found);
+        }
+        finally
+        {
+            var deleted = await Client.Turnstile.DeleteAsync(sitekey!);
+            Log($"deleted it: {(deleted is null ? "Cloudflare answered nothing" : deleted.ToString())}");
+        }
+    }
+
+    /// <summary>
+    /// Warns once about the fields of a widget this library does not model, naming them rather than printing
+    /// the widget: a single widget's answer carries its secret, and this reports to a CI annotation.
+    /// </summary>
+    private void ReportWidgetFields(string endpoint, TurnstileWidgetSummary widget)
+    {
+        if (widget.AdditionalData is not { Count: > 0 })
+        {
+            return;
+        }
+
+        Warn($"{endpoint} answered fields this library does not model for a Turnstile widget: " +
+             $"{string.Join(", ", widget.AdditionalData.Keys)}. The names are reported rather than the " +
+             $"widget itself, because a single widget's answer carries its secret.");
+    }
+
 }

@@ -412,6 +412,17 @@ public abstract class CloudflareIntegrationTest : IDisposable
         Warn(CredentialFormat.ExplainEmail(ApiEmail));
     }
 
+    /// <summary>
+    /// Cuts a diagnostic down to what a <see cref="Warn"/> has room for, saying that it did.
+    /// </summary>
+    /// <param name="text">The text to cut, which may be null.</param>
+    /// <param name="longest">How many characters to keep.</param>
+    /// <returns>The text, cut at <paramref name="longest"/> with an ellipsis, or empty when there was none.</returns>
+    protected static string Truncate(string? text, int longest) =>
+        string.IsNullOrEmpty(text) || text.Length <= longest
+            ? text ?? string.Empty
+            : text[..longest] + "…";
+
     /// <summary>Reports a problem once per process, to the test output and to the run report.</summary>
     /// <param name="problem">The message, or <see langword="null"/> when there is nothing to say.</param>
     protected void Warn(string? problem)

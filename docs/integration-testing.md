@@ -579,7 +579,7 @@ Always safe. They run whenever credentials are present.
 | `Origin_tls_client_auth_settings_and_certificates_can_be_read` | `/origin_tls_client_auth/settings`, `…/hostnames/certificates`, and the deprecated zone-level list - asserted to log the private key's length and never the key |
 | `Dnssec_state_can_be_read_without_changing_it` | `/dnssec`, read-only on purpose: enabling would leave the zone `pending` on a DS record no test run can publish at the registrar, and disabling a signed zone would break resolution |
 | `Dnssec_zone_signing_keys_can_be_listed` | `/dnssec/zsk`, the one call that proves the PascalCase payload against the real API rather than a fixture; an unsigned zone answering with an empty list is a normal result |
-| `Every_product_area_is_reachable_through_the_client_facade` | all thirteen services wired to one transport |
+| `Every_product_area_is_reachable_through_the_client_facade` | every service the client exposes, wired to one transport |
 | `An_insufficiently_scoped_token_is_reported_as_an_authentication_failure` | 403/404 map onto `IsAuthenticationFailure` / `IsNotFound` |
 
 ### `WriteIntegrationTests`
@@ -597,6 +597,15 @@ assertion failure mid-test still removes the resource.
 | `A_pages_project_can_be_created_and_removed` | a project on branch `main` | `DELETE` the project |
 | `The_cache_can_be_purged_by_url` | nothing | n/a — purges one URL that does not exist |
 | `A_pages_project_build_cache_can_be_purged` | nothing | n/a — empties cached build artefacts, so the next build is slower |
+| `Dns_records_can_be_created_and_deleted_in_one_batch` | two TXT records, in one batch call | the same batch endpoint's deletes group |
+| `An_observability_destination_can_be_created_and_removed` | a telemetry destination, then a patch of it | `DELETE` the destination |
+| `An_observability_live_tail_can_be_prepared_and_kept_alive` | nothing — prepares a live tail and heartbeats it | n/a — a live tail expires on its own |
+| `A_worker_script_settings_can_be_updated` | a script, then a patch of its settings | `DELETE` the script |
+| `A_worker_tail_can_be_started_and_stopped` | a script and a tail on it | `DELETE` the tail, then the script |
+| `A_redirect_ruleset_can_be_created_given_a_bulk_redirect_rule_and_removed` | a redirect list with items, a ruleset and a rule in it, with the zone's entrypoint pointed at it | the rule, the ruleset, the list, and the entrypoint put back |
+| `A_rules_list_can_be_created_filled_and_removed` | a list, its items, and a change to its description | the items, then `DELETE` the list |
+| `A_zone_setting_can_be_changed_and_changed_back` | nothing — switches one zone setting | n/a — the setting is switched back |
+| `A_turnstile_widget_can_be_created_read_updated_rotated_and_deleted` | a widget, then a `PUT` of it and a rotated secret | `DELETE` the widget |
 
 Resource names are generated with a timestamp and a random suffix (`cfnet-it-20260101120000-a1b2c3d4`)
 so concurrent runs never collide, and a failed cleanup leaves something obviously disposable.

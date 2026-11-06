@@ -1062,6 +1062,47 @@ ruleset overrides an `execute` rule carries, and rate limit rule parameters.
 
 ---
 
+## Turnstile
+
+`ITurnstileService` — `client.Turnstile`
+
+| Method | Endpoint | Notes |
+| --- | --- | --- |
+| `ListAsync(TurnstileWidgetListParameters?)` | `GET /accounts/{account_id}/challenges/widgets` | `page`, `per_page`, `filter`, `order` ∈ `id`/`sitekey`/`name`/`created_on`/`modified_on`, `direction`. Items are `TurnstileWidgetSummary` — **no secret**, which is what Cloudflare answers for a list. `filter`'s grammar is not published, so it is passed through rather than built here |
+| `ListAllAsync(TurnstileWidgetListParameters?)` | `GET /accounts/{account_id}/challenges/widgets` | `IAsyncEnumerable<TurnstileWidgetSummary>`, walks every page and stops on an empty one as well as on `result_info` |
+| `GetAsync(sitekey)` | `GET /accounts/{account_id}/challenges/widgets/{sitekey}` | `TurnstileWidget`, **secret included**; null on 404 |
+| `CreateAsync(TurnstileWidgetRequest)` | `POST /accounts/{account_id}/challenges/widgets` | the body is the widget itself: `name`, `mode`, `domains` required, plus `region`, `clearance_level`, `bot_fight_mode`, `ephemeral_id`, `offlabel`. Answers the widget **with the secret Cloudflare generated**, so this is the moment to write it down |
+| `UpdateAsync(sitekey, TurnstileWidgetRequest)` | `PUT /accounts/{account_id}/challenges/widgets/{sitekey}` | a `PUT`, so it replaces the whole widget: the three required fields go again even when only one is changing. There is no `PATCH` here |
+| `RotateSecretAsync(sitekey, bool? invalidateImmediately)` | `POST /accounts/{account_id}/challenges/widgets/{sitekey}/rotate_secret` | body `{"invalidate_immediately":bool}`; left null, `{}` goes out and Cloudflare's grace period stays, which is what lets a deployment be rolled without a gap in verification. Answers the widget with its **new** secret under the **same** site key |
+| `DeleteAsync(sitekey)` | `DELETE /accounts/{account_id}/challenges/widgets/{sitekey}` | tolerates 404 and answers null; Cloudflare echoes the deleted widget when there was one |
+
+Three things here are not what the product's name suggests:
+
+- The path is **`challenges/widgets`**, not `widgets` — Cloudflare's own generated client titles it
+  `post /accounts/{account_id}/challenges/widgets`, and `GET …/widgets` is something else entirely.
+- **A list carries no secret** where a single widget's answer does, and Cloudflare types the two apart for
+  exactly that reason (`WidgetListResponse` beside `Widget`). So does this library: `TurnstileWidgetSummary`
+  for a list item and `TurnstileWidget : TurnstileWidgetSummary` for one widget, which means a caller holding
+  a list cannot read a secret out of it by accident and never has to wonder why one is null. Nothing here logs
+  a secret either — `ToString()` is name and site key — and the live run reports a field it does not model by
+  *name* rather than by value for the same reason.
+- `deployed_via` and `last_modified_via` answer `unknown` as a **value of their own**, which is not the same
+  thing as a value this library has not heard of. `TurnstileDeploymentSource` carries both: `NotRecorded` for
+  Cloudflare's `unknown`, `Unknown` for the sentinel every enum here has.
+
+`offlabel` is one word on the wire and one word here, not `off_label`. Both timestamps are kept as the strings
+that arrived, with `CreatedOnUtc` and `ModifiedOnUtc` beside them, because Workers AI proved that one product
+area can answer a timestamp in a shape no example shows — a change there is then a one-line fix rather than a
+broken model. `mode` (`non-interactive`, `invisible`, `managed`), `region` (`world`, `china`) and
+`clearance_level` (`no_clearance`, `jschallenge`, `managed`, `interactive`) are enums that read an unrecognised
+value as `Unknown` and refuse to write one.
+
+⛔ Nothing is left out of this resource: those six methods are all of `challenges/widgets`. Verifying a token
+(`siteverify`) is not part of this API at all — it lives on `challenges.cloudflare.com`, and belongs to the
+server that checked a visitor rather than to the account that owns the widget.
+
+---
+
 ## Cross-cutting behaviour
 
 | Concern | Where |

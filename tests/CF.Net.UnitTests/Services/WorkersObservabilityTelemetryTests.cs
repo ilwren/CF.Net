@@ -351,6 +351,9 @@ public class WorkersObservabilityTelemetryTests
     public async Task SendLiveTailHeartbeatAsync_posts_the_session_it_is_keeping_alive()
     {
         using var harness = CloudflareHarness.Create();
+
+        // Two heartbeats, so two responses: the stub answers from a queue and runs out rather than guessing.
+        harness.Respond("{\"success\":true,\"errors\":[],\"messages\":[]}");
         harness.Respond("{\"success\":true,\"errors\":[],\"messages\":[]}");
 
         await harness.Client.WorkersObservability.SendLiveTailHeartbeatAsync("script-1");
@@ -367,6 +370,41 @@ public class WorkersObservabilityTelemetryTests
         await harness.Client.WorkersObservability.SendLiveTailHeartbeatAsync();
         Assert.Equal("{}", harness.LastRequest.Body);
         Assert.Equal(2, harness.RequestCount);
+    }
+
+    [Fact]
+    public void A_span_of_dates_is_sent_in_the_milliseconds_the_endpoint_counts_in()
+    {
+        var from = new DateTimeOffset(2026, 11, 6, 0, 0, 0, TimeSpan.Zero);
+        var to = new DateTimeOffset(2026, 11, 7, 0, 0, 0, TimeSpan.Zero);
+
+        var timeframe = ObservabilityTelemetryTimeframe.Between(from, to);
+
+        Assert.Equal(86_400_000, timeframe.To - timeframe.From);
+        Assert.Equal(from, DateTimeOffset.UnixEpoch.AddMilliseconds(timeframe.From!.Value));
+        Assert.Equal(to, DateTimeOffset.UnixEpoch.AddMilliseconds(timeframe.To!.Value));
+
+        // The same conversion on the request that takes a bare span rather than a timeframe.
+        var request = ObservabilityTelemetryKeysRequest.OverSpan(from, to);
+        Assert.Equal(timeframe.From, request.From);
+        Assert.Equal(timeframe.To, request.To);
+    }
+
+    [Fact]
+    public void A_key_reads_its_last_seen_as_the_date_it_counts_milliseconds_towards()
+    {
+        // This is a live value, and the date it reads as is the day it was reported: the magnitude is what
+        // settled the unit the published schema leaves unstated.
+        var key = JsonSerializer.Deserialize<ObservabilityTelemetryKey>(
+            """{"key":"$metadata.message","lastSeenAt":1793943698985,"type":"string"}""",
+            CloudflareJson.Default)!;
+
+        Assert.Equal(1793943698985, key.LastSeenAt);
+        Assert.Equal(DateTimeOffset.UnixEpoch.AddMilliseconds(1793943698985), key.LastSeen);
+        Assert.Equal(2026, key.LastSeen!.Value.Year);
+        Assert.Equal("$metadata.message (string)", key.ToString());
+
+        Assert.Null(new ObservabilityTelemetryKey().LastSeen);
     }
 
     [Fact]

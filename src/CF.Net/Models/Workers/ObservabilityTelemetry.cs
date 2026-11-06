@@ -18,12 +18,18 @@ public sealed class ObservabilityTelemetryKey
     [JsonPropertyName("key")]
     public string? Key { get; set; }
 
-    /// <summary>
-    /// When the key was last seen, as an epoch timestamp. The published schema types this as a number without
-    /// saying which unit it counts in, so it is left as one rather than guessed at as a date.
-    /// </summary>
+    /// <summary>When the key was last seen, in milliseconds since the epoch.</summary>
     [JsonPropertyName("lastSeenAt")]
     public long? LastSeenAt { get; set; }
+
+    /// <summary>
+    /// When the key was last seen, as a date. <see cref="LastSeenAt"/> counts milliseconds - the published
+    /// schema does not say so, and a live answer of <c>1793943698985</c> for a key seen that day is what
+    /// settled it - so the same unit is what <c>from</c> and <c>to</c> want.
+    /// </summary>
+    [JsonIgnore]
+    public DateTimeOffset? LastSeen =>
+        LastSeenAt is { } at ? DateTimeOffset.UnixEpoch.AddMilliseconds(at) : null;
 
     /// <summary>What the key's values are: one of <c>ObservabilityTelemetryValueTypes</c>.</summary>
     [JsonPropertyName("type")]
@@ -361,11 +367,11 @@ public sealed class ObservabilityTelemetryNeedle
         IsRegex == true ? $"/{Value}/{(MatchCase == true ? "case-sensitive" : "case-insensitive")}" : $"{Value}";
 }
 
-/// <summary>A span of time, as the epoch timestamps the telemetry endpoints count in.</summary>
+/// <summary>A span of time, in the milliseconds since the epoch that the telemetry endpoints count in.</summary>
 /// <remarks>
-/// The published schema types both ends as numbers and does not say which unit they count in, so they are
-/// left as numbers here rather than converted from a date on a guess. <see cref="ObservabilityTelemetryKey.LastSeenAt"/>
-/// is the same clock, and reading one says which unit the other wants.
+/// Both ends are numbers on the wire and the published schema does not say which unit they count in; a live
+/// <c>lastSeenAt</c> of <c>1793943698985</c> for a key seen that day settled it as milliseconds, and
+/// <see cref="Between(DateTimeOffset, DateTimeOffset)"/> converts so a caller does not have to.
 /// </remarks>
 public sealed class ObservabilityTelemetryTimeframe
 {
@@ -377,11 +383,28 @@ public sealed class ObservabilityTelemetryTimeframe
     [JsonPropertyName("to")]
     public long? To { get; set; }
 
-    /// <summary>Builds a span.</summary>
+    /// <summary>Builds a span from two epoch timestamps in milliseconds.</summary>
     /// <param name="from">Start of the span.</param>
     /// <param name="to">End of the span.</param>
     /// <returns>A timeframe.</returns>
     public static ObservabilityTelemetryTimeframe Between(long from, long to) => new() { From = from, To = to };
+
+    /// <summary>Builds a span from two dates, converted to the milliseconds the endpoint counts in.</summary>
+    /// <param name="from">Start of the span.</param>
+    /// <param name="to">End of the span.</param>
+    /// <returns>A timeframe.</returns>
+    public static ObservabilityTelemetryTimeframe Between(DateTimeOffset from, DateTimeOffset to) =>
+        new()
+        {
+            From = ToMilliseconds(from),
+            To = ToMilliseconds(to),
+        };
+
+    /// <summary>Converts a date to the epoch milliseconds these endpoints count in.</summary>
+    /// <param name="timestamp">The date to convert.</param>
+    /// <returns>Milliseconds since the epoch.</returns>
+    internal static long ToMilliseconds(DateTimeOffset timestamp) =>
+        (long)(timestamp.ToUniversalTime() - DateTimeOffset.UnixEpoch).TotalMilliseconds;
 
     /// <summary>
     /// Checks that both ends are there and in the right order.
@@ -567,6 +590,17 @@ public sealed class ObservabilityTelemetryKeysRequest
     /// <summary>A search term matched against the keys' names.</summary>
     [JsonPropertyName("keyNeedle")]
     public ObservabilityTelemetryNeedle? KeyNeedle { get; set; }
+
+    /// <summary>Builds a request that looks over a span of time.</summary>
+    /// <param name="from">Start of the span.</param>
+    /// <param name="to">End of the span.</param>
+    /// <returns>A request with <see cref="From"/> and <see cref="To"/> set in milliseconds.</returns>
+    public static ObservabilityTelemetryKeysRequest OverSpan(DateTimeOffset from, DateTimeOffset to) =>
+        new()
+        {
+            From = ObservabilityTelemetryTimeframe.ToMilliseconds(from),
+            To = ObservabilityTelemetryTimeframe.ToMilliseconds(to),
+        };
 
     /// <summary>
     /// Checks the request: the filters against the shape Cloudflare accepts, the span's order, and the limit.

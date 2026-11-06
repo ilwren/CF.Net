@@ -538,8 +538,12 @@ the serializer writes, so a caller never sets it. Groups nest, and the schema ca
 and are deliberately **not** validated against that list, because refusing one Cloudflare accepts would be
 worse than passing it through.
 
-`lastSeenAt`, `from` and `to` are epoch numbers whose unit the published schema does not state, so they are
-left as numbers rather than converted from a date on a guess.
+`lastSeenAt`, `from` and `to` are epoch numbers whose unit the published schema does not state. A live run
+settled it: a key seen that day reported `1793943698985`, so they are **milliseconds**, and
+`ObservabilityTelemetryKey.LastSeen`, `ObservabilityTelemetryTimeframe.Between(DateTimeOffset, DateTimeOffset)`
+and `ObservabilityTelemetryKeysRequest.OverSpan(from, to)` convert so a caller never has to. The same run read
+keys like `$metadata.message`, and answered 0 values for one over a day on an account with no traffic - so an
+empty answer there is a quiet account, not a broken call.
 
 ⛔ `POST …/telemetry/query` - the query endpoint itself, whose response type runs to some 1700 lines of
 generated schema across five views (`events`, `calculations`, `invocations`, `traces`, `agents`) - and the

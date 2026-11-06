@@ -613,13 +613,11 @@ public class ReadOnlyIntegrationTests : CloudflareIntegrationTest
             return;
         }
 
-        // The timeframe has to be in whatever unit lastSeenAt counts in, which is guessed from its magnitude
-        // here and reported below, so the pair of numbers settles it rather than leaving it assumed.
-        var to = first.LastSeenAt!.Value;
-        var looksLikeMilliseconds = to > 100_000_000_000L;
-        var from = to - (looksLikeMilliseconds ? 86_400_000L : 86_400L);
-        var unit = looksLikeMilliseconds ? "milliseconds" : "seconds";
-        Log($"asking for the values of {first.Key} over {from}..{to} ({unit})");
+        // lastSeenAt counts milliseconds since the epoch, which the first live run of this test settled from
+        // its magnitude, so a span of dates is what the timeframe takes.
+        var to = DateTimeOffset.UtcNow;
+        var from = to.AddDays(-1);
+        Log($"asking for the values of {first.Key} (last seen {first.LastSeenAt:O}) over the last day");
 
         try
         {
@@ -634,18 +632,14 @@ public class ReadOnlyIntegrationTests : CloudflareIntegrationTest
                     Limit = 10,
                 });
 
+            // An account with no traffic has keys and no values, so a count is logged rather than asserted.
             Log($"{values.Count} value(s): " +
-                $"{string.Join(", ", values.Take(5).Select(value => value.ValueText ?? "(null)"))}");
-            Warn($"POST /accounts/{{account_id}}/workers/observability/telemetry/values answered " +
-                 $"{values.Count} value(s) for key '{first.Key}' over {from}..{to}, a day in the unit " +
-                 $"lastSeenAt itself counts in, which its magnitude ({to}) says is {unit}. The dataset the " +
-                 $"values named was '{values.FirstOrDefault()?.Dataset}'.");
+                $"{string.Join(", ", values.Take(5).Select(value => value.ToString()))}");
         }
         catch (CloudflareApiException exception)
         {
             Warn($"POST /accounts/{{account_id}}/workers/observability/telemetry/values was refused with " +
-                 $"{exception.StatusCode}/{exception.ErrorCode}. Cloudflare's body: {exception.ResponseBody} " +
-                 $"The timeframe sent was {from}..{to}, a day in {unit}.");
+                 $"{exception.StatusCode}/{exception.ErrorCode}. Cloudflare's body: {exception.ResponseBody}");
         }
     }
 

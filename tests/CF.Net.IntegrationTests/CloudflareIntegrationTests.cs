@@ -1183,57 +1183,27 @@ public class WriteIntegrationTests : CloudflareIntegrationTest
             var listed = await Client.WorkersObservability.ListDestinationsAsync();
             Assert.Contains(listed, destination => destination.Slug == slug);
 
-            // Observed live: an update re-runs Cloudflare's delivery preflight, and this endpoint has no way
-            // to skip it - changing the address of a destination whose url is not a real receiver answered
-            // 400 with "Pre-flight check failed: Receiver returned HTTP 405". Which updates a destination
-            // like that can still have is what the two probes below separate: the enabled flag on its own,
-            // and a configuration with it. Both report a refusal rather than failing on one.
-            try
-            {
-                var flipped = await Client.WorkersObservability.UpdateDestinationAsync(
-                    slug!,
-                    new UpdateObservabilityDestinationRequest { Enabled = true });
+            // Observed live, and now asserted: the enabled flag can be changed on its own, with no
+            // configuration and so no delivery preflight, even for a destination whose address receives
+            // nothing. Sending a configuration is a different matter - it re-runs Cloudflare's check that
+            // delivery works, and this endpoint has no skipPreflightCheck to turn that off with, so a
+            // destination pointing at an address that is not a receiver answers 400 with "Pre-flight check
+            // failed: Receiver returned HTTP 405" even when the url sent is the one it already has. That
+            // half is documented rather than exercised, because the suite has no receiver to point at.
+            var turnedOn = await Client.WorkersObservability.UpdateDestinationAsync(
+                slug!,
+                new UpdateObservabilityDestinationRequest { Enabled = true });
+            Assert.True(turnedOn.Enabled);
 
-                Log($"the enabled flag alone was accepted: enabled={flipped.Enabled} " +
-                    $"url={flipped.Configuration?.Url}");
-            }
-            catch (CloudflareApiException exception)
-            {
-                Warn($"PATCH /accounts/{{account_id}}/workers/observability/destinations/{slug} with only the " +
-                     $"enabled flag was refused with {exception.StatusCode}/{exception.ErrorCode}. " +
-                     $"Cloudflare's body: {exception.ResponseBody}");
-            }
+            var afterEnable = await Client.WorkersObservability.ListDestinationsAsync();
+            Assert.True(Assert.Single(afterEnable, destination => destination.Slug == slug).Enabled);
+            Log($"the destination was turned on and reads back enabled");
 
-            try
-            {
-                var updated = await Client.WorkersObservability.UpdateDestinationAsync(
-                    slug!,
-                    new UpdateObservabilityDestinationRequest
-                    {
-                        Enabled = false,
-                        Configuration = new ObservabilityDestinationConfiguration
-                        {
-                            Type = ObservabilityDestinationTypes.Logpush,
-
-                            // The address it was created with: this probe asks whether resending what is
-                            // already there is enough to satisfy the preflight, not whether a new one is.
-                            Url = "https://example.com/cfnet-it-logs",
-                            Headers = new Dictionary<string, string?> { ["X-Cf-Net"] = "integration-test" },
-                            ReplaceHeaders = true,
-                        },
-                    });
-
-                Log($"a configuration was accepted: enabled={updated.Enabled} " +
-                    $"url={updated.Configuration?.Url} headers=" +
-                    $"[{string.Join(", ", (updated.Configuration?.Headers ?? new Dictionary<string, string?>()).Keys)}] " +
-                    $"dataset={updated.Configuration?.LogpushDataset}");
-            }
-            catch (CloudflareApiException exception)
-            {
-                Warn($"PATCH /accounts/{{account_id}}/workers/observability/destinations/{slug} with a " +
-                     $"configuration was refused with {exception.StatusCode}/{exception.ErrorCode}. " +
-                     $"Cloudflare's body: {exception.ResponseBody}");
-            }
+            var turnedOff = await Client.WorkersObservability.UpdateDestinationAsync(
+                slug!,
+                new UpdateObservabilityDestinationRequest { Enabled = false });
+            Assert.False(turnedOff.Enabled);
+            Log($"turned off again: enabled={turnedOff.Enabled} url={turnedOff.Configuration?.Url}");
 
             // The delete answers with the destination it deleted rather than an empty success.
             var deleted = await Client.WorkersObservability.DeleteDestinationAsync(slug!);

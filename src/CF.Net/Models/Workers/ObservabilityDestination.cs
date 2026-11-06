@@ -296,10 +296,19 @@ public sealed class CreateObservabilityDestinationRequest
 
 /// <summary>Changes a telemetry destination.</summary>
 /// <remarks>
+/// <para>
 /// The body of <c>PATCH /accounts/{account_id}/workers/observability/destinations/{slug}</c>.
 /// <see cref="Enabled"/> is required even when it is not what is being changed, so turning a destination's
 /// headers or address round means sending its enabled flag again with them. The configuration here takes a
 /// type, a url, headers and <c>replaceHeaders</c>; the dataset is not part of an update.
+/// </para>
+/// <para>
+/// Sending a configuration makes Cloudflare check that delivery actually works before it accepts anything,
+/// and there is no way to skip that check here - a create has <c>skipPreflightCheck</c> and an update does
+/// not. Observed live: an update carrying the url the destination already had was refused with 400
+/// <c>Pre-flight check failed: Receiver returned HTTP 405</c>, because the address was not a receiver. An
+/// update that sends only the enabled flag is not checked and goes through.
+/// </para>
 /// </remarks>
 public sealed class UpdateObservabilityDestinationRequest
 {

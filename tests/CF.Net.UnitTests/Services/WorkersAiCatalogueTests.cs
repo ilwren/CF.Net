@@ -185,8 +185,19 @@ public class WorkersAiCatalogueTests
         Assert.Equal("object", schema.Output!.Type);
         Assert.True(schema.Output.AdditionalProperties);
         Assert.Equal("object in, object out", schema.ToString());
-        Assert.Equal("object", schema.Input.ToString());
-        Assert.Equal("object (open)", schema.Output.ToString());
+
+        // The three published fields are not all this answer carried: the input names the field a call has to
+        // send and the output offers one alternative shape, and both are read as a schema rather than kept
+        // raw. The one-line description says how much of the shape arrived.
+        Assert.Equal("object 1 field(s)", schema.Input.ToString());
+        Assert.Equal("object (open) 1 alternative(s)", schema.Output.ToString());
+        Assert.Equal("string", schema.Input.Properties!["prompt"].Type);
+        Assert.Equal("prompt", string.Join(",", schema.Input.Required!));
+        Assert.Equal("string", schema.Output.OneOf![0].Properties!["response"].Type);
+
+        // A keyword this library does not model still costs nothing, nested as deep as it arrives.
+        Assert.Equal(1, schema.Input.Properties["prompt"].AdditionalData!.Count);
+        Assert.Equal(1, schema.Input.Properties["prompt"].AdditionalData["minLength"].GetInt32());
     }
 
     [Fact]
@@ -220,7 +231,7 @@ public class WorkersAiCatalogueTests
             streamed.Properties["audio"].Description);
         Assert.Equal("body,contentType", string.Join(",", streamed.Properties["audio"].Required!));
         Assert.Equal("object", streamed.Properties["audio"].Properties!["body"].Type);
-        Assert.Equal("string", streamed.Properties["audio"].Properties["contentType"].Type);
+        Assert.Equal("string", streamed.Properties["audio"].Properties!["contentType"].Type);
 
         var encoded = schema.Input.OneOf[1];
         Assert.Equal("string", encoded.Properties!["audio"].Type);

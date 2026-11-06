@@ -16,9 +16,10 @@ public class RulesetServiceTests
     private const string RulesetWithRule = """
         {"id":"rs-1","name":"cfnet_it_redirects","kind":"custom","phase":"http_request_redirect",
          "version":"3","last_updated":"2026-01-02T03:04:05Z",
-         "rules":[{"id":"rule-1","action":"redirect","expression":"true","enabled":true,"version":"3",
+         "rules":[{"id":"rule-1","action":"redirect","enabled":true,"version":"3",
+                   "expression":"http.request.full_uri in $my_redirects",
                    "last_updated":"2026-01-02T03:04:05Z","logging":{"enabled":true},
-                   "action_parameters":{"from_list":{"name":"my_redirects","key":"target_url"}}}]}
+                   "action_parameters":{"from_list":{"name":"my_redirects","key":"http.request.full_uri"}}}]}
         """;
 
     /// <summary>Wraps a result payload in the envelope the transport expects.</summary>
@@ -108,19 +109,20 @@ public class RulesetServiceTests
         Assert.Equal("rule-1", rule.Id);
         Assert.True(rule.IsRedirect);
         Assert.False(rule.IsExecute);
-        Assert.Equal("true", rule.Expression);
+        // The expression has to reference the field the key uses, which is what Cloudflare checks.
+        Assert.Equal("http.request.full_uri in $my_redirects", rule.Expression);
         Assert.True(rule.Enabled);
         Assert.Equal("3", rule.Version);
         Assert.True(rule.Logging!.Enabled);
-        Assert.Equal("redirect: true", rule.ToString());
+        Assert.Equal("redirect: http.request.full_uri in $my_redirects", rule.ToString());
 
         // The Bulk Redirects parameters: a list name and the field of its items to redirect to.
         var parameters = rule.ActionParameters!;
         Assert.True(parameters.IsFromList);
         Assert.Equal("my_redirects", parameters.FromList!.Name);
-        Assert.Equal("target_url", parameters.FromList.Key);
+        Assert.Equal(RulesetRedirectFromList.KeyFullUri, parameters.FromList.Key);
         Assert.Null(parameters.FromValue);
-        Assert.Equal("from list my_redirects (target_url)", parameters.ToString());
+        Assert.Equal("from list my_redirects (http.request.full_uri)", parameters.ToString());
     }
 
     [Fact]
@@ -171,7 +173,7 @@ public class RulesetServiceTests
         });
 
         Assert.Equal(
-            """{"name":"cfnet_it_redirects","kind":"custom","phase":"http_request_redirect","rules":[{"action":"redirect","expression":"true","description":"bulk redirects","action_parameters":{"from_list":{"name":"my_redirects","key":"target_url"}}}]}""",
+            """{"name":"cfnet_it_redirects","kind":"custom","phase":"http_request_redirect","rules":[{"action":"redirect","expression":"http.request.full_uri in $my_redirects","description":"bulk redirects","action_parameters":{"from_list":{"name":"my_redirects","key":"http.request.full_uri"}}}]}""",
             harness.LastRequest.Body);
     }
 
@@ -313,7 +315,7 @@ public class RulesetServiceTests
             "/rulesets/phases/http_request_redirect/entrypoint",
             harness.LastRequest.Path,
             StringComparison.Ordinal);
-        Assert.Contains("\"from_list\":{\"name\":\"my_redirects\",\"key\":\"target_url\"}", harness.LastRequest.Body!, StringComparison.Ordinal);
+        Assert.Contains("\"from_list\":{\"name\":\"my_redirects\",\"key\":\"http.request.full_uri\"}", harness.LastRequest.Body!, StringComparison.Ordinal);
     }
 
     // ---------------------------------------------------------------- rules
@@ -326,12 +328,12 @@ public class RulesetServiceTests
 
         var ruleset = await harness.Client.Rulesets.CreateRuleAsync(
             "rs-1",
-            CreateRulesetRuleRequest.ForRedirectFromList("my_redirects", "true", "bulk redirects"));
+            CreateRulesetRuleRequest.ForRedirectFromList("my_redirects", description: "bulk redirects"));
 
         Assert.Equal(HttpMethod.Post, harness.LastRequest.Method);
         Assert.EndsWith("/accounts/acct-1234/rulesets/rs-1/rules", harness.LastRequest.Path, StringComparison.Ordinal);
         Assert.Equal(
-            """{"action":"redirect","expression":"true","description":"bulk redirects","action_parameters":{"from_list":{"name":"my_redirects","key":"target_url"}}}""",
+            """{"action":"redirect","expression":"http.request.full_uri in $my_redirects","description":"bulk redirects","action_parameters":{"from_list":{"name":"my_redirects","key":"http.request.full_uri"}}}""",
             harness.LastRequest.Body);
 
         // Cloudflare answers a rule change with the ruleset, so the new rule is read back out of it.
@@ -498,6 +500,49 @@ public class RulesetServiceTests
             Phase = RulesetPhase.HttpRatelimit,
             Version = "1",
         }.ToString());
+    }
+
+    [Fact]
+    public void The_redirect_helper_builds_the_expression_and_key_as_a_pair()
+    {
+        // Cloudflare parses the key as an expression and requires the rule's expression to use the same
+        // field, so neither half can be chosen without the other. "target_url" in the key was refused live
+        // with 20082: could not parse filter value expression.
+        var rule = CreateRulesetRuleRequest.ForRedirectFromList("my_redirects");
+
+        Assert.Equal("redirect", rule.Action);
+        Assert.Equal("http.request.full_uri in $my_redirects", rule.Expression);
+        Assert.Equal("http.request.full_uri", rule.ActionParameters!.FromList!.Key);
+        Assert.Equal("my_redirects", rule.ActionParameters.FromList.Name);
+
+        // Asking for another field changes both halves, which is the point of building them together.
+        var byUri = CreateRulesetRuleRequest.ForRedirectFromList(
+            "my_redirects",
+            key: "http.request.uri");
+
+        Assert.Equal("http.request.uri in $my_redirects", byUri.Expression);
+        Assert.Equal("http.request.uri", byUri.ActionParameters!.FromList!.Key);
+
+        // An expression given explicitly wins, for a rule that matches something narrower than the list.
+        var explicitExpression = CreateRulesetRuleRequest.ForRedirectFromList(
+            "my_redirects",
+            """http.host eq "example.com"""");
+
+        Assert.Equal("""http.host eq "example.com"""", explicitExpression.Expression);
+        Assert.Equal("http.request.full_uri", explicitExpression.ActionParameters!.FromList!.Key);
+    }
+
+    [Fact]
+    public void A_managed_ruleset_says_where_it_came_from()
+    {
+        // Observed live on the managed ruleset this account holds: {"source":"firewall_managed"}.
+        var ruleset = System.Text.Json.JsonSerializer.Deserialize<Ruleset>(
+            """{"id":"rs-m","name":"Cloudflare Managed Free Ruleset","kind":"managed","phase":"http_request_firewall_managed","version":"4","source":"firewall_managed"}""",
+            CFNet.Serialization.CloudflareJson.Default)!;
+
+        Assert.True(ruleset.IsManaged);
+        Assert.Equal("firewall_managed", ruleset.Source);
+        Assert.True(ruleset.AdditionalData is null or { Count: 0 });
     }
 
     [Fact]

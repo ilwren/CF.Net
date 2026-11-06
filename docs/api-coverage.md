@@ -753,14 +753,28 @@ change makes a new one. `RulesetKind` covers `root`, `managed`, `custom` and `zo
 the 23 phases the API publishes, from `http_request_redirect` (Bulk Redirects) through
 `http_request_firewall_custom` (custom WAF rules) to `magic_transit`.
 
-Two constraints the live API taught, because the docs do not lead with them: `kind: custom` is only
-accepted in the `http_request_firewall_custom` phase - creating one in `http_request_redirect` is refused
-with `20004` - so Bulk Redirects lives in the account's **root** ruleset for that phase, and a managed rule
-may carry no `expression` at all, Cloudflare defining it by `ref` instead.
+Four things the live API taught, which its docs do not lead with:
+
+- `kind: custom` is refused for the `http_request_redirect` phase with `20004`, so Bulk Redirects lives in
+  the account's **root** ruleset for that phase rather than in a ruleset of your own. Custom rulesets are
+  documented for `http_request_firewall_custom`, and at zone level only for that phase at all.
+- Writing a ruleset also needs the phase to be entitled: this account answers `50002`, "not entitled to use
+  the phase", for `http_request_firewall_custom`. The integration suite therefore writes a root redirect
+  ruleset only where the account runs none, and otherwise validates its rule against the live entrypoint
+  with `dry_run=true` and then checks the version did not move.
+- A managed rule may carry no `expression` at all - Cloudflare defines it by `ref` - and a managed ruleset
+  says where it came from in `source`, observed live as `firewall_managed`.
+- `from_list.key` is **not** the name of a list field, which is what it looks like: Cloudflare parses it as
+  a Wirefilter expression naming the part of the request to look up among the list's source URLs, and
+  `target_url` there is refused with `20082`, "could not parse filter value expression". The documented
+  value is `http.request.full_uri`, and the rule's own `expression` has to reference the same field -
+  normally `http.request.full_uri in $<list name>`. That pair is what
+  `CreateRulesetRuleRequest.ForRedirectFromList` builds, which is why it takes a key rather than letting
+  the caller set one half of it.
 
 Rules come in twenty-odd action-specific shapes. `RulesetRule` declares the fields every rule shares, plus
-the **redirect** parameters - `from_list` (`name` + `key`, the Bulk Redirects case, built by
-`CreateRulesetRuleRequest.ForRedirectFromList`) and `from_value` (a literal or expression target with
+the **redirect** parameters - `from_list` (`name` + `key`, where the key is an expression, the Bulk
+Redirects case, built by `CreateRulesetRuleRequest.ForRedirectFromList`) and `from_value` (a literal or expression target with
 `status_code` and `preserve_query_string`, the Dynamic Redirect case). Any other action's parameters arrive
 in `RulesetActionParameters.AdditionalData` as they came rather than being guessed at, and the integration
 test reports which ones those were so a later release can type them from evidence.

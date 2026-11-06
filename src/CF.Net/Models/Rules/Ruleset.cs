@@ -63,6 +63,13 @@ public sealed class Ruleset
     [JsonPropertyName("rules")]
     public List<RulesetRule>? Rules { get; set; }
 
+    /// <summary>
+    /// Where a managed ruleset comes from, e.g. <c>firewall_managed</c>. Reported by the live API on the
+    /// managed rulesets an account holds; absent on the ones you write.
+    /// </summary>
+    [JsonPropertyName("source")]
+    public string? Source { get; set; }
+
     /// <summary>Captures any field Cloudflare adds in the future.</summary>
     [JsonExtensionData]
     public IDictionary<string, JsonElement>? AdditionalData { get; set; }
@@ -333,11 +340,20 @@ public sealed class RulesetActionParameters
         : "(no parameters)";
 }
 
-/// <summary>A redirect whose URLs come from a list.</summary>
+/// <summary>A redirect whose URLs come from a list: the Bulk Redirects case.</summary>
 /// <remarks>
+/// <para>
 /// <see cref="Name"/> is the list's <em>name</em>, not its id, because that is how rules refer to lists -
-/// which is also why renaming is not something the API offers. <see cref="Key"/> says which field of each
-/// list item supplies the target; for a redirect list it is <c>target_url</c>.
+/// which is also why renaming is not something the API offers.
+/// </para>
+/// <para>
+/// <see cref="Key"/> is <em>not</em> a field of the list item, which is what it looks like: it is a
+/// Wirefilter expression naming the part of the request to look up among the list's source URLs, and
+/// Cloudflare parses it as an expression - sending <c>target_url</c> there is refused with <c>20082</c>,
+/// "could not parse filter value expression". The documented value is <see cref="KeyFullUri"/>, and the
+/// rule's own expression has to reference the same field, which is why
+/// <see cref="CreateRulesetRuleRequest.ForRedirectFromList"/> builds both together.
+/// </para>
 /// </remarks>
 public sealed class RulesetRedirectFromList
 {
@@ -345,9 +361,17 @@ public sealed class RulesetRedirectFromList
     [JsonPropertyName("name")]
     public string? Name { get; set; }
 
-    /// <summary>Which field of each item is the target: <c>target_url</c> for a redirect list.</summary>
+    /// <summary>
+    /// The request field to match against the list's source URLs, as a Wirefilter expression - normally
+    /// <see cref="KeyFullUri"/>.
+    /// </summary>
     [JsonPropertyName("key")]
     public string? Key { get; set; }
+
+    /// <summary>
+    /// The key Cloudflare documents for Bulk Redirects: the whole request URI, scheme and query included.
+    /// </summary>
+    public const string KeyFullUri = "http.request.full_uri";
 
     /// <summary>Captures any field Cloudflare adds in the future.</summary>
     [JsonExtensionData]
@@ -502,28 +526,37 @@ public sealed class CreateRulesetRuleRequest
 
     /// <summary>Builds a Bulk Redirects rule: every URL in one list, redirected by one rule.</summary>
     /// <param name="listName">The name of a redirect list in the same account.</param>
-    /// <param name="expression">Which requests the rule applies to. <c>true</c> applies it to all of them.</param>
+    /// <param name="expression">
+    /// Which requests the rule applies to. Left null, this becomes <c>{key} in ${listName}</c>, which is
+    /// the form Cloudflare documents and requires: the expression has to reference the field the key uses.
+    /// </param>
     /// <param name="description">Optional text for the dashboard.</param>
     /// <param name="enabled">Whether the rule runs; <c>null</c> leaves Cloudflare's default.</param>
+    /// <param name="key">
+    /// The request field to match against the list's source URLs. Defaults to
+    /// <see cref="RulesetRedirectFromList.KeyFullUri"/>.
+    /// </param>
     /// <returns>A rule whose redirects come from a list.</returns>
     /// <remarks>
-    /// The key is <c>target_url</c>, which is the field of a redirect list item that holds the target. The
-    /// list has to exist first and be of kind <c>redirect</c>.
+    /// The list has to exist first and be of kind <c>redirect</c>. Both halves of the pair are built here
+    /// because Cloudflare checks them against each other: a <c>key</c> is parsed as an expression, and the
+    /// rule's <c>expression</c> has to use the same field.
     /// </remarks>
     public static CreateRulesetRuleRequest ForRedirectFromList(
         string listName,
-        string expression = "true",
+        string? expression = null,
         string? description = null,
-        bool? enabled = null) =>
+        bool? enabled = null,
+        string key = RulesetRedirectFromList.KeyFullUri) =>
         new()
         {
             Action = "redirect",
-            Expression = expression,
+            Expression = expression ?? $"{key} in ${listName}",
             Description = description,
             Enabled = enabled,
             ActionParameters = new RulesetActionParameters
             {
-                FromList = new RulesetRedirectFromList { Name = listName, Key = "target_url" },
+                FromList = new RulesetRedirectFromList { Name = listName, Key = key },
             },
         };
 }

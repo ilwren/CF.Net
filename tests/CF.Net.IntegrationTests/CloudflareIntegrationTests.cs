@@ -3769,6 +3769,10 @@ public class WriteIntegrationTests : CloudflareIntegrationTest
 
             var listed = await Client.Workers.ListRoutesAsync(ZoneId);
             Assert.Contains(listed, route => route.Id == created.Id);
+            Collect(
+                unmodelled,
+                "routes.list",
+                listed.First(route => route.Id == created.Id).AdditionalData);
 
             // The list takes no filter, so which routes belong to one Worker is answered locally - and the
             // script name here belongs to nothing else, so this is exactly one route.
@@ -3818,6 +3822,16 @@ public class WriteIntegrationTests : CloudflareIntegrationTest
             var settings = await Client.Workers.GetAccountSettingsAsync();
             Log($"workers account settings: {settings}");
             Collect(unmodelled, "account-settings.get", settings.AdditionalData);
+
+            // The field is a string on purpose, because this endpoint does not enumerate its words - so this
+            // is not a claim that the answer has to be one of them, it is how a word this library has not met
+            // gets named instead of quietly passing by.
+            Assert.True(
+                settings.DefaultUsageModel is WorkerUsageModels.Standard
+                    or WorkerUsageModels.Bundled
+                    or WorkerUsageModels.Unbound,
+                $"GET /accounts/{{account_id}}/workers/account-settings answered default_usage_model=" +
+                $"'{settings.DefaultUsageModel}', which is not one of the words WorkerUsageModels carries.");
 
             try
             {

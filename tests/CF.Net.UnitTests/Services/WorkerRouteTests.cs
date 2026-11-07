@@ -50,6 +50,28 @@ public class WorkerRouteTests
     }
 
     [Fact]
+    public async Task A_route_carries_a_request_limit_flag_no_published_schema_mentions()
+    {
+        using var harness = CloudflareHarness.Create();
+
+        // A live create, read and both writes each answered request_limit_fail_open, which nothing published
+        // describes - not even the JSON kind it arrives in, so this pins both a boolean and the number form
+        // Cloudflare writes other flags in.
+        harness.RespondWithResult(
+            """[{"id":"route-1","pattern":"p","script":"s","request_limit_fail_open":true},{"id":"route-2","pattern":"q","request_limit_fail_open":0},{"id":"route-3","pattern":"r"}]""");
+
+        var routes = await harness.Client.Workers.ListRoutesAsync();
+
+        Assert.True(routes[0].RequestLimitFailOpen);
+        Assert.False(routes[1].RequestLimitFailOpen);
+        Assert.Null(routes[2].RequestLimitFailOpen);
+
+        // And with the field modelled, the answers carry nothing this library does not know.
+        Assert.True(routes[0].AdditionalData is not { Count: > 0 });
+        Assert.True(routes[1].AdditionalData is not { Count: > 0 });
+    }
+
+    [Fact]
     public async Task ListRoutesAsync_reads_the_zone_it_was_given_and_refuses_to_guess_one()
     {
         using var harness = CloudflareHarness.Create();

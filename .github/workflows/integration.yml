@@ -312,6 +312,10 @@ jobs:
             # so a 403 here is ambiguous between them and the row says so.
             probe zone_rulesets "$zone/rulesets?per_page=1"
             probe waiting_rooms "$zone/waiting_rooms?per_page=1"
+            # Routes are the zone-scoped half of the Workers API, so this belongs here rather than with the
+            # account-scoped Workers probes below: a token holding Workers Routes Read but no Zone Resources
+            # entry for this zone answers 10007 here, and that is the failure this probe exists to name.
+            probe workers_routes "$zone/workers/routes"
           fi
 
           if [ -n "${CLOUDFLARE_ACCOUNT_ID:-}" ]; then
@@ -638,6 +642,10 @@ jobs:
               ('cab5202d07ef47beae788e6bc95cb6fe', 'Waiting Rooms Read', 'zone', 'read'),
               ('24fc124dc8254e0db468e60bf410c800', 'Waiting Rooms Write', 'zone', 'edit'),
               ('c1fde68c7bcc44588cbb6ddbc16d6480', 'Account Settings Read', 'account', 'read'),
+              # PUT /accounts/{account_id}/workers/account-settings is documented as needing this rather than
+              # a Workers group, and a live run answered 403 [10000] for a token without it - so it is wanted
+              # here, ahead of the fact that would otherwise keep reporting the refusal.
+              ('1af1fa2adc104452b74a9a3364202f20', 'Account Settings Write', 'account', 'edit'),
               ('eb56a6953c034b9d97dd838155666f06', 'Account API Tokens Read', 'account', 'read'),
               ('5bc3f8b21c554832afc660159ab75fa4', 'Account API Tokens Write', 'account', 'edit'),
               ('1a71c399035b4950a1bd1466bbe4f420', 'Workers Scripts Read', 'account', 'read'),
@@ -735,7 +743,8 @@ jobs:
               'The two account URLs carry **' + str(len(WANTED_GROUPS)) + ' permission groups by id**: '
               'every group this suite touches now, plus the ones the next modules need - Rulesets, Rule '
               'Lists and Mass/Dynamic URL Redirects for Bulk Redirects, Workers Tail, Workers '
-              'Observability, Workers AI, Turnstile, Waiting Rooms, and Load Balancing monitors and pools. '
+              'Observability, Workers AI, Turnstile, Waiting Rooms, Load Balancing monitors and pools, and '
+              'Account Settings Write for the Workers account-settings write. '
               'Creating a token from one of them and replacing the secret is the whole job: there is no box '
               'to tick, and if Cloudflare ever stops resolving an id the form says so by name.',
               '',

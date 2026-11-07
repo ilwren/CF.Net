@@ -1,5 +1,6 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using CFNet.Serialization;
 
 namespace CFNet.Models.Workers;
 
@@ -37,6 +38,14 @@ public sealed class WorkerRoute
     /// deliberate kind of route rather than an unfinished one.
     /// </summary>
     public string? Script { get; set; }
+
+    /// <summary>
+    /// Whether a request that runs into the Worker's limits fails open - reaching the origin instead of
+    /// erroring. Cloudflare answers this on a route and no published schema mentions it, so the kind it writes
+    /// it in is not published either and the tolerant reader takes a boolean, a number or a word.
+    /// </summary>
+    [JsonConverter(typeof(TolerantBooleanConverter))]
+    public bool? RequestLimitFailOpen { get; set; }
 
     /// <summary>
     /// Whether this route takes a path back out of Workers: with no script of its own, it wins over the less

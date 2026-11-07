@@ -464,7 +464,7 @@ Credentials created before 2026 carry no prefix, so a prefix check can only ever
 | `PutSecretAsync(scriptName, WorkerSecretRequest, accountId)` | `PUT …/workers/scripts/{script_name}/secrets` | the body **is** the secret, unwrapped: `{name, type, text}` for a string, `{name, type, key_base64 or key_jwk, format, usages, algorithm}` for a key. Replaces any secret already stored under that name, and a request mixing the two kinds is refused locally. A `(scriptName, secretName, text)` overload covers the ordinary case. **The only call a secret's value ever travels on** |
 | `DeleteSecretAsync(scriptName, secretName, bool urlEncoded, accountId)` | `DELETE …/workers/scripts/{script_name}/secrets/{secret_name}` | nothing modelled back - the answer is `null` |
 | `UpdateSecretsBulkAsync(scriptName, WorkerSecretBulkRequest, accountId)` | `PATCH …/workers/scripts/{script_name}/secrets-bulk` | **`secrets-bulk`, not a sub-path of `secrets`**. One body writes several secrets and removes others - **a name mapped to `null` is a deletion**, which is why the type has its own converter: this library's writer omits nulls, and here that would turn a removal into nothing at all. Answers `{name: secret}`. Worth one call rather than several because each write makes a version of the script |
-| `ListRoutesAsync(zoneId)` | `GET /zones/{zone_id}/workers/routes` | **zone-scoped**, unlike everything else in this service: a bare array of `WorkerRoute` (`id`, `pattern`, `script`), no paging and no filters. Needs **Workers Routes Read** |
+| `ListRoutesAsync(zoneId)` | `GET /zones/{zone_id}/workers/routes` | **zone-scoped**, unlike everything else in this service: a bare array of `WorkerRoute` (`id`, `pattern`, `script`, `request_limit_fail_open`), no paging and no filters. Needs **Workers Routes Read** |
 | `ListRoutesForWorkerAsync(scriptName, zoneId)` | `GET /zones/{zone_id}/workers/routes` | the same call, filtered here - the endpoint takes no filter, so "which routes run this Worker" is a local answer, the way `ListDomainsForWorkerAsync` is. A route with no script belongs to no Worker |
 | `GetRouteAsync(routeId, zoneId)` | `GET /zones/{zone_id}/workers/routes/{route_id}` | one route; null when the zone has no route of that id |
 | `CreateRouteAsync(WorkerRouteRequest, zoneId)` | `POST /zones/{zone_id}/workers/routes` | the body is the route: `{pattern, script?}`. Needs **Workers Routes Write**. Leaving `script` out creates a route that runs nothing, which **negates the less specific patterns around it** - `WorkerRouteRequest.Bypassing(pattern)` says that in so many words, and `WorkerRoute.BypassesWorkers` reads it back |
@@ -524,11 +524,22 @@ a pattern belongs to the zone is Cloudflare's call, and it refuses one that does
 needs a **proxied DNS record** for its hostname before any traffic reaches it, which is a DNS matter rather
 than a routing one.
 
+A route also answers **`request_limit_fail_open`** - whether a request that runs into the Worker's limits
+reaches the origin instead of erroring - which no published schema for this endpoint mentions. A live run found
+it on the create, the read and both writes, so it is a property now rather than an `AdditionalData` entry, and
+it is read by the tolerant boolean converter because the kind Cloudflare writes it in is not published either.
+
 The account settings are typed as the strings and flags Cloudflare publishes, with one deliberate exception:
 `default_usage_model` stays a `string` because the endpoint's own documentation does not enumerate its words,
 and `standard` - which `WorkerUsageModels` carries beside `bundled` and `unbound` - is not one of the words the
 documentation mentions. An enum there would make a word this library has not met a hard failure on an account
 that is working perfectly.
+
+Verified live on a free-plan account: the route create, read, both writes and the delete all answered 200, the
+`GET` of a deleted route answered "not there", `green_compute` arrived as a real boolean - so the settings read
+parses as typed - and the settings **write** answered **403 `[10000]`** for a token without **Account Settings
+Write**, exactly as its own documentation says. That group is now in the token URL the workflow generates, so
+the next token created from it will let the write be verified too.
 
 ⛔ The newer JSON-only flow (`POST /workers/workers` → `…/versions` → `…/deployments`), static asset
 upload sessions, Workers for Platforms dispatch namespaces, and query filters on the domain list. Workers AI

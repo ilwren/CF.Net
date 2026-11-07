@@ -220,7 +220,7 @@ For the full suite:
 | Account | Account Settings — Read | `GET /accounts`, `GET /accounts/{id}` |
 | Account | Workers Scripts — Edit | scripts, deployments, secrets, the `workers.dev` subdomain and custom domains |
 | Zone | Workers Routes — Edit | `GET`/`POST`/`PUT`/`DELETE /zones/{id}/workers/routes`. The token catalogue files this group under the account, but a route lives in a zone, so a token whose *Zone Resources* do not name the zone gets a `10007 Route not found` that reads like a missing permission |
-| Account | Account Settings — Edit | `PUT /accounts/{id}/workers/account-settings` — Cloudflare documents this write as needing **Account Settings Write** rather than a Workers group. The token the live run uses does not carry it, so that fact reports the refusal instead of failing on it, and adding the group (`1af1fa2adc104452b74a9a3364202f20`) is what would let the write be verified |
+| Account | Account Settings — Edit | `PUT /accounts/{id}/workers/account-settings` — Cloudflare documents this write as needing **Account Settings Write** rather than a Workers group. A live run confirmed it: the read answers 200 and the write answers **403 `[10000]`** without that group. The fact reports the refusal instead of failing on it, and the group (`1af1fa2adc104452b74a9a3364202f20`) is in the token URL the workflow generates, so a token created from it verifies the write too |
 | Account | Pages — Edit | projects, deployments, domains |
 | Account | D1 — Edit | databases, queries, backups |
 | Account | Workers KV Storage — Edit | namespaces, values, bulk writes |

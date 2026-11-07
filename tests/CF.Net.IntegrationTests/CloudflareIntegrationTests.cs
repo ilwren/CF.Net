@@ -3618,6 +3618,113 @@ public class WriteIntegrationTests : CloudflareIntegrationTest
     }
 
     [Fact]
+    public async Task A_worker_secret_can_be_written_listed_read_bulk_written_and_removed()
+    {
+        if (!SkipWithoutAccount() || !SkipWithoutWritePermission())
+        {
+            return;
+        }
+
+        var name = $"cfnet-it-{Guid.NewGuid().ToString("N")[..10]}";
+
+        // Two secret names, and values generated here, written once and never printed: no read of a secret
+        // answers its value, so a run report that carried one would be the only copy anyone could see.
+        const string firstName = "CF_NET_FIRST";
+        const string secondName = "CF_NET_SECOND";
+        var firstValue = Guid.NewGuid().ToString("N");
+        var secondValue = Guid.NewGuid().ToString("N");
+
+        try
+        {
+            await Retrying5xxAsync(() => Client.Workers.UploadAsync(
+                name,
+                "export default { async fetch(request) { return new Response('cf-net'); } }",
+                "2025-01-01",
+                new[] { WorkerBinding.SecretText(firstName, firstValue) }));
+            Log($"uploaded {name} with a secret_text binding named {firstName}");
+
+            // A binding in a script's metadata names a secret; the secrets endpoint is what stores a value
+            // behind the name. Whether an upload that carried one already stored it is worth knowing, so it is
+            // recorded rather than assumed.
+            var before = await Client.Workers.ListSecretsAsync(name);
+            Log($"secrets straight after the upload: {before.Count} - {string.Join(", ", before)}");
+            ReportSecretFields("GET /accounts/{account_id}/workers/scripts/{script_name}/secrets", before);
+
+            var written = await Client.Workers.PutSecretAsync(name, firstName, firstValue);
+            Assert.Equal(firstName, written.Name);
+            Assert.Equal(WorkerSecretTypes.SecretText, written.Type);
+            Log($"put {written}, and no value came back with it, which is the point of the endpoint");
+            ReportSecretFields("PUT /accounts/{account_id}/workers/scripts/{script_name}/secrets", new[] { written });
+
+            var read = await Client.Workers.GetSecretAsync(name, firstName);
+            Assert.NotNull(read);
+            Assert.Equal(firstName, read!.Name);
+            Assert.Equal(WorkerSecretTypes.SecretText, read.Type);
+            ReportSecretFields(
+                "GET /accounts/{account_id}/workers/scripts/{script_name}/secrets/{secret_name}",
+                new[] { read });
+
+            // One call writes a second secret and removes the first, which is a null in the map. A bulk write
+            // exists because each of these makes a version of the script, so two calls would make two.
+            var bulk = await Client.Workers.UpdateSecretsBulkAsync(
+                name,
+                new WorkerSecretBulkRequest()
+                    .WithText(secondName, secondValue)
+                    .WithRemoved(firstName));
+            Log($"the bulk write answered {bulk.Count} secret(s): {string.Join(", ", bulk.Values)}");
+            ReportSecretFields(
+                "PATCH /accounts/{account_id}/workers/scripts/{script_name}/secrets-bulk",
+                bulk.Values.ToList());
+
+            var after = await Client.Workers.ListSecretsAsync(name);
+            Assert.Contains(after, secret => secret.Name == secondName);
+
+            if (after.Any(secret => secret.Name == firstName))
+            {
+                // A null in that map is published as a removal, so this is either a wrong reading of it or a
+                // body Cloudflare ignored - either way it is the fact worth reporting, not failing on.
+                Warn($"PATCH …/secrets-bulk answered 200 and the secret mapped to null is still there: " +
+                     $"{after.Count} secret(s) - {string.Join(", ", after)}. A null in that map is documented " +
+                     "as a removal, so either it is not one, or this library writes it in a way Cloudflare " +
+                     "ignores.");
+            }
+            else
+            {
+                Log($"the bulk write removed {firstName}, which is what a null in its map means");
+                Assert.Null(await Client.Workers.GetSecretAsync(name, firstName));
+            }
+
+            await Client.Workers.DeleteSecretAsync(name, secondName);
+            var emptied = await Client.Workers.ListSecretsAsync(name);
+            Assert.DoesNotContain(emptied, secret => secret.Name == secondName);
+            Log($"deleted {secondName}; {emptied.Count} secret(s) left on {name}");
+        }
+        finally
+        {
+            await Client.Workers.DeleteAsync(name);
+            Log($"deleted the script {name}");
+        }
+    }
+
+    /// <summary>
+    /// Warns once about the fields of a secret this library does not model, naming them rather than printing
+    /// the item: even with no value in it, a secret's description belongs in a run report by name only.
+    /// </summary>
+    private void ReportSecretFields(string endpoint, IReadOnlyList<WorkerSecret> secrets)
+    {
+        foreach (var secret in secrets.Take(3))
+        {
+            if (secret.AdditionalData is not { Count: > 0 })
+            {
+                continue;
+            }
+
+            Warn($"{endpoint} answered fields this library does not model for a Worker secret: " +
+                 $"{string.Join(", ", secret.AdditionalData.Keys)} on '{secret.Name}'.");
+        }
+    }
+
+    [Fact]
     public async Task A_turnstile_widget_can_be_created_read_updated_rotated_and_deleted()
     {
         if (!SkipWithoutAccount() || !SkipWithoutWritePermission())

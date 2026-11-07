@@ -298,6 +298,126 @@ public interface IWorkersScriptsService
         string? accountId = null,
         CancellationToken cancellationToken = default);
 
+    /// <summary>Lists the secrets a Worker has, by name and kind.</summary>
+    /// <param name="scriptName">The Worker whose secrets to list.</param>
+    /// <param name="accountId">Account id; falls back to the configured default when null.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>One entry per secret. No value is ever among them, because Cloudflare never answers one.</returns>
+    /// <remarks>
+    /// <c>GET /accounts/{account_id}/workers/scripts/{script_name}/secrets</c>, a bare array with no paging and
+    /// no filters. This is how a deployment is reconciled against what a script needs: a name here and a
+    /// <c>secret_text</c> binding of the same name in the script's metadata are the two halves of one secret.
+    /// </remarks>
+    Task<IReadOnlyList<WorkerSecret>> ListSecretsAsync(
+        string scriptName,
+        string? accountId = null,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>Reads one secret's name and kind.</summary>
+    /// <param name="scriptName">The Worker the secret belongs to.</param>
+    /// <param name="secretName">The secret's name.</param>
+    /// <param name="urlEncoded">
+    /// Cloudflare's own flag saying the name in the path is percent-encoded. This library encodes every path
+    /// segment whether the flag is set or not; the flag is for a name whose characters encoding changed, and
+    /// is left off for the ordinary identifier-shaped one.
+    /// </param>
+    /// <param name="accountId">Account id; falls back to the configured default when null.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>The secret, or null when the script has no secret of that name.</returns>
+    /// <remarks>
+    /// <c>GET /accounts/{account_id}/workers/scripts/{script_name}/secrets/{secret_name}</c>. It answers what
+    /// the list answers - a name and a kind, plus a key's format and usages - and no value, because no read of
+    /// a secret ever answers one.
+    /// </remarks>
+    Task<WorkerSecret?> GetSecretAsync(
+        string scriptName,
+        string secretName,
+        bool urlEncoded = false,
+        string? accountId = null,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>Writes a secret onto a Worker, replacing any secret already stored under that name.</summary>
+    /// <param name="scriptName">The Worker to give the secret to.</param>
+    /// <param name="secret">The secret: a name, a kind, and the value or key material behind it.</param>
+    /// <param name="accountId">Account id; falls back to the configured default when null.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>The secret as Cloudflare describes it back - its name and kind, and no value.</returns>
+    /// <remarks>
+    /// <para>
+    /// <c>PUT /accounts/{account_id}/workers/scripts/{script_name}/secrets</c>. This is the only call a
+    /// secret's value ever travels on, and nothing answers it back afterwards, so a caller that loses one
+    /// writes it again rather than reading it.
+    /// </para>
+    /// <para>
+    /// A request that mixes the two kinds - a <c>secret_text</c> carrying key material, or a
+    /// <c>secret_key</c> with no format or no usages - is refused locally, because Cloudflare would store
+    /// something other than what was meant.
+    /// </para>
+    /// </remarks>
+    Task<WorkerSecret> PutSecretAsync(
+        string scriptName,
+        WorkerSecretRequest secret,
+        string? accountId = null,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>Writes a string secret onto a Worker, which is the ordinary case.</summary>
+    /// <param name="scriptName">The Worker to give the secret to.</param>
+    /// <param name="secretName">The name the script reaches it by.</param>
+    /// <param name="text">The value, which no read ever answers back.</param>
+    /// <param name="accountId">Account id; falls back to the configured default when null.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>The secret as Cloudflare describes it back.</returns>
+    Task<WorkerSecret> PutSecretAsync(
+        string scriptName,
+        string secretName,
+        string text,
+        string? accountId = null,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>Removes a secret from a Worker.</summary>
+    /// <param name="scriptName">The Worker to take the secret from.</param>
+    /// <param name="secretName">The secret's name.</param>
+    /// <param name="urlEncoded">
+    /// Cloudflare's flag saying the name in the path is percent-encoded; see <see cref="GetSecretAsync"/>.
+    /// </param>
+    /// <param name="accountId">Account id; falls back to the configured default when null.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <remarks>
+    /// <c>DELETE /accounts/{account_id}/workers/scripts/{script_name}/secrets/{secret_name}</c>. Cloudflare
+    /// publishes nothing about the answer beyond success, so there is nothing to return: the script keeps
+    /// running, and a binding that reached this secret now reaches nothing.
+    /// </remarks>
+    Task DeleteSecretAsync(
+        string scriptName,
+        string secretName,
+        bool urlEncoded = false,
+        string? accountId = null,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>Writes several secrets in one call, and removes the ones mapped to null.</summary>
+    /// <param name="scriptName">The Worker to change.</param>
+    /// <param name="secrets">The map of name to secret, where a null value is a removal.</param>
+    /// <param name="accountId">Account id; falls back to the configured default when null.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>The secrets as Cloudflare describes them back, keyed by name.</returns>
+    /// <remarks>
+    /// <para>
+    /// <c>PATCH /accounts/{account_id}/workers/scripts/{script_name}/secrets-bulk</c> - note the path is
+    /// <c>secrets-bulk</c>, not a sub-path of <c>secrets</c>. One call for several secrets matters because
+    /// each of them creates a version of the script: writing five one at a time makes five versions.
+    /// </para>
+    /// <para>
+    /// A removal is a name mapped to <see langword="null"/>, which <see cref="WorkerSecretBulkRequest.WithRemoved"/>
+    /// expresses and this library's converter writes on purpose - its serializer omits nulls everywhere else,
+    /// which here would turn a deletion into nothing at all.
+    /// </para>
+    /// </remarks>
+    Task<IReadOnlyDictionary<string, WorkerSecret>> UpdateSecretsBulkAsync(
+        string scriptName,
+        WorkerSecretBulkRequest secrets,
+        string? accountId = null,
+        CancellationToken cancellationToken = default);
+
     /// <summary>
     /// Uploads (creates or replaces) a Worker. Uses the <c>multipart/form-data</c> shape Cloudflare
     /// requires: a <c>metadata</c> part plus one part per module.
@@ -1147,6 +1267,127 @@ public sealed class WorkersScriptsService : CloudflareService, IWorkersScriptsSe
         await SendVoidAsync(request, cancellationToken).ConfigureAwait(false);
     }
 
+    /// <inheritdoc />
+    public async Task<IReadOnlyList<WorkerSecret>> ListSecretsAsync(
+        string scriptName,
+        string? accountId = null,
+        CancellationToken cancellationToken = default)
+    {
+        var request = CloudflareRequest.Get(SecretsPath(ResolveAccountId(accountId), scriptName));
+        request.OperationName = "List Worker Secrets";
+
+        // A bare array, and no value in any of it: Cloudflare stores secrets encrypted and never answers one.
+        var response = await Transport
+            .SendAsync<List<WorkerSecret>>(request, cancellationToken)
+            .ConfigureAwait(false);
+        return response.Result ?? new List<WorkerSecret>();
+    }
+
+    /// <inheritdoc />
+    public async Task<WorkerSecret?> GetSecretAsync(
+        string scriptName,
+        string secretName,
+        bool urlEncoded = false,
+        string? accountId = null,
+        CancellationToken cancellationToken = default)
+    {
+        var request = CloudflareRequest
+            .Get(SecretPath(ResolveAccountId(accountId), scriptName, secretName))
+            .Tolerate(System.Net.HttpStatusCode.NotFound);
+        if (urlEncoded)
+        {
+            request.Query.Add("url_encoded", true);
+        }
+
+        request.OperationName = "Get Worker Secret";
+
+        var response = await Transport
+            .SendAsync<WorkerSecret>(request, cancellationToken)
+            .ConfigureAwait(false);
+        return response.Result;
+    }
+
+    /// <inheritdoc />
+    public async Task<WorkerSecret> PutSecretAsync(
+        string scriptName,
+        WorkerSecretRequest secret,
+        string? accountId = null,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(secret);
+        secret.EnsureValid();
+
+        var request = CloudflareRequest.Put(SecretsPath(ResolveAccountId(accountId), scriptName), secret);
+        request.OperationName = "Put Worker Secret";
+
+        var response = await Transport
+            .SendAsync<WorkerSecret>(request, cancellationToken)
+            .ConfigureAwait(false);
+        return response.EnsureResult();
+    }
+
+    /// <inheritdoc />
+    public Task<WorkerSecret> PutSecretAsync(
+        string scriptName,
+        string secretName,
+        string text,
+        string? accountId = null,
+        CancellationToken cancellationToken = default) =>
+        PutSecretAsync(
+            scriptName,
+            WorkerSecretRequest.OfText(Require(secretName, nameof(secretName)), text),
+            accountId,
+            cancellationToken);
+
+    /// <inheritdoc />
+    public async Task DeleteSecretAsync(
+        string scriptName,
+        string secretName,
+        bool urlEncoded = false,
+        string? accountId = null,
+        CancellationToken cancellationToken = default)
+    {
+        var request = CloudflareRequest.Delete(
+            SecretPath(ResolveAccountId(accountId), scriptName, secretName));
+        if (urlEncoded)
+        {
+            request.Query.Add("url_encoded", true);
+        }
+
+        request.OperationName = "Delete Worker Secret";
+
+        await SendVoidAsync(request, cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <inheritdoc />
+    public async Task<IReadOnlyDictionary<string, WorkerSecret>> UpdateSecretsBulkAsync(
+        string scriptName,
+        WorkerSecretBulkRequest secrets,
+        string? accountId = null,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(secrets);
+        secrets.EnsureValid();
+
+        var path = $"{ScriptPath(ResolveAccountId(accountId), scriptName)}/secrets-bulk";
+        var request = CloudflareRequest.Patch(path, secrets);
+        request.OperationName = "Update Worker Secrets In Bulk";
+
+        var response = await Transport
+            .SendAsync<Dictionary<string, WorkerSecret>>(request, cancellationToken)
+            .ConfigureAwait(false);
+        return response.Result ?? new Dictionary<string, WorkerSecret>();
+    }
+
+    private static string ScriptPath(string accountId, string scriptName) =>
+        $"{AccountPath(accountId)}/workers/scripts/{CloudflareUrl.EncodeSegment(Require(scriptName, nameof(scriptName)))}";
+
     private static string TailPath(string accountId, string scriptName) =>
-        $"{AccountPath(accountId)}/workers/scripts/{CloudflareUrl.EncodeSegment(Require(scriptName, nameof(scriptName)))}/tails";
+        $"{ScriptPath(accountId, scriptName)}/tails";
+
+    private static string SecretsPath(string accountId, string scriptName) =>
+        $"{ScriptPath(accountId, scriptName)}/secrets";
+
+    private static string SecretPath(string accountId, string scriptName, string secretName) =>
+        $"{SecretsPath(accountId, scriptName)}/{CloudflareUrl.EncodeSegment(Require(secretName, nameof(secretName)))}";
 }

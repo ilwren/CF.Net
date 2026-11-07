@@ -606,6 +606,7 @@ assertion failure mid-test still removes the resource.
 | `A_rules_list_can_be_created_filled_and_removed` | a list, its items, and a change to its description | the items, then `DELETE` the list |
 | `A_zone_setting_can_be_changed_and_changed_back` | nothing — switches one zone setting | n/a — the setting is switched back |
 | `A_turnstile_widget_can_be_created_read_updated_rotated_and_deleted` | a widget, then a `PUT` of it and a rotated secret | `DELETE` the widget |
+| `A_worker_secret_can_be_written_listed_read_bulk_written_and_removed` | a script with a `secret_text` binding, a secret written onto it, and a bulk write that adds one and removes the other | the secret, then `DELETE` the script |
 
 Resource names are generated with a timestamp and a random suffix (`cfnet-it-20260101120000-a1b2c3d4`)
 so concurrent runs never collide, and a failed cleanup leaves something obviously disposable.

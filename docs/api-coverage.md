@@ -459,6 +459,11 @@ Credentials created before 2026 carry no prefix, so a prefix check can only ever
 | `CreateTailAsync(scriptName, accountId)` | `POST …/workers/scripts/{script_name}/tails` | starts a tail (a live stream of the Worker's logs and exceptions). **Takes no body** - the script in the path is the whole request. Answers `{id, expires_at, url}`, where `url` is what a consumer connects to - live, `wss://tail.developers.workers.dev/{id}`, a WebSocket endpoint rather than a REST one. The events themselves never pass through this API. **A script holds one tail at a time**: a second create answers 200 with a new id and replaces the running one. |
 | `ListTailsAsync(scriptName, accountId)` | `GET …/workers/scripts/{script_name}/tails` | lists the script's tails, and answers **an array** - empty (`"result": []`) for a script that is not being tailed, and 404 reads as empty too. The published schema describes this endpoint as answering one object like the create does; a live call says otherwise. The items carry the same three fields the create answers with (`id`, `expires_at`, `url`), so one `WorkerTail` serves both and only the object-vs-array difference is real. |
 | `DeleteTailAsync(scriptName, tailId, accountId)` | `DELETE …/workers/scripts/{script_name}/tails/{id}` | stops a tail early. A tail also stops on its own at `expires_at`, so deleting it is not the only way one ends. |
+| `ListSecretsAsync(scriptName, accountId)` | `GET …/workers/scripts/{script_name}/secrets` | a bare array of `WorkerSecret`, no paging and no filters: **a name and a kind, never a value** - Cloudflare stores secrets encrypted and no read answers one. Both published kinds are one type: `secret_text` is just the name, `secret_key` adds `format`, `usages` and `algorithm` |
+| `GetSecretAsync(scriptName, secretName, bool urlEncoded, accountId)` | `GET …/workers/scripts/{script_name}/secrets/{secret_name}` | one secret's name and kind; null when the script has no secret of that name. `url_encoded` is Cloudflare's flag saying the name in the path is percent-encoded, and is sent only when set |
+| `PutSecretAsync(scriptName, WorkerSecretRequest, accountId)` | `PUT …/workers/scripts/{script_name}/secrets` | the body **is** the secret, unwrapped: `{name, type, text}` for a string, `{name, type, key_base64 or key_jwk, format, usages, algorithm}` for a key. Replaces any secret already stored under that name, and a request mixing the two kinds is refused locally. A `(scriptName, secretName, text)` overload covers the ordinary case. **The only call a secret's value ever travels on** |
+| `DeleteSecretAsync(scriptName, secretName, bool urlEncoded, accountId)` | `DELETE …/workers/scripts/{script_name}/secrets/{secret_name}` | nothing modelled back - the answer is `null` |
+| `UpdateSecretsBulkAsync(scriptName, WorkerSecretBulkRequest, accountId)` | `PATCH …/workers/scripts/{script_name}/secrets-bulk` | **`secrets-bulk`, not a sub-path of `secrets`**. One body writes several secrets and removes others - **a name mapped to `null` is a deletion**, which is why the type has its own converter: this library's writer omits nulls, and here that would turn a removal into nothing at all. Answers `{name: secret}`. Worth one call rather than several because each write makes a version of the script |
 | `UploadAsync(UploadWorkerScriptRequest, accountId)` | `PUT …/workers/scripts/{script_name}` | `multipart/form-data`: a JSON `metadata` part plus one file part per module |
 | `UploadAsync(scriptName, source, compatibilityDate, bindings, accountId)` | `PUT …/workers/scripts/{script_name}` | convenience overload for a single-module worker |
 | `DeleteAsync(scriptName, accountId)` | `DELETE …/workers/scripts/{script_name}` | |
@@ -492,8 +497,16 @@ Verified live on a free-plan account: `PATCH …/script-settings` with `observab
 rate, logs with invocation logs) was accepted, and the `GET` of the same path carried no field this library
 does not model - so `WorkerScriptSettings` and `WorkerObservability` cover what Cloudflare actually sends.
 
+A secret's value travels one way only. `WorkerSecret` has no property that could hold one, so a read cannot
+leak a secret and nothing in this library logs one - `ToString()` is name and kind. `secret_key` is a WebCrypto
+key rather than a string: `format` and `usages` are closed vocabularies, so they are enums, while `algorithm`
+stays the JSON Cloudflare sent, because an algorithm object differs per algorithm the way WebCrypto's own do.
+Secrets are covered by the **Workers Scripts Read and Write** permissions a script already needs, so no extra
+group is wanted for them.
+
 ⛔ The newer JSON-only flow (`POST /workers/workers` → `…/versions` → `…/deployments`), static asset
-upload sessions, Workers for Platforms dispatch namespaces, query filters on the domain list, and Workers AI.
+upload sessions, Workers for Platforms dispatch namespaces, and query filters on the domain list. Workers AI
+is wrapped - it has its own section below - and a script's secrets are in the table above.
 
 ---
 
@@ -1131,7 +1144,7 @@ the server that checked a visitor rather than to the account that owns the widge
 | Query strings | `QueryStringBuilder` (`Uri.EscapeDataString` for values; `.`/`[`/`]` left readable in names) |
 | URL construction | `CloudflareUrl`, `CloudflareRequest` |
 | Bodies | `JsonRequestBody`, `TextRequestBody`, `BinaryRequestBody`, `MultipartRequestBody` - whose parts go out with **quoted** `name` and `filename`, because .NET leaves a token-safe value bare and Cloudflare's AI endpoints answer that with 400 and error 6005 |
-| Serialization | `CloudflareJson.Default`, `CloudflareValueAttribute`, `CloudflareEnumConverter<T>`, `TolerantBooleanConverter` (a flag Cloudflare wrote as a number or a word), `CloudflareTimestamps` (the two ways it writes a timestamp) |
+| Serialization | `CloudflareJson.Default`, `CloudflareValueAttribute`, `CloudflareEnumConverter<T>`, `TolerantBooleanConverter` (a flag Cloudflare wrote as a number or a word), `CloudflareTimestamps` (the two ways it writes a timestamp), `WorkerSecretBulkRequestConverter` (writes a bulk secret write by hand, because a null in that body is a deletion this writer would otherwise omit) |
 | Retry / backoff | `CloudflareTransport` — 408, 429, 5xx; `Retry-After` wins; exponential + jitter; clamped |
 | Auth headers | `CloudflareTransport` — exactly one scheme per call |
 | Diagnostics | `CloudflareResponse<T>.RayId` from `CF-RAY`; `CloudflareApiException.RayId` |

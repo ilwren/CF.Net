@@ -435,9 +435,10 @@ jobs:
                'permission; a user-owned cfut_ token or the global key is what answers it'),
               ('filters', 'GET /zones/{zone_id}/filters', 'Firewall Services - Read',
                '4ec32dfcb35641c5bb32d5ef1ab963b4', 'read',
-               'the saved filters a firewall rule points at; Cloudflare documents the create as deprecated in '
-               'favour of the ruleset engine, so a 200 with an empty list is the healthy answer and a 404 '
-               'would mean the deprecation has reached this account'),
+               'the saved filters a firewall rule points at. A live run answered 410 Gone [10020] '
+               '"filters.api.deprecated. This API has been deprecated. Please use the Rulesets API instead", '
+               'so for this account the deprecation has arrived and no token reaches it - a 200 with an empty '
+               'list is what an account whose rules were never migrated answers'),
               ('access_rules', 'GET /accounts/{account_id}/firewall/access_rules/rules',
                'Account Firewall Access Rules - Read', 'de7a688cc47d43bd9ea700b467a09c96', 'read',
                'a group of its own: Firewall Services does not cover IP Access rules, so a token that reads '
@@ -570,6 +571,13 @@ jobs:
                              (f'. {note}' if note else ''))
                   if label == 'zone':
                       scope.append(endpoint)
+              elif status == '410':
+                  # Gone is Cloudflare saying the endpoint has been retired, not that the token is short of
+                  # something: the filters API answers 410 [10020] filters.api.deprecated and points at the
+                  # Rulesets API. Listing it as a missing permission would send somebody hunting for a group
+                  # that changes nothing.
+                  verdict = ('GONE - Cloudflare has retired this endpoint' + (f'. {note}' if note else ''))
+                  entitlement.append((endpoint, group, note))
               else:
                   verdict = f'HTTP {status} ' + (detail(payload) or form)
               rows.append((endpoint, group, status, verdict, note))

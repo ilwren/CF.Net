@@ -50,6 +50,16 @@ public sealed class AccessRule
     public string? Notes { get; set; }
 
     /// <summary>When the rule was created, exactly as Cloudflare wrote it.</summary>
+    /// <summary>
+    /// Whether the rule is saved but not applied. <b>Cloudflare's published schema for this resource does not
+    /// list this field</b> - a live run found it on the create answer and on the list answer alike, so it is
+    /// modelled here rather than left in <see cref="AdditionalData"/>. Nothing published says how to set one,
+    /// which is why <see cref="AccessRuleRequest"/> has no property for it: sending a field Cloudflare does not
+    /// document accepting is how a caller ends up with a rule that quietly does not do what they asked.
+    /// </summary>
+    [JsonPropertyName("paused")]
+    public bool? Paused { get; set; }
+
     [JsonPropertyName("created_on")]
     public string? CreatedOn { get; set; }
 
@@ -366,6 +376,15 @@ public sealed class AccessRuleScope
     public string? Email { get; set; }
 
     /// <summary>Whether the owner is a person or an organisation.</summary>
+    /// <summary>
+    /// The name of the user or organization the rule belongs to. Answered but not published, like
+    /// <see cref="AccessRule.Paused"/>: a live run found it beside <c>id</c>, <c>email</c> and <c>type</c>, and
+    /// it is the only one of the four an organization-scoped rule can be recognised by, since an organization
+    /// has no email address to show.
+    /// </summary>
+    [JsonPropertyName("name")]
+    public string? Name { get; set; }
+
     [JsonPropertyName("type")]
     public AccessRuleScopeType? Type { get; set; }
 
@@ -380,7 +399,11 @@ public sealed class AccessRuleScope
         var kind = Type is { } type && type != AccessRuleScopeType.Unknown
             ? CloudflareEnumConverter<AccessRuleScopeType>.ToWire(type)
             : "an unpublished kind";
-        var who = Email is { Length: > 0 } email ? email : Id ?? "(nobody named)";
+        var who = Email is { Length: > 0 } email
+            ? email
+            : Name is { Length: > 0 } name
+                ? name
+                : Id ?? "(nobody named)";
         return $"{kind} {who}";
     }
 }

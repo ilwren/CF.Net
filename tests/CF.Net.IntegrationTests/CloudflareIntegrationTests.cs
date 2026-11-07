@@ -4423,6 +4423,20 @@ public class WriteIntegrationTests : CloudflareIntegrationTest
             Assert.Null(await Client.Firewall.GetFilterAsync(firstId, ZoneId));
             Log($"both filters are gone, and the list filtered by ref='{tag}' answers none of them");
         }
+        catch (CloudflareApiException exception) when (exception.HasErrorCode(10020))
+        {
+            // Observed live: 410 Gone, error 10020, "filters.api.deprecated. This API has been deprecated.
+            // Please use the Rulesets API instead." That is not a missing permission and not a defect in the
+            // request - it is Cloudflare having switched the endpoint off for this account. The wrapper stays,
+            // because the API is still published and an account whose rules were never migrated may still be
+            // served it, but this run cannot exercise it and saying so beats a warning that reads as though
+            // something could be fixed.
+            SkipUnless(
+                false,
+                "Cloudflare answers 410 Gone [10020 filters.api.deprecated] to the filters API: it has been " +
+                $"switched off for this account and points at the Rulesets API instead. " +
+                $"{Truncate(exception.Message, 120)}");
+        }
         catch (CloudflareApiException exception)
         {
             // A deprecated API can be switched off, and an account whose rules were all migrated has nothing
@@ -4512,10 +4526,26 @@ public class WriteIntegrationTests : CloudflareIntegrationTest
 
             // The same resource is served from an account path, where a rule applies to every zone in the
             // account. Whether a zone's rule is listed there too is Cloudflare's business, so this reads it
-            // and says what it found rather than asserting either answer.
-            var accountWide = await Client.Firewall.ListAccessRulesAsync();
-            Log($"the account-scoped list answers {accountWide.Items.Count} rule(s), of which " +
-                $"{accountWide.Items.Count(rule => rule.Id == ruleId)} is the one this fact just made");
+            // and says what it found rather than asserting either answer - and a refusal here is one call
+            // refused rather than the fact over, because everything around it is the zone path.
+            try
+            {
+                var accountWide = await Client.Firewall.ListAccessRulesAsync();
+                Log($"the account-scoped list answers {accountWide.Items.Count} rule(s), of which " +
+                    $"{accountWide.Items.Count(rule => rule.Id == ruleId)} is the one this fact just made");
+            }
+            catch (CloudflareApiException exception) when (exception.IsAuthenticationFailure)
+            {
+                // Worth recording exactly, because it is not what the reference implies: the zone-scoped
+                // create and the zone-scoped list above both answered 200 with this token, and the
+                // account-scoped list of the same resource was refused. The two paths do not share a
+                // permission requirement, so the group the docs name is needed for the account path while the
+                // zone path was reachable without it.
+                Warn($"GET /accounts/{{account_id}}/firewall/access_rules/rules was refused with " +
+                     $"{exception.ErrorCode} by a token that had just created and listed a rule on the zone " +
+                     "path: the account scope needs Account Firewall Access Rules Read " +
+                     "(de7a688cc47d43bd9ea700b467a09c96) and the zone scope did not ask for it.");
+            }
 
             var read = await ReadUntilAsync(
                 () => Client.Firewall.GetAccessRuleAsync(created.Id!, zoneId: ZoneId),

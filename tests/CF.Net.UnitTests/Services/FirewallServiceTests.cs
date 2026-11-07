@@ -1,3 +1,4 @@
+using System.Text.Json;
 using CFNet.Exceptions;
 using CFNet.Models.Common;
 using CFNet.Models.Firewall;
@@ -22,7 +23,7 @@ public class FirewallServiceTests
 
     /// <summary>An access rule as a create answers one, with the modes Cloudflare says it may be switched to.</summary>
     private const string SavedRule =
-        """{"id":"rule-1","mode":"block","allowed_modes":["block","challenge","managed_challenge"],"configuration":{"target":"ip","value":"192.0.2.1"},"notes":"cf-net test","created_on":"2026-11-07T10:00:00Z","modified_on":"2026-11-07T11:00:00Z","scope":{"id":"user-1","email":"someone@example.com","type":"user"}}""";
+        """{"id":"rule-1","mode":"block","allowed_modes":["block","challenge","managed_challenge"],"configuration":{"target":"ip","value":"192.0.2.1"},"notes":"cf-net test","paused":false,"created_on":"2026-11-07T10:00:00Z","modified_on":"2026-11-07T11:00:00Z","scope":{"id":"user-1","email":"someone@example.com","name":"Someone Else","type":"user"}}""";
 
     [Fact]
     public async Task CreateFiltersAsync_posts_a_bare_array_and_reads_back_the_ids_Cloudflare_assigned()
@@ -315,6 +316,7 @@ public class FirewallServiceTests
         Assert.Equal(AccessRuleTarget.Ip, rule.Configuration!.Target);
         Assert.Equal("192.0.2.1", rule.Configuration.Value);
         Assert.Equal("cf-net test", rule.Notes);
+        Assert.False(rule.Paused);
         Assert.Equal(new DateTimeOffset(2026, 11, 7, 10, 0, 0, TimeSpan.Zero), rule.CreatedOnUtc);
         Assert.Equal(new DateTimeOffset(2026, 11, 7, 11, 0, 0, TimeSpan.Zero), rule.ModifiedOnUtc);
         Assert.True(rule.AdditionalData is not { Count: > 0 });
@@ -327,6 +329,8 @@ public class FirewallServiceTests
 
         Assert.Equal(AccessRuleScopeType.User, rule.Scope!.Type);
         Assert.Equal("someone@example.com", rule.Scope.Email);
+        Assert.Equal("Someone Else", rule.Scope.Name);
+        Assert.True(rule.Scope.AdditionalData is not { Count: > 0 });
         Assert.Equal("user someone@example.com", rule.Scope.ToString());
         Assert.Equal("access rule rule-1: block ip 192.0.2.1 - cf-net test", rule.ToString());
     }
@@ -530,6 +534,36 @@ public class FirewallServiceTests
             new[] { "Unknown", "Ip", "IpRange", "Asn", "Country" },
             Enum.GetNames<AccessRuleFilterTarget>());
         Assert.Equal(6, Enum.GetNames<AccessRuleTarget>().Length);
+    }
+
+    [Fact]
+    public void An_access_rule_answer_carries_two_fields_the_published_schema_does_not_list()
+    {
+        // A live run answered "paused" on the rule and "name" on its scope, and Cloudflare's published schema
+        // for this resource lists neither. Both are modelled rather than left in AdditionalData, because a
+        // field that arrives on every answer is a field a caller will ask about - and pinning it here is what
+        // turns a later rename into a test failure instead of a silently empty property.
+        var rule = JsonSerializer.Deserialize<AccessRule>(
+            """{"id":"rule-7","mode":"challenge","paused":true,"configuration":{"target":"asn","value":"AS12345"},"scope":{"id":"org-1","name":"Example Organisation","type":"organization"}}""",
+            CloudflareJson.Default);
+
+        Assert.NotNull(rule);
+        Assert.True(rule!.Paused);
+        Assert.Equal(AccessRuleTarget.Asn, rule.Configuration!.Target);
+        Assert.Equal("Example Organisation", rule.Scope!.Name);
+        Assert.True(rule.AdditionalData is not { Count: > 0 });
+        Assert.True(rule.Scope.AdditionalData is not { Count: > 0 });
+
+        // An organization has no email address to show, so the name is the only thing it can be recognised by
+        // in a line of output - which is what makes an unpublished field worth keeping.
+        Assert.Equal("organization Example Organisation", rule.Scope.ToString());
+
+        // A request never carries "paused", because nothing published says Cloudflare accepts one there and a
+        // field it ignores would look like a rule that was switched off and was not.
+        var body = JsonSerializer.Serialize(
+            AccessRuleRequest.Blocking(AccessRuleConfiguration.ForIp("192.0.2.1")),
+            CloudflareJson.Default);
+        Assert.DoesNotContain("paused", body, StringComparison.Ordinal);
     }
 
     [Fact]

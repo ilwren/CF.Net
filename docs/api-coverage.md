@@ -1283,6 +1283,26 @@ Both enums are tolerant on the way in and strict on the way out, like every enum
 never met reads as `Unknown` and prints as *"an unpublished mode"*, and writing one throws rather than sending
 Cloudflare a word it has not published.
 
+**What a live run found.** Three things, each of them the kind a published schema does not tell you.
+
+- **The filters API is switched off for at least some accounts.** `POST /zones/{zone_id}/filters` answered
+  **`410 Gone`, error `10020`, `filters.api.deprecated`** — *"This API has been deprecated. Please use the
+  Rulesets API instead."* The endpoint is still published and still wrapped here, because an account whose
+  rules were never migrated may still be served it, but the live fact opts out with that reason instead of
+  failing, and the reach matrix files a `410` under *"refused but not a permission problem"*: no token reaches
+  a retired endpoint, and hunting for a permission group would be a waste of an afternoon.
+- **The two access rule paths do not share a permission requirement.** One token created a rule on the **zone**
+  path, listed it back from the same path, and was then refused on
+  `GET /accounts/{account_id}/firewall/access_rules/rules` with `10000`. The reference names a single group for
+  the resource — **Account Firewall Access Rules** — and the evidence says the zone path was reachable without
+  it while the account path was not. Add the group for the account scope; the live fact reads that list in its
+  own `try` so a refusal there costs one line rather than the rest of the fact.
+- **The answer carries two fields the schema does not list**: `paused` on the rule, and `name` on its `scope`.
+  Both are modelled — `AccessRule.Paused` and `AccessRuleScope.Name` — and the name is the only thing an
+  organization-scoped rule can be recognised by, an organization having no email address to show. Neither is
+  sent in a request, because nothing published says Cloudflare accepts one there and a field it ignores would
+  look like a rule that was switched off and was not.
+
 ⛔ Not wrapped: firewall **lockdowns** (`…/firewall/lockdowns`) and **user agent rules**
 (`…/firewall/ua_rules`), both superseded by custom rules in the ruleset engine, and the WAF's own surfaces
 (`…/firewall/waf/…`), which are plan-gated.

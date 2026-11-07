@@ -35,6 +35,19 @@ namespace CFNet.Services;
 /// filter methods are zone-only, so they take a <c>zoneId</c> and fall back to the configured default like the
 /// rest of the zone-scoped services.
 /// </para>
+/// <para>
+/// <b>What a live run against these endpoints said.</b> Three things the published reference does not. First,
+/// <c>POST /zones/{zone_id}/filters</c> answered <b>410 Gone with error 10020, <c>filters.api.deprecated</c></b>
+/// — "This API has been deprecated. Please use the Rulesets API instead." — so the deprecation has reached at
+/// least some accounts and no permission brings the endpoint back; the methods are still here because the API
+/// is still published and an account whose rules were never migrated may still be served it. Second, the two
+/// access rule paths do <em>not</em> share a permission requirement: one token created a rule on the zone path
+/// and listed it back, then was refused on the account path with <c>10000</c>, so <b>Account Firewall Access
+/// Rules</b> is what the account scope wants and the zone scope was reachable without it. Third, the answer
+/// carries two fields Cloudflare's schema for this resource does not list — <c>paused</c> on the rule and
+/// <c>name</c> on its scope — and both are modelled rather than left in <c>AdditionalData</c>, while neither is
+/// sent in a request because nothing published says one is accepted there.
+/// </para>
 /// </remarks>
 public interface IFirewallService
 {

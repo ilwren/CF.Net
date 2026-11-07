@@ -102,7 +102,9 @@ public sealed class CloudflareTransport : ICloudflareTransport, IDisposable
 
     private async Task<CloudflareRawResponse> ExecuteAsync(CloudflareRequest request, CancellationToken cancellationToken)
     {
-        Options.Validate();
+        // A request that authenticates itself - an asset upload carrying the session JWT - needs no API
+        // credentials configured, and refusing to send it would make the token useless on its own terms.
+        Options.Validate(requireCredentials: !request.UsesCustomAuthentication);
 
         var uri = CloudflareUrl.Build(Options.BaseAddress, request.Path, request.Query.ToString());
         var maxAttempts = Math.Max(0, Options.MaxRetries) + 1;

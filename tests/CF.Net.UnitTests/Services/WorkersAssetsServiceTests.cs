@@ -507,7 +507,7 @@ public class WorkersAssetsServiceTests
         await Assert.ThrowsAsync<ArgumentNullException>(() =>
             harness.Client.WorkersAssets.UploadAssetsAsync(null!, SessionJwt));
 
-        await Assert.ThrowsAsync<CloudflareConfigurationException>(() =>
+        await Assert.ThrowsAsync<ArgumentNullException>(() =>
             harness.Client.WorkersAssets.UploadAssetAsync(IndexHash, null!, SessionJwt));
 
         await Assert.ThrowsAsync<ArgumentNullException>(() =>

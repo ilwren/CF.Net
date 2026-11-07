@@ -349,6 +349,46 @@ public class CloudflareRequestBodyTests
     }
 
     [Fact]
+    public async Task Binary_body_keeps_the_parameters_of_a_media_type()
+    {
+        // MediaTypeHeaderValue's constructor takes a media type alone and throws a FormatException on one
+        // carrying parameters, so a content type like this - what an asset upload stores for an HTML file -
+        // never reached the wire until the body parsed the value instead. A live asset upload found it.
+        using var content = new BinaryRequestBody(
+            "<h1>cf.net</h1>"u8.ToArray(),
+            "text/html; charset=utf-8").CreateContent(CloudflareJson.Default);
+
+        Assert.Equal("text/html", content.Headers.ContentType!.MediaType);
+        Assert.Contains("charset=utf-8", content.Headers.ContentType.ToString(), StringComparison.Ordinal);
+        Assert.Equal("<h1>cf.net</h1>", await content.ReadAsStringAsync());
+    }
+
+    [Fact]
+    public async Task Text_body_keeps_the_parameters_of_a_media_type_as_well()
+    {
+        using var content = new TextRequestBody("hello", "text/plain; charset=utf-8")
+            .CreateContent(CloudflareJson.Default);
+
+        Assert.Equal("text/plain", content.Headers.ContentType!.MediaType);
+        Assert.Contains("charset=utf-8", content.Headers.ContentType.ToString(), StringComparison.Ordinal);
+        Assert.Equal("hello", await content.ReadAsStringAsync());
+    }
+
+    [Fact]
+    public async Task Multipart_part_keeps_the_parameters_of_its_media_type_too()
+    {
+        var body = new MultipartRequestBody()
+            .AddFile("hash-1", "aGk="u8.ToArray(), "text/css; charset=utf-8", "hash-1");
+
+        using var content = body.CreateContent(CloudflareJson.Default);
+        var text = await content.ReadAsStringAsync();
+
+        Assert.Contains("text/css", text, StringComparison.Ordinal);
+        Assert.Contains("charset=utf-8", text, StringComparison.Ordinal);
+        Assert.Contains("aGk=", text, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task Multipart_body_writes_the_metadata_field_and_every_module_as_a_file()
     {
         var body = new MultipartRequestBody()

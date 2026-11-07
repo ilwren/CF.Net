@@ -65,7 +65,10 @@ public sealed class TextRequestBody : CloudflareRequestBody
     public override HttpContent CreateContent(JsonSerializerOptions serializerOptions)
     {
         var content = new StringContent(Text, Encoding.UTF8);
-        content.Headers.ContentType = new MediaTypeHeaderValue(ContentType);
+
+        // Parse rather than the constructor, which refuses a media type carrying parameters - see
+        // BinaryRequestBody.CreateContent.
+        content.Headers.ContentType = MediaTypeHeaderValue.Parse(ContentType);
         return content;
     }
 }
@@ -92,7 +95,12 @@ public sealed class BinaryRequestBody : CloudflareRequestBody
     public override HttpContent CreateContent(JsonSerializerOptions serializerOptions)
     {
         var content = new ByteArrayContent(Data);
-        content.Headers.ContentType = new MediaTypeHeaderValue(ContentType);
+
+        // Parse rather than the constructor, and the difference matters: MediaTypeHeaderValue's constructor
+        // takes a media type alone and throws a FormatException on one carrying parameters, so a content type
+        // like "text/html; charset=utf-8" - what an asset upload stores for an HTML file - never reached the
+        // wire. A live asset upload is what found it.
+        content.Headers.ContentType = MediaTypeHeaderValue.Parse(ContentType);
         return content;
     }
 }
@@ -231,7 +239,10 @@ public sealed class MultipartPart
         }
 
         var content = new ByteArrayContent(Bytes ?? Array.Empty<byte>());
-        content.Headers.ContentType = new MediaTypeHeaderValue(ContentType);
+
+        // Parse rather than the constructor, which refuses a media type carrying parameters - see
+        // BinaryRequestBody.CreateContent.
+        content.Headers.ContentType = MediaTypeHeaderValue.Parse(ContentType);
         return content;
     }
 }

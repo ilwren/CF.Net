@@ -426,9 +426,10 @@ jobs:
               ('workers_assets',
                'POST /accounts/{account_id}/workers/scripts/{script_name}/assets-upload-session',
                'Workers Scripts - Write', 'workers_scripts', 'edit',
-               'probed against a script name nothing owns, so 404 is the answer that proves the permission; '
-               'the two upload endpoints it hands a JWT to take no API credentials at all and are covered by '
-               'the live test'),
+               'probed against a script name nothing owns, and a live run answered 200 with an object of two '
+               'fields anyway - buckets and jwt - so neither a 404 nor a refusal is the expected answer; the '
+               'two upload endpoints it hands a JWT to take no API credentials at all and are covered by the '
+               'live test'),
               ('pages', 'GET /accounts/{account_id}/pages/projects', 'Pages - Read', 'page', 'read',
                'this endpoint refuses page and per_page with 8000024 on some accounts, which the library '
                'retries without'),

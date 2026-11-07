@@ -5104,11 +5104,23 @@ public class WriteIntegrationTests : CloudflareIntegrationTest
 
                 var deployed = await Retrying5xxAsync(() => Client.Workers.UploadAsync(deployment));
                 Collect(unmodelled, "assets.deploy", deployed.AdditionalData);
-                Log($"redeployed {deployed.ScriptName} with the completion token; modified {deployed.ModifiedOn:O}");
-                if (deployed.ScriptName != scriptName)
+                Log($"redeployed {deployed.Name} with the completion token: has_assets={deployed.HasAssets}, " +
+                    $"entry_point='{deployed.EntryPoint}', modified {deployed.ModifiedOn:O}");
+
+                // Name, not ScriptName: this answer reports the script as 'id', and a live run that compared
+                // ScriptName reported an empty name for a script it had just deployed.
+                if (deployed.Name != scriptName)
+                {
+                    surprises.Add($"the redeployment answered the script name '{deployed.Name}' for '{scriptName}'");
+                }
+
+                // The one field that says whether the deployment took the assets at all. Reported rather than
+                // asserted: Cloudflare publishes it as optional and this is the first run to read it.
+                if (deployed.HasAssets != true)
                 {
                     surprises.Add(
-                        $"the redeployment answered the script name '{deployed.ScriptName}' for '{scriptName}'");
+                        $"the redeployment answered has_assets={deployed.HasAssets?.ToString() ?? "null"} for a " +
+                        "script uploaded with an assets block and a completion token");
                 }
             }
             catch (CloudflareApiException exception)

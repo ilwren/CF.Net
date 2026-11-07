@@ -1509,9 +1509,18 @@ an `assets` block with a `jwt` field since before the endpoints that produce tha
 | `UploadAssetsAsync(items, jwt, accountId)` | `POST /accounts/{account_id}/workers/assets/upload?base64=true` | one `multipart/form-data` call for a bucket of assets: every part is named and file-named by its hash and holds the bytes as **base64 text** |
 
 Both upload calls answer `{"jwt": …}`, and the published schema calls that "a completion JWT which can be
-redeemed when creating a Worker version". The last upload's token is the one to redeem, so it goes on the
-deployment that follows as `UploadWorkerScriptRequest.Assets.Jwt` — see `client.Workers.UploadAsync` and
+redeemed when creating a Worker version" — but neither is guaranteed to. A live run's single-asset upload
+answered `200` with no token at all while the multipart call beside it answered one, so the rule is the one
+Cloudflare's own client follows: keep the last non-empty token, and fall back to the session's own JWT, which
+is already the right answer when the session asks for nothing. That token goes on the deployment that follows
+as `UploadWorkerScriptRequest.Assets.Jwt` — see `client.Workers.UploadAsync` and
 `client.Workers.CreateVersionAsync`.
+
+The deployment's answer is how you check it took: `WorkerScript.HasAssets` says whether the Worker contains
+static assets, beside `EntryPoint`, `HasModules`, `MigrationTag`, `StartupTimeMs`, `Tag` and `Tags`, all of
+which a live upload answer carried and none of which this library modelled until it did. The `exports` map —
+Cloudflare's declarative exports, a union of six shapes covering Durable Object classes and named entrypoints —
+and `cache_options` stay in `AdditionalData`.
 
 **These two endpoints take no API credentials at all.** Their only authorization is the session JWT, which is why
 `CloudflareRequest.WithBearerToken(token)` exists: it puts the JWT in `Authorization` *and* tells the transport to

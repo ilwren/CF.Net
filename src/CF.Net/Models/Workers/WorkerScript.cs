@@ -88,6 +88,42 @@ public sealed class WorkerScript
     [JsonPropertyName("deployment_id")]
     public string? DeploymentId { get; set; }
 
+    /// <summary>The entry point for the script - the module name a deployment was uploaded with.</summary>
+    [JsonPropertyName("entry_point")]
+    public string? EntryPoint { get; set; }
+
+    /// <summary>Whether the Worker contains static assets.</summary>
+    /// <remarks>
+    /// The one field that says whether a deployment carrying an <c>assets</c> block took: an upload that
+    /// redeemed a completion token answers <c>true</c> here.
+    /// </remarks>
+    [JsonPropertyName("has_assets")]
+    public bool? HasAssets { get; set; }
+
+    /// <summary>Whether the Worker contains modules, as opposed to a service-worker-syntax body.</summary>
+    [JsonPropertyName("has_modules")]
+    public bool? HasModules { get; set; }
+
+    /// <summary>The tag of the Durable Object migration most recently applied to this Worker.</summary>
+    [JsonPropertyName("migration_tag")]
+    public string? MigrationTag { get; set; }
+
+    /// <summary>How long the Worker takes to start, in milliseconds.</summary>
+    /// <remarks>
+    /// Published as a <c>number</c> rather than an integer, and it is a measurement rather than a limit, so it
+    /// is read as a <see cref="double"/>: a fractional answer would throw against an integral type.
+    /// </remarks>
+    [JsonPropertyName("startup_time_ms")]
+    public double? StartupTimeMs { get; set; }
+
+    /// <summary>The immutable id of the script, which Cloudflare publishes beside <see cref="Id"/>.</summary>
+    [JsonPropertyName("tag")]
+    public string? Tag { get; set; }
+
+    /// <summary>Tags associated with the Worker - the labels a settings PATCH writes.</summary>
+    [JsonPropertyName("tags")]
+    public List<string>? Tags { get; set; }
+
     /// <summary>
     /// The name a caller should prefer, whichever alias Cloudflare supplied: the scripts list and the
     /// single-script endpoint report it as <c>id</c>, while the subdomain endpoints and a few older

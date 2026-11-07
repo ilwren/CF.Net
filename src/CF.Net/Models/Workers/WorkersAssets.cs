@@ -280,8 +280,11 @@ public sealed class WorkersAssetsUploadSession
 /// <summary>The answer to an asset upload call: the completion JWT a deployment redeems.</summary>
 /// <remarks>
 /// The published schema calls this "a completion JWT which can be redeemed when creating a Worker version":
-/// set it as <see cref="WorkerAssetsConfiguration.Jwt"/> on the script or version upload that follows. The last
-/// upload's JWT is the one to use, so an upload of several buckets ends with the final answer.
+/// set it as <see cref="WorkerAssetsConfiguration.Jwt"/> on the script or version upload that follows. It is
+/// published as optional and it behaves like it - a live single-asset upload answered 200 with no token at all,
+/// while the multipart call beside it answered one. Keep the last non-empty token and fall back to the
+/// session's own JWT, which is what Cloudflare's own client does, and which is already the right answer when a
+/// session asks for nothing to be uploaded.
 /// </remarks>
 public sealed class WorkersAssetUpload
 {

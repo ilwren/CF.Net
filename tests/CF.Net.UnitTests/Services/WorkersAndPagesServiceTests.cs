@@ -28,6 +28,38 @@ public class WorkersScriptsServiceTests
     }
 
     [Fact]
+    public async Task UploadAsync_reads_the_fields_a_script_answer_carries_besides_the_long_modelled_ones()
+    {
+        using var harness = CloudflareHarness.Create();
+        harness.RespondWithResult(
+            """
+            {"id":"hello","etag":"e-1","handlers":["fetch"],"entry_point":"worker.mjs","has_assets":true,
+             "has_modules":true,"migration_tag":"2025-01-01","startup_time_ms":4.5,"tag":"immutable-1",
+             "tags":["cf-net"],"exports":{"AssetManifest":{"type":"assets"}}}
+            """);
+
+        var uploaded = await harness.Client.Workers.UploadAsync(
+            new UploadWorkerScriptRequest("hello", "export default { fetch() {} }", "2025-01-01"));
+
+        Assert.Equal("worker.mjs", uploaded.EntryPoint);
+        Assert.True(uploaded.HasAssets);
+        Assert.True(uploaded.HasModules);
+        Assert.Equal("2025-01-01", uploaded.MigrationTag);
+
+        // Published as a number rather than an integer, and it is a measurement: a fractional answer against
+        // an integral property would throw instead of reading.
+        Assert.Equal(4.5, uploaded.StartupTimeMs!.Value);
+
+        Assert.Equal("immutable-1", uploaded.Tag);
+        Assert.Equal(new[] { "cf-net" }, uploaded.Tags);
+
+        // The declarative exports map is a union of six shapes and stays in AdditionalData until it is worth
+        // typing; naming it here is what keeps that a decision rather than an oversight.
+        Assert.NotNull(uploaded.AdditionalData);
+        Assert.Equal(new[] { "exports" }, uploaded.AdditionalData!.Keys);
+    }
+
+    [Fact]
     public async Task ListAsync_applies_cursor_pagination_parameters()
     {
         using var harness = CloudflareHarness.Create();

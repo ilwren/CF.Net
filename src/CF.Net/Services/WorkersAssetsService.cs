@@ -24,8 +24,9 @@ namespace CFNet.Services;
 /// <item>
 /// <description>
 /// The bytes go up with that JWT as the credential, not the API token: <see cref="UploadAssetAsync"/> sends one
-/// asset per call, <see cref="UploadAssetsAsync"/> sends a bucket of them as one multipart call. Either answers
-/// with a completion JWT, and the last one is the token the deployment redeems.
+/// asset per call, <see cref="UploadAssetsAsync"/> sends a bucket of them as one multipart call. Either may
+/// answer with a completion JWT, and the token the deployment redeems is the last non-empty one - a live
+/// single-asset upload answered none at all, so the session's own JWT is the fallback.
 /// </description>
 /// </item>
 /// <item>
@@ -86,7 +87,7 @@ public interface IWorkersAssetsService
     /// </param>
     /// <param name="accountId">Account id; falls back to the configured default when null.</param>
     /// <param name="cancellationToken">Cancellation token.</param>
-    /// <returns>The completion JWT the deployment redeems.</returns>
+    /// <returns>The completion JWT, when this call answers one; a live run's did not.</returns>
     /// <remarks>
     /// <c>POST /accounts/{account_id}/workers/assets/upload/{hash}</c>, with the raw bytes as the body. This
     /// path is not in the published API reference; it is the single-asset upload wrangler uses when the session

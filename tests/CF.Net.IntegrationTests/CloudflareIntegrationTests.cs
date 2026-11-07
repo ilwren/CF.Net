@@ -4212,7 +4212,7 @@ public class WriteIntegrationTests : CloudflareIntegrationTest
             var afterRevoke = await Client.OriginCaCertificates.GetAsync(certificateId);
             if (afterRevoke is not null)
             {
-                Warn($"GET /accounts/{{account_id}}/origin_ca_certificates/{{certificate_id}} still answers a " +
+                Warn($"GET /certificates/{{certificate_id}} still answers a " +
                      $"revoked certificate: {Truncate(afterRevoke.ToString(), 200)}. The list drops revoked " +
                      "certificates, so a single read is the one place a revoked one survives - which is worth " +
                      "knowing before an origin trusts a read to mean 'still valid'.");

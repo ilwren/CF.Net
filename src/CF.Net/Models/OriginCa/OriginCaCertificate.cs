@@ -127,7 +127,7 @@ public static class OriginCaCertificateValidities
     public const int FifteenYears = 5475;
 }
 
-/// <summary>The body of <c>POST /accounts/{account_id}/origin_ca_certificates</c>.</summary>
+/// <summary>The body of <c>POST /certificates</c>, which is at the API root: no account, no zone.</summary>
 /// <remarks>
 /// The CSR is the caller's: this library does not hold a private key and does not generate one, because the
 /// whole point of an Origin CA certificate is that the key never leaves the origin. <c>CertificateRequest</c> in
@@ -381,7 +381,7 @@ public sealed class OriginCaCertificateRequest
     }
 }
 
-/// <summary>What <c>DELETE /accounts/{account_id}/origin_ca_certificates/{certificate_id}</c> answers.</summary>
+/// <summary>What <c>DELETE /certificates/{certificate_id}</c> answers.</summary>
 /// <remarks>
 /// A revoke is not a delete in the usual sense: the certificate's serial number stops being trusted, and the
 /// answer says when that happened.
@@ -414,8 +414,8 @@ public sealed class OriginCaCertificateRevocation
 }
 
 /// <summary>
-/// Query parameters for <c>GET /accounts/{account_id}/origin_ca_certificates</c>, which pages by page and
-/// per_page and cannot be called without a zone.
+/// Query parameters for <c>GET /certificates</c>, which pages by page and per_page and cannot be called
+/// without a zone - the zone is a filter on a root-level path rather than a segment of it.
 /// </summary>
 /// <remarks>
 /// <c>per_page</c> is bounded by this endpoint more tightly than most: Cloudflare documents 5 as its floor and

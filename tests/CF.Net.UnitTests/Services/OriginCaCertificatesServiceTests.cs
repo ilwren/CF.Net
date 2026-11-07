@@ -7,10 +7,10 @@ using Xunit;
 namespace CFNet.UnitTests.Services;
 
 /// <summary>
-/// Origin CA certificates: <c>/accounts/{account_id}/origin_ca_certificates</c>. Worth pinning closely because
-/// three things here are easy to get wrong - the list cannot be called without a zone, the id is an x509 serial
-/// number rather than a UUID, and both the CSR and the certificate are newline-encoded PEM, which is line
-/// endings a caller on Windows will not have written.
+/// Origin CA certificates: <c>/certificates</c>, at the API root. Worth pinning closely because four things
+/// here are easy to get wrong - the path carries neither an account nor a zone, the list cannot be called
+/// without a zone even so, the id is an x509 serial number rather than a UUID, and both the CSR and the
+/// certificate are newline-encoded PEM, which is line endings a caller on Windows will not have written.
 /// </summary>
 public class OriginCaCertificatesServiceTests
 {
@@ -35,10 +35,9 @@ public class OriginCaCertificatesServiceTests
                 OriginCaCertificateValidities.OneYear));
 
         Assert.Equal(HttpMethod.Post, harness.LastRequest.Method);
-        Assert.EndsWith(
-            "/accounts/acct-1234/origin_ca_certificates",
-            harness.LastRequest.Path,
-            StringComparison.Ordinal);
+        // The whole path, root included: an account-prefixed one is what a first draft sent, and Cloudflare
+        // answered it with 404 [10404] "No route for that URI", so the assertion pins the root-level path.
+        Assert.EndsWith("/client/v4/certificates", harness.LastRequest.Path, StringComparison.Ordinal);
 
         // No zone_id, because this is not a keyless request and Cloudflare ignores the field for the others -
         // and no wrapper: the CSR, the hostnames and the request type are the whole body.
@@ -127,10 +126,7 @@ public class OriginCaCertificatesServiceTests
             new OriginCaCertificateListParameters { Page = 2, PerPage = 5 });
 
         Assert.Equal(HttpMethod.Get, harness.LastRequest.Method);
-        Assert.EndsWith(
-            "/accounts/acct-1234/origin_ca_certificates",
-            harness.LastRequest.Path,
-            StringComparison.Ordinal);
+        Assert.EndsWith("/client/v4/certificates", harness.LastRequest.Path, StringComparison.Ordinal);
         Assert.Equal(
             "zone_id=zone-5678&page=2&per_page=5",
             harness.LastRequest.Query.TrimStart('?'));
@@ -192,7 +188,7 @@ public class OriginCaCertificatesServiceTests
 
         Assert.Equal(HttpMethod.Get, harness.LastRequest.Method);
         Assert.EndsWith(
-            "/accounts/acct-1234/origin_ca_certificates/1234567890",
+            "/client/v4/certificates/1234567890",
             harness.LastRequest.Path,
             StringComparison.Ordinal);
         Assert.Equal("1234567890", certificate!.Id);
@@ -212,7 +208,7 @@ public class OriginCaCertificatesServiceTests
 
         Assert.Equal(HttpMethod.Delete, harness.LastRequest.Method);
         Assert.EndsWith(
-            "/accounts/acct-1234/origin_ca_certificates/1234567890",
+            "/client/v4/certificates/1234567890",
             harness.LastRequest.Path,
             StringComparison.Ordinal);
         Assert.Equal("1234567890", revoked.Id);

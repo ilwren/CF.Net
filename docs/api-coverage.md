@@ -427,13 +427,21 @@ leg between Cloudflare's edge and the machine behind it is encrypted without a c
 It is free on every plan, browsers do not trust it, and it is not meant to be served to them — it is what the
 dashboard's *SSL/TLS → Origin Server* tab creates.
 
+**The path is `/certificates`, at the API root — no account in it and no zone.** That is unlike every other
+resource here, and the name of the resource suggests otherwise: a first draft of this wrapper sent
+`/accounts/{account_id}/origin_ca_certificates`, and Cloudflare answered **404 `[10404] No route for that URI`**
+to the `POST` as much as to the `GET`. Its own generated client and its published documentation both say
+`/certificates`, so that is what this sends, and none of the four methods takes an account id. A `10404` is
+worth remembering as its own kind of answer: it is Cloudflare saying the *path* does not exist, which is neither
+a permission nor an entitlement, and no amount of scope on a token fixes it.
+
 | Method | Endpoint | Notes |
 | --- | --- | --- |
-| `CreateAsync(OriginCaCertificateRequest)` | `POST /accounts/{account_id}/origin_ca_certificates` | body is the CSR, the hostnames and the request type; `zone_id` too for a `keyless-certificate` request, which answers only `id`, `certificate` and `expires_on` |
-| `ListAsync(zoneId, OriginCaCertificateListParameters?)` | `GET /accounts/{account_id}/origin_ca_certificates` | **`zone_id` is required** by the endpoint, so it is a parameter of the method rather than an optional filter; `page`, `per_page` bounded 5–50; revoked certificates are not included |
-| `ListAllAsync(zoneId, OriginCaCertificateListParameters?)` | `GET /accounts/{account_id}/origin_ca_certificates` | `IAsyncEnumerable<OriginCaCertificate>`, walks every page and stops on `result_info` or on an empty one |
-| `GetAsync(certificateId)` | `GET /accounts/{account_id}/origin_ca_certificates/{certificate_id}` | `certificateId` is the **x509 serial number**; null on 404 |
-| `RevokeAsync(certificateId)` | `DELETE /accounts/{account_id}/origin_ca_certificates/{certificate_id}` | a revoke rather than a delete: answers `{id, revoked_at}` as `OriginCaCertificateRevocation` |
+| `CreateAsync(OriginCaCertificateRequest)` | `POST /certificates` | body is the CSR, the hostnames and the request type; `zone_id` too for a `keyless-certificate` request, which answers only `id`, `certificate` and `expires_on` |
+| `ListAsync(zoneId, OriginCaCertificateListParameters?)` | `GET /certificates` | **`zone_id` is required** by the endpoint, so it is a parameter of the method rather than an optional filter; `page`, `per_page` bounded 5–50; revoked certificates are not included |
+| `ListAllAsync(zoneId, OriginCaCertificateListParameters?)` | `GET /certificates` | `IAsyncEnumerable<OriginCaCertificate>`, walks every page and stops on `result_info` or on an empty one |
+| `GetAsync(certificateId)` | `GET /certificates/{certificate_id}` | `certificateId` is the **x509 serial number**; null on 404 |
+| `RevokeAsync(certificateId)` | `DELETE /certificates/{certificate_id}` | a revoke rather than a delete: answers `{id, revoked_at}` as `OriginCaCertificateRevocation` |
 
 Five things about this resource shaped the wrapper:
 
@@ -470,7 +478,7 @@ Two things this library deliberately does not decide:
 Cloudflare also accepts a different credential on this path — an **Origin CA Key**, sent as
 `X-Auth-User-Service-Key` — which this library has no notion of, because it sends an API token or the legacy key
 and email everywhere. Its published documentation names no permission group of its own for the endpoint, so the
-reach matrix probes `GET …/origin_ca_certificates?zone_id=…` and a live run says which of the token's groups
+reach matrix probes `GET /certificates?zone_id=…` and a live run says which of the token's groups
 reaches it.
 
 Tests: `OriginCaCertificatesServiceTests` (13 facts) pin the exact create body, the settled line endings on both

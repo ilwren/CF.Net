@@ -295,6 +295,11 @@ jobs:
             probe ssl "$zone/ssl/certificate_packs?per_page=1"
             probe custom_hostnames "$zone/custom_hostnames?per_page=1"
             probe origin_tls "$zone/origin_tls_client_auth/settings"
+            # Origin CA certificates are the one resource here whose path carries neither a zone nor an
+            # account: /certificates at the API root, with zone_id as a filter. The account-prefixed path the
+            # resource's name suggests answers 404 [10404] "No route for that URI", which a live run found, so
+            # a 404 here means the path has moved again rather than that anything is missing.
+            probe origin_ca "$base/certificates?zone_id=${CLOUDFLARE_ZONE_ID}&per_page=5"
             # An empty body is refused before anything is purged, so this reads the permission without
             # touching the cache: 403 means Cache Purge is missing, a validation error means it is there.
             probe cache_purge "$zone/purge_cache" POST '{}'
@@ -342,12 +347,6 @@ jobs:
             probe lb_pools "$account/load_balancers/pools"
             probe workers_ai "$account/ai/models/search?per_page=1"
             probe tokens "$account/tokens?per_page=1"
-            # Origin CA certificates sit on an account path but cannot be listed without a zone, so this one
-            # needs both - and it is skipped rather than sent half-formed when no zone is configured, which the
-            # summary reads as "not probed" rather than as a refusal.
-            if [ -n "${CLOUDFLARE_ZONE_ID:-}" ]; then
-              probe origin_ca "$account/origin_ca_certificates?zone_id=${CLOUDFLARE_ZONE_ID}&per_page=5"
-            fi
           fi
 
           PY=$(command -v python3 || command -v python || true)
@@ -436,11 +435,12 @@ jobs:
                'Load Balancing: Monitors and Pools - Read', '9d24387c6e8544e2bc4024a03991339f', 'read', ''),
               ('workers_ai', 'GET /accounts/{account_id}/ai/models/search', 'Workers AI - Read',
                'a92d2450e05d4e7bb7d0a64968f83d11', 'read', ''),
-              ('origin_ca', 'GET /accounts/{account_id}/origin_ca_certificates?zone_id=…',
-               'SSL and Certificates - Read', 'ssl_and_certificates', 'read',
-               'an account path that cannot be listed without a zone, and one Cloudflare publishes no '
-               'permission group of its own for: a 200 with an empty list means the group reaches it and the '
-               'zone has no origin certificates, while a 403 beside a readable ssl probe says it does not'),
+              ('origin_ca', 'GET /certificates?zone_id=…', 'SSL and Certificates - Read',
+               'ssl_and_certificates', 'read',
+               'a root-level path with the zone as a filter, and one Cloudflare publishes no permission group '
+               'of its own for: a 200 with an empty list means the group reaches it and the zone has no origin '
+               'certificates, a 403 beside a readable ssl probe says it does not, and a 404 [10404] means the '
+               'path has moved - which the account-prefixed one this resource is named after already has'),
               ('tokens', 'GET /accounts/{account_id}/tokens', 'Account API Tokens - Read',
                'account_api_tokens', 'read',
                'tokens/permission_groups was refused with 9109 while a token held only Read, so listing the '

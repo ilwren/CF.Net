@@ -510,6 +510,44 @@ mid-test cannot leave a signed certificate behind.
 
 ---
 
+## mTLS certificates
+
+`IMtlsCertificateService` — `client.MtlsCertificates`
+
+The certificates an account uploads for Cloudflare to use with its mTLS-enabled services — **Bring Your Own CA**
+being the ordinary one, where Cloudflare checks a client certificate against a CA the account supplied rather
+than against one it issued. Certificates *issued by* Cloudflare's managed CA are a different resource
+(`client_certificates`) on a different path, and are not covered here.
+
+**The permission group is not the one the name suggests.** Cloudflare publishes two groups called *SSL and
+Certificates*: the zone-scoped one behind certificate packs, Universal SSL, custom hostnames and the Origin CA
+certificates above, and an **account-scoped** one whose own description is *"SSL MTLS certificates or
+Certificate Store"*. These endpoints want the account-scoped one — Read `a7a233f9604845c787d4c8c39ac09c21`,
+Write `db37e5f1cb1a4e1aabaef8deaea43575` — so a token holding only the zone-scoped group is refused here with a
+403 that reads as though the group were missing when a group of that name is present under a different id.
+
+| Method | Endpoint | Notes |
+| --- | --- | --- |
+| `ListAsync(MtlsCertificateListParameters?, accountId)` | `GET /accounts/{account_id}/mtls_certificates` | a **bare array**, with no paging published. The one filter is `type`, and several types go in **one comma-separated parameter** — `?type=custom,gateway_managed` — rather than a repeated one |
+| `GetAsync(certificateId, accountId)` | `GET …/mtls_certificates/{mtls_certificate_id}` | null when the account has none of that id |
+| `CreateAsync(MtlsCertificateRequest, accountId)` | `POST …/mtls_certificates` | `ca` and `certificates` are both required; `name` exists for readability; `private_key` is only for the cases that need one — Cloudflare names Zero Trust's block page — and an ordinary BYO-CA upload never wants it. This answer, and only this one, carries `updated_at` |
+| `DeleteAsync(certificateId, accountId)` | `DELETE …/mtls_certificates/{mtls_certificate_id}` | answers **the certificate it removed** rather than only its id, and null rather than a throw when there was nothing to remove |
+| `ListAssociationsAsync(certificateId, accountId)` | `GET …/mtls_certificates/{mtls_certificate_id}/associations` | a bare array of `{service, status}` — the call to make *before* a delete, because it is what says whether removing the certificate would break a hostname or an Access application. Cloudflare publishes neither vocabulary, so both stay exactly as they arrive |
+
+`MtlsCertificateRequest` settles line endings before it sends: **CRLF becomes LF** in the certificate and in the
+key. PEM is a text format whose lines Cloudflare parses, a `\r` inside one is invisible in a log, and every
+producer of PEM on Windows writes `\r\n` — so `EnsureValid()` rewrites them and says so in its remarks, which is
+what makes it a deliberate mutation rather than a surprise. What it does *not* do is parse the certificate:
+checking that the key matches it, or that it has not expired, would only mean two places to disagree, and an
+expired CA is something an account may upload on purpose. It does check that both fields look like PEM at all,
+because a DER blob or a file name where a certificate belongs is the mistake whose Cloudflare refusal —
+"invalid certificate" — points somewhere unhelpful.
+
+⛔ Not wrapped: `client_certificates` (certificates **issued by** Cloudflare's managed CA), `acm`,
+`keyless_certificates` and `certificate_authorities`.
+
+---
+
 ## Users and accounts
 
 `IUserService` — `client.User`; `IAccountsService` — `client.Accounts`
@@ -1419,6 +1457,37 @@ changes a name and a mode instead, in line with paid features being out of scope
 ⛔ Nothing else is left out of this resource: those six methods are all of `challenges/widgets`. Verifying a
 token (`siteverify`) is not part of this API at all — it lives on `challenges.cloudflare.com`, and belongs to
 the server that checked a visitor rather than to the account that owns the widget.
+
+---
+
+## Cloudflare IP ranges
+
+`IIpRangesService` — `client.IpRanges`
+
+One endpoint at the API root — `GET /ips`, with no account and no zone in the path, and **no permission group**:
+Cloudflare publishes none for it, so any authenticated caller can read it, including a token that can do
+nothing else. That is also what makes it the cheapest first call a client can make when it wants to know its
+credentials are being sent the way Cloudflare expects, before spending one on something that could be refused.
+
+| Method | Endpoint | Notes |
+| --- | --- | --- |
+| `ListAsync(IpRangesListParameters?)` | `GET /ips` | `{etag, ipv4_cidrs[], ipv6_cidrs[]}`, plus `jdcloud_cidrs[]` when the call asks for `?networks=jdcloud` — the China network's ranges, which Cloudflare operates jointly with JD Cloud and lists separately from its own |
+
+`etag` is a digest of the data rather than an HTTP header echoed back, and it is what makes caching these ranges
+safe: Cloudflare changes them rarely and announces a change well ahead of time. `AllCidrs` puts the three lists
+into one sequence — IPv4, then IPv6, then JD Cloud — because that is what a firewall rule wants handed to it.
+
+`Contains(address)` is the reason to wrap this endpoint at all instead of pasting a list into a config file: it
+answers whether an address sits inside one of the published ranges, which is the question an origin allowlist
+and a `CF-Connecting-IP` check both come down to. An address is only ever compared with ranges of its own
+family, and `IPAddress.Parse` is what decides the family — so an IPv4-mapped IPv6 address belongs to the IPv6
+one and has to be mapped back before it can match an IPv4 range. Anything that does not parse, and any malformed
+range in an answer, is passed over rather than thrown at: this is a filter, and the address usually came from
+somewhere the caller does not control.
+
+Older revisions of this endpoint also answered the China network's own ranges beside these, and the published
+schema has moved more than once, so anything this version does not model arrives in `AdditionalData` and the
+live fact reports which fields those were.
 
 ---
 

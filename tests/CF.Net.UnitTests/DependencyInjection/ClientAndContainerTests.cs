@@ -341,6 +341,8 @@ public class CloudflareClientTests
         Assert.IsAssignableFrom<IPageRulesService>(client.PageRules);
         Assert.IsAssignableFrom<IOriginCaCertificatesService>(client.OriginCaCertificates);
         Assert.IsAssignableFrom<IFirewallService>(client.Firewall);
+        Assert.IsAssignableFrom<IMtlsCertificateService>(client.MtlsCertificates);
+        Assert.IsAssignableFrom<IIpRangesService>(client.IpRanges);
         Assert.IsAssignableFrom<IWorkersObservabilityService>(client.WorkersObservability);
         Assert.IsAssignableFrom<IWorkersAiService>(client.WorkersAi);
         Assert.IsAssignableFrom<ITurnstileService>(client.Turnstile);
@@ -548,6 +550,8 @@ public class ServiceCollectionExtensionsTests
         Assert.Same(client.PageRules, provider.GetRequiredService<IPageRulesService>());
         Assert.Same(client.OriginCaCertificates, provider.GetRequiredService<IOriginCaCertificatesService>());
         Assert.Same(client.Firewall, provider.GetRequiredService<IFirewallService>());
+        Assert.Same(client.MtlsCertificates, provider.GetRequiredService<IMtlsCertificateService>());
+        Assert.Same(client.IpRanges, provider.GetRequiredService<IIpRangesService>());
         Assert.Same(client.WorkersObservability, provider.GetRequiredService<IWorkersObservabilityService>());
         Assert.Same(client.WorkersAi, provider.GetRequiredService<IWorkersAiService>());
         Assert.Same(client.Turnstile, provider.GetRequiredService<ITurnstileService>());

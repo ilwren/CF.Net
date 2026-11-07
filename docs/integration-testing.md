@@ -224,6 +224,7 @@ For the full suite:
 | Account | Workers Scripts — Edit | scripts, deployments, secrets, the `workers.dev` subdomain and custom domains |
 | Zone | Workers Routes — Edit | `GET`/`POST`/`PUT`/`DELETE /zones/{id}/workers/routes`. The token catalogue files this group under the account, but a route lives in a zone, so a token whose *Zone Resources* do not name the zone gets a `10007 Route not found` that reads like a missing permission |
 | Account | Account Settings — Edit | `PUT /accounts/{id}/workers/account-settings` — Cloudflare documents this write as needing **Account Settings Write** rather than a Workers group. A live run confirmed it: the read answers 200 and the write answers **403 `[10000]`** without that group. The fact reports the refusal instead of failing on it, and the group (`1af1fa2adc104452b74a9a3364202f20`) is in the token URL the workflow generates, so a token created from it verifies the write too |
+| Account | Account: SSL and Certificates — Read **or** Edit | `GET`/`POST`/`DELETE /accounts/{id}/mtls_certificates` and `…/{id}/associations` — the mTLS certificates an account uploads. **Not the zone-scoped group of the same name**: Cloudflare publishes two, and this one is described as *"SSL MTLS certificates or Certificate Store"*. Read `a7a233f9604845c787d4c8c39ac09c21`, Write `db37e5f1cb1a4e1aabaef8deaea43575` |
 | Account | Pages — Edit | projects, deployments, domains |
 | Account | D1 — Edit | databases, queries, backups |
 | Account | Workers KV Storage — Edit | namespaces, values, bulk writes |
@@ -312,11 +313,12 @@ permissions but no zone resource returns `10007 Route not found` for a zone you 
 in the dashboard, which reads like a bug in the client and is not.
 
 This is common enough that the workflow checks for it before running anything. The step named *Check what
-the credentials can actually reach* makes one `curl` call per product area — thirty-five of them, covering
+the credentials can actually reach* makes one `curl` call per product area — thirty-seven of them, covering
 zones, DNS records, DNSSEC and its ZSK, zone settings, certificate packs, custom hostnames, origin TLS
 client auth, origin CA certificates, cache purge, the account, Workers scripts, domains and routes, Pages,
-D1, KV, R2, rulesets, filter lists, page rules, firewall filters, IP Access rules, Turnstile, load
-balancing, Workers AI and account tokens — with the same
+D1, KV, R2, rulesets, filter lists, page rules, firewall filters, IP Access rules, mTLS
+certificates, the Cloudflare IP ranges, Turnstile, load balancing, Workers AI and account tokens — with the
+same
 credentials, and reports each answer as `label=status[shape]`:
 
 ```
@@ -590,6 +592,7 @@ Always safe. They run whenever credentials are present.
 | `Dnssec_zone_signing_keys_can_be_listed` | `/dnssec/zsk`, the one call that proves the PascalCase payload against the real API rather than a fixture; an unsigned zone answering with an empty list is a normal result |
 | `Every_product_area_is_reachable_through_the_client_facade` | every service the client exposes, wired to one transport |
 | `An_insufficiently_scoped_token_is_reported_as_an_authentication_failure` | 403/404 map onto `IsAuthenticationFailure` / `IsNotFound` |
+| `The_cloudflare_ip_ranges_can_be_read_and_asked_whether_an_address_is_theirs` | `GET /ips` answers ranges and a digest, a published range contains its own network address, an address that is not one matches nothing, and `?networks=jdcloud` adds the China network's ranges — **no permission group covers this endpoint**, so it runs wherever the credentials authenticate |
 
 ### `WriteIntegrationTests`
 
@@ -620,6 +623,7 @@ assertion failure mid-test still removes the resource.
 | `An_origin_ca_certificate_can_be_requested_listed_read_and_revoked` | a 2048-bit RSA key **generated inside the test**, a CSR for a generated hostname in your zone, and the certificate Cloudflare's CA signs for it (one year) | `DELETE` revokes it - and again in the `finally`, so a failure mid-test cannot leave a signed certificate behind. The private key never leaves the test process |
 | `A_firewall_filter_can_be_created_listed_read_changed_bulk_changed_and_removed` | two saved filters in one `POST` (one of them paused), a `PUT` of one and a bulk `PUT` of both — **skipped when Cloudflare answers `410 [10020] filters.api.deprecated`, which is what it does for an account whose filters API has been retired** | the single `DELETE`, then the bulk `DELETE` with a body |
 | `An_ip_access_rule_can_be_created_listed_read_changed_and_removed` | one IP Access rule in **your zone** blocking `192.0.2.1` — documentation space, which routes nowhere — then a `PATCH` to one of the modes Cloudflare offered. It also reads the **account-scoped** list of the same resource, and a refusal there is reported rather than failing the fact | `DELETE` the rule |
+| `An_mtls_certificate_can_be_uploaded_listed_read_asked_about_associations_and_removed` | a 2048-bit RSA key **generated inside the test**, a self-signed CA certificate from it, and the upload of that CA — no private key leaves the test, because a BYO-CA upload does not want one | `DELETE` the certificate, after reading what it is associated with |
 | `A_page_rule_can_be_created_read_patched_replaced_and_removed` | one page rule on a generated hostname, then a `PATCH` of its status and a `PUT` that turns it into a redirect — **skipped for an account-owned token**, which Cloudflare refuses this endpoint for with `1011` | `DELETE` the rule - which also frees the allowance slot it used |
 
 Resource names are generated with a timestamp and a random suffix (`cfnet-it-20260101120000-a1b2c3d4`)
@@ -739,6 +743,7 @@ credentials out of CI entirely.
 | `9109 Authentication error [code 10000]` | token revoked, expired, or missing a permission | recreate the token; check the permission list above |
 | `9109` on one product only | the token lacks that specific permission | add it — permissions are per product area |
 | An **account-scoped** IP Access rule call answers 403 `[10000]` while the zone-scoped one works | the two paths do not share a permission requirement | add **Account Firewall Access Rules** Read and Write; Firewall Services covers the filters only |
+| An mTLS certificate call answers 403 though the zone's certificate packs read fine | Cloudflare publishes two groups called *SSL and Certificates*, and these endpoints want the account-scoped one | add **Account: SSL and Certificates** Read `a7a233f9604845c787d4c8c39ac09c21` or Write `db37e5f1cb1a4e1aabaef8deaea43575` |
 | The filters probe answers `410 [10020] filters.api.deprecated` | Cloudflare has retired the filters API for this account | nothing — use `client.Rulesets`; the reach matrix files a 410 as a retirement, not as a missing permission |
 | `10000` with a valid token, from CI only | client IP filtering on the token | remove the IP restriction for the CI token |
 | `7403 D1_DATABASE_NOT_FOUND` | wrong account id | `CLOUDFLARE_ACCOUNT_ID` must own the database |

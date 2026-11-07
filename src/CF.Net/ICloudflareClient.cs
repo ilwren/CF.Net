@@ -106,6 +106,20 @@ public interface ICloudflareClient : IDisposable
     IFirewallService Firewall { get; }
 
     /// <summary>
+    /// The mTLS certificates uploaded to an account - a Bring Your Own CA certificate to check client
+    /// certificates against, or a leaf one for a Cloudflare service to present. These want the account-scoped
+    /// <b>Account: SSL and Certificates</b> group, which is a different id from the zone-scoped one of the same
+    /// name.
+    /// </summary>
+    IMtlsCertificateService MtlsCertificates { get; }
+
+    /// <summary>
+    /// The IP ranges Cloudflare's edge answers from, at <c>GET /ips</c> - the list an origin allowlist is built
+    /// from. No permission group covers it, and the path carries neither an account nor a zone.
+    /// </summary>
+    IIpRangesService IpRanges { get; }
+
+    /// <summary>
     /// Workers Observability: the telemetry destinations an account exports Worker logs, traces and metrics
     /// to.
     /// </summary>

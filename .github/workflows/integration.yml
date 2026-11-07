@@ -284,6 +284,10 @@ jobs:
           }
 
           probe zones "$base/zones?per_page=1"
+          # Neither an account nor a zone, and Cloudflare publishes no permission group for it - so this is
+          # the one probe that says whether the credentials are being sent the way Cloudflare expects without
+          # depending on any resource being in scope.
+          probe ips "$base/ips"
 
           if [ -n "${CLOUDFLARE_ZONE_ID:-}" ]; then
             zone="$base/zones/${CLOUDFLARE_ZONE_ID}"
@@ -351,6 +355,10 @@ jobs:
             # Firewall Services - so this probe is the one that says whether that group is there. The same
             # resource is served from a zone path too, and one answer covers both.
             probe access_rules "$account/firewall/access_rules/rules?per_page=1"
+            # The account-scoped SSL group, which is a different id from the zone-scoped one that covers
+            # certificate packs, Universal SSL and the Origin CA certificates above: a 403 here beside a
+            # readable ssl probe is that distinction and not a broken token.
+            probe mtls_certificates "$account/mtls_certificates"
             probe lb_monitors "$account/load_balancers/monitors"
             probe lb_pools "$account/load_balancers/pools"
             probe workers_ai "$account/ai/models/search?per_page=1"
@@ -443,6 +451,14 @@ jobs:
                'Account Firewall Access Rules - Read', 'de7a688cc47d43bd9ea700b467a09c96', 'read',
                'a group of its own: Firewall Services does not cover IP Access rules, so a token that reads '
                'the filters above can still be refused here, and this row is what names that refusal'),
+              ('mtls_certificates', 'GET /accounts/{account_id}/mtls_certificates',
+               'Account: SSL and Certificates - Read', 'a7a233f9604845c787d4c8c39ac09c21', 'read',
+               'not the zone-scoped group of the same name: Cloudflare publishes two, and this one describes '
+               'itself as "SSL MTLS certificates or Certificate Store", so a token holding the zone group is '
+               'refused here with a 403 that reads like a missing permission'),
+              ('ips', 'GET /ips', 'none - this endpoint is public', 'none', 'read',
+               'no account and no zone in the path and no permission group published for it, so a 200 says '
+               'the credentials are being sent the way Cloudflare expects and nothing more'),
               ('workers_routes', 'GET /zones/{zone_id}/workers/routes', 'Workers Routes - Read',
                '2072033d694d415a936eaeb94e6405b8', 'read',
                'a zone with no routes answers 200 and an empty list; this one is zone-scoped, so it needs '
@@ -711,6 +727,11 @@ jobs:
               # ride on Firewall Services - the group above covers the zone's saved filters and nothing else.
               ('de7a688cc47d43bd9ea700b467a09c96', 'Account Firewall Access Rules Read', 'account', 'read'),
               ('a416acf9ef5a4af19fb11ed3b96b1fe6', 'Account Firewall Access Rules Write', 'account', 'edit'),
+              # mTLS certificates want the account-scoped SSL group, which is a different id from the
+              # zone-scoped pair above that covers certificate packs, Universal SSL, custom hostnames and the
+              # Origin CA certificates. Both are wanted, because the two names are one word apart.
+              ('a7a233f9604845c787d4c8c39ac09c21', 'Account: SSL and Certificates Read', 'account', 'read'),
+              ('db37e5f1cb1a4e1aabaef8deaea43575', 'Account: SSL and Certificates Write', 'account', 'edit'),
               ('4f1071168de8466e9808de86febfc516', 'Account Rule Lists Read', 'account', 'read'),
               ('2edbf20661fd4661b0fe10e9e12f485c', 'Account Rule Lists Write', 'account', 'edit'),
               ('429a068902904c5a9ed9fc267c67da9a', 'Mass URL Redirects Read', 'account', 'read'),

@@ -277,6 +277,8 @@ public static class ServiceCollectionCloudflareExtensions
         services.TryAddSingleton<IPageRulesService>(provider => provider.GetRequiredService<ICloudflareClient>().PageRules);
         services.TryAddSingleton<IOriginCaCertificatesService>(provider => provider.GetRequiredService<ICloudflareClient>().OriginCaCertificates);
         services.TryAddSingleton<IFirewallService>(provider => provider.GetRequiredService<ICloudflareClient>().Firewall);
+        services.TryAddSingleton<IMtlsCertificateService>(provider => provider.GetRequiredService<ICloudflareClient>().MtlsCertificates);
+        services.TryAddSingleton<IIpRangesService>(provider => provider.GetRequiredService<ICloudflareClient>().IpRanges);
         services.TryAddSingleton<IWorkersObservabilityService>(provider => provider.GetRequiredService<ICloudflareClient>().WorkersObservability);
         services.TryAddSingleton<IWorkersAiService>(provider => provider.GetRequiredService<ICloudflareClient>().WorkersAi);
         services.TryAddSingleton<ITurnstileService>(provider => provider.GetRequiredService<ICloudflareClient>().Turnstile);

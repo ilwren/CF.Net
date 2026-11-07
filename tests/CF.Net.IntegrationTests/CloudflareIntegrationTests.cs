@@ -8,7 +8,9 @@ using CFNet.Models.Common;
 using CFNet.Models.D1;
 using CFNet.Models.Dns;
 using CFNet.Models.Firewall;
+using CFNet.Models.IpRanges;
 using CFNet.Models.Kv;
+using CFNet.Models.MtlsCertificates;
 using CFNet.Models.OriginCa;
 using CFNet.Models.PageRules;
 using CFNet.Models.Pages;
@@ -1679,6 +1681,11 @@ public class ReadOnlyIntegrationTests : CloudflareIntegrationTest
         Assert.NotNull(Client.R2);
         Assert.NotNull(Client.Lists);
         Assert.NotNull(Client.Rulesets);
+        Assert.NotNull(Client.PageRules);
+        Assert.NotNull(Client.OriginCaCertificates);
+        Assert.NotNull(Client.Firewall);
+        Assert.NotNull(Client.MtlsCertificates);
+        Assert.NotNull(Client.IpRanges);
         Assert.NotNull(Client.WorkersObservability);
         Assert.NotNull(Client.WorkersAi);
         Assert.NotNull(Client.Turnstile);
@@ -1803,8 +1810,100 @@ public class ReadOnlyIntegrationTests : CloudflareIntegrationTest
             exception.IsNotFound || exception.IsAuthenticationFailure || exception.IsValidationFailure,
             $"Expected a specific refusal, got {exception.StatusCode}/{exception.ErrorCode}: {exception.Message}");
     }
-}
 
+    [Fact]
+    public async Task The_cloudflare_ip_ranges_can_be_read_and_asked_whether_an_address_is_theirs()
+    {
+        if (!SkipWithoutCredentials())
+        {
+            return;
+        }
+
+        var surprises = new List<string>();
+
+        try
+        {
+            // No permission group covers this endpoint, and the path carries neither an account nor a zone, so
+            // it runs wherever the credentials authenticate at all - which makes it the cheapest proof in the
+            // suite that a token is being sent the way Cloudflare expects.
+            var ranges = await Client.IpRanges.ListAsync();
+
+            Assert.NotEmpty(ranges.Ipv4Cidrs!);
+            Assert.NotEmpty(ranges.Ipv6Cidrs!);
+            Assert.False(string.IsNullOrWhiteSpace(ranges.Etag), "GET /ips answered no etag to cache against");
+
+            var v4 = ranges.Ipv4Cidrs!;
+            var v6 = ranges.Ipv6Cidrs!;
+            Log($"{ranges}; etag {ranges.Etag}; first IPv4 {v4[0]}, first IPv6 {v6[0]}");
+
+            // Anything unrecognized is reported rather than dropped: older revisions of this endpoint answered
+            // the China network's own ranges beside these, so a field arriving here is one worth modelling.
+            if (ranges.AdditionalData is { Count: > 0 } extra)
+            {
+                Warn($"GET /ips answered fields this library does not model: {JsonSerializer.Serialize(extra)}. " +
+                     "They are readable through AdditionalData, and naming them here is how they become " +
+                     "properties instead of guesses.");
+            }
+
+            // Used the way a caller would use it: the network address of a published range is inside that
+            // range, an address that is not an address is not inside any of them, and documentation space -
+            // which Cloudflare does not announce - is not inside them either.
+            var firstNetwork = v4[0].Split('/')[0];
+            Assert.True(
+                ranges.Contains(firstNetwork),
+                $"the published range {v4[0]} does not contain its own network address {firstNetwork}");
+            Assert.False(ranges.Contains("not-an-address"));
+            if (ranges.Contains("192.0.2.1"))
+            {
+                surprises.Add(
+                    "192.0.2.1 - documentation space, which Cloudflare does not announce - falls inside a " +
+                    $"published range, so the {v4.Count} IPv4 ranges cover more than the edge does");
+            }
+
+            // The China network's ranges sit behind the one query parameter this endpoint publishes.
+            try
+            {
+                var withJdCloud = await Client.IpRanges.ListAsync(IpRangesListParameters.IncludingJdCloud());
+                if (withJdCloud.AdditionalData is { Count: > 0 } jdExtra)
+                {
+                    Warn($"GET /ips?networks=jdcloud answered fields this library does not model: " +
+                         $"{JsonSerializer.Serialize(jdExtra)}.");
+                }
+
+                if (withJdCloud.JdCloudCidrs is { Count: > 0 } jdcloud)
+                {
+                    Log($"?networks=jdcloud adds {jdcloud.Count} range(s), the first of them {jdcloud[0]}, " +
+                        $"under its own etag {withJdCloud.Etag}");
+                    Assert.True(withJdCloud.IncludesJdCloud);
+                    Assert.True(withJdCloud.AllCidrs.Count() > ranges.AllCidrs.Count());
+                }
+                else
+                {
+                    surprises.Add(
+                        "?networks=jdcloud answered no jdcloud_cidrs, so either this account is not served the " +
+                        "China network's ranges or that parameter is not the one that asks for them");
+                }
+            }
+            catch (CloudflareApiException exception)
+            {
+                // One parameter refused while the plain read answered is a fact about the parameter, and the
+                // rest of this fact has already proved the credentials work.
+                Warn($"GET /ips?networks=jdcloud was refused with {exception.StatusCode} " +
+                     $"[{exception.ErrorCode}] {Truncate(exception.Message, 200)} while GET /ips answered " +
+                     $"{v4.Count} IPv4 and {v6.Count} IPv6 range(s): networks=jdcloud is the only parameter " +
+                     "this endpoint publishes, so the refusal is about it and not about the credentials.");
+            }
+        }
+        finally
+        {
+            if (surprises.Count > 0)
+            {
+                Warn($"GET /ips answered something other than what the reference publishes: " +
+                     $"{string.Join("; ", surprises)}.");
+            }
+        }
+    }
+}
 /// <summary>
 /// Lifecycle tests that create and then remove a resource. They are self-cleaning, but they do write
 /// to the account, so they are additionally gated behind <c>CLOUDFLARE_IT_ENABLE_WRITES=true</c>.
@@ -4627,6 +4726,176 @@ public class WriteIntegrationTests : CloudflareIntegrationTest
             if (unmodelled.Count > 0)
             {
                 Warn("Fields the IP Access rule answers carried that this library does not model: " +
+                     $"{string.Join("; ", unmodelled)}. They are readable through AdditionalData, and naming " +
+                     "them here is how they become properties instead of guesses.");
+            }
+        }
+    }
+
+    [Fact]
+    public async Task An_mtls_certificate_can_be_uploaded_listed_read_asked_about_associations_and_removed()
+    {
+        if (!SkipWithoutAccount() || !SkipWithoutWritePermission())
+        {
+            return;
+        }
+
+        var name = UniqueSuffix("cfnet-mtls");
+        var unmodelled = new SortedSet<string>();
+        var surprises = new List<string>();
+        string? certificateId = null;
+
+        // A CA generated here, self-signed and good for a year. Cloudflare wants PEM and the flag that says
+        // whether it is a CA, and an mTLS check is performed against a CA rather than against a leaf - so a CA
+        // is what this uploads, and no private key ever leaves this process, because an ordinary BYO-CA upload
+        // does not want one.
+        using var key = RSA.Create(2048);
+        var signingRequest = new CertificateRequest(
+            $"CN={name}",
+            key,
+            HashAlgorithmName.SHA256,
+            RSASignaturePadding.Pkcs1);
+        signingRequest.CertificateExtensions.Add(new X509BasicConstraintsExtension(true, false, 0, true));
+        signingRequest.CertificateExtensions.Add(
+            new X509KeyUsageExtension(
+                X509KeyUsageFlags.DigitalSignature | X509KeyUsageFlags.KeyCertSign | X509KeyUsageFlags.CrlSign,
+                true));
+        signingRequest.CertificateExtensions.Add(
+            new X509SubjectKeyIdentifierExtension(signingRequest.PublicKey, false));
+
+        var serial = RandomNumberGenerator.GetBytes(16);
+        using var certificate = signingRequest.Create(
+            X509SignatureGenerator.CreateForRSA(key, RSASignaturePadding.Pkcs1),
+            DateTimeOffset.UtcNow.AddDays(-1),
+            DateTimeOffset.UtcNow.AddDays(365),
+            serial);
+
+        // ExportCertificatePem writes the block, and whether it uses LF or CRLF depends on the platform this
+        // runs on - which is exactly what the request's normalization is for.
+        var pem = certificate.ExportCertificatePem();
+
+        try
+        {
+            var saved = await Retrying5xxAsync(() => Client.MtlsCertificates.CreateAsync(
+                MtlsCertificateRequest.ForCertificateAuthority(pem, name)));
+
+            certificateId = saved.Id;
+            Assert.False(string.IsNullOrWhiteSpace(certificateId));
+            Assert.True(saved.Ca);
+            Assert.True(saved.IsCertificateAuthority);
+            Assert.Equal(MtlsCertificateType.Custom, saved.Type);
+            Assert.Equal(name, saved.Name);
+            Assert.False(string.IsNullOrWhiteSpace(saved.Certificates));
+            Assert.Contains("BEGIN CERTIFICATE", saved.Certificates!, StringComparison.Ordinal);
+            Collect(unmodelled, "mtls.create", saved.AdditionalData);
+            Log($"uploaded {saved}; issuer '{saved.Issuer}', signature '{saved.Signature}'");
+
+            // Both timestamps are published as optional, so what arrives is reported rather than asserted: an
+            // uploaded certificate's dates come out of the PEM, and Cloudflare is the only one who can say
+            // which of them it echoes back.
+            ReportTimestamp(surprises, "the upload", "expires_on", saved.ExpiresOn, saved.ExpiresOnUtc);
+            ReportTimestamp(surprises, "the upload", "uploaded_on", saved.UploadedOn, saved.UploadedOnUtc);
+            ReportTimestamp(surprises, "the upload", "updated_at", saved.UpdatedAt, saved.UpdatedAtUtc);
+
+            // The serial has two plausible spellings - DER order or its byte reverse, with or without colons -
+            // and both are accepted here. A third way is worth a line, because a caller comparing this against
+            // a certificate in its own store needs to know which one Cloudflare prints.
+            var forward = Convert.ToHexString(serial);
+            var backward = Convert.ToHexString(serial.Reverse().ToArray());
+            var answered = (saved.SerialNumber ?? string.Empty)
+                .Replace(":", string.Empty, StringComparison.Ordinal)
+                .Replace(" ", string.Empty, StringComparison.Ordinal)
+                .ToUpperInvariant();
+            Log($"serial as generated {forward}, as Cloudflare printed it '{saved.SerialNumber}'");
+            if (answered.Length > 0 && answered != forward && answered != backward)
+            {
+                surprises.Add(
+                    $"the serial Cloudflare printed, '{saved.SerialNumber}', is neither the generated {forward} " +
+                    $"nor its byte-reversed form {backward}, so it prints serial numbers a third way");
+            }
+
+            var listed = await ReadUntilAsync(
+                () => Client.MtlsCertificates.ListAsync(MtlsCertificateListParameters.UploadedOnly()),
+                certificates => certificates.Any(entry => entry.Id == certificateId));
+            Assert.Contains(listed, entry => entry.Id == certificateId);
+            Collect(
+                unmodelled,
+                "mtls.list",
+                listed.First(entry => entry.Id == certificateId).AdditionalData);
+
+            // The filter is one parameter with the types comma-separated, so asking for a type this
+            // certificate is not should leave it out of the answer.
+            var managed = await Client.MtlsCertificates.ListAsync(
+                MtlsCertificateListParameters.OfTypes(MtlsCertificateType.GatewayManaged));
+            Assert.DoesNotContain(managed, entry => entry.Id == certificateId);
+            Log($"the gateway_managed filter answers {managed.Count} certificate(s), and not this one");
+
+            var read = await ReadUntilAsync(
+                () => Client.MtlsCertificates.GetAsync(certificateId!),
+                entry => entry is not null);
+            Assert.NotNull(read);
+            Assert.Equal(certificateId, read!.Id);
+            Collect(unmodelled, "mtls.get", read.AdditionalData);
+
+            // What a certificate is in use by is the call to make before removing one. A certificate this fact
+            // just made is in use by nothing, and an empty answer is the evidence that the endpoint answers
+            // rather than a failure to find anything.
+            var associations = await Client.MtlsCertificates.ListAssociationsAsync(certificateId);
+            Log($"{associations.Count} service(s) are using the certificate" +
+                (associations.Count > 0
+                    ? $": {string.Join("; ", associations.Select(association => association.ToString()))}"
+                    : string.Empty));
+            foreach (var association in associations)
+            {
+                Collect(unmodelled, "mtls.associations", association.AdditionalData);
+            }
+
+            // The delete answers the certificate it removed, which is what makes it worth returning rather
+            // than treating as a bare acknowledgement.
+            var removed = await Client.MtlsCertificates.DeleteAsync(certificateId);
+            Assert.Equal(certificateId, removed?.Id);
+            certificateId = null;
+
+            var emptied = await ReadUntilAsync(
+                () => Client.MtlsCertificates.GetAsync(read.Id!),
+                entry => entry is null);
+            Assert.Null(emptied);
+
+            var afterDelete = await Client.MtlsCertificates.ListAsync(MtlsCertificateListParameters.UploadedOnly());
+            Assert.DoesNotContain(afterDelete, entry => entry.Id == read.Id);
+            Log($"deleted mTLS certificate {read.Id}, and neither the GET nor the list answers it");
+        }
+        catch (CloudflareApiException exception) when (exception.IsAuthenticationFailure)
+        {
+            // The group these endpoints want is account-scoped, and Cloudflare has a second group with almost
+            // the same name that is zone-scoped and covers certificate packs, Universal SSL, custom hostnames
+            // and the Origin CA certificates. Holding that one and being refused here reads like a bug, so the
+            // reason names both ids.
+            SkipUnless(
+                false,
+                $"Cloudflare refused the mTLS certificate call with {exception.ErrorCode}: " +
+                $"{Truncate(exception.Message, 120)}. These want the account-scoped group Account: SSL and " +
+                "Certificates - Read (a7a233f9604845c787d4c8c39ac09c21) or Write " +
+                "(db37e5f1cb1a4e1aabaef8deaea43575) - which is a different group from the zone-scoped SSL and " +
+                "Certificates one that covers certificate packs and the Origin CA certificates.");
+        }
+        finally
+        {
+            if (certificateId is { Length: > 0 } id)
+            {
+                await Client.MtlsCertificates.DeleteAsync(id);
+                Log($"deleted mTLS certificate {id} on the way out");
+            }
+
+            if (surprises.Count > 0)
+            {
+                Warn($"mTLS certificates answered something other than what the reference publishes: " +
+                     $"{string.Join("; ", surprises)}.");
+            }
+
+            if (unmodelled.Count > 0)
+            {
+                Warn("Fields the mTLS certificate answers carried that this library does not model: " +
                      $"{string.Join("; ", unmodelled)}. They are readable through AdditionalData, and naming " +
                      "them here is how they become properties instead of guesses.");
             }

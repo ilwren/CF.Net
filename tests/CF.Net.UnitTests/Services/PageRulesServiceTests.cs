@@ -53,7 +53,10 @@ public class PageRulesServiceTests
         Assert.Equal("on", rule.Actions[0].ValueAsText());
         Assert.Null(rule.Actions[0].ValueAsNumber());
         Assert.Equal(7200, rule.Actions[1].ValueAsNumber());
-        Assert.Null(rule.Actions[1].ValueAsText());
+
+        // A number reads as a word too, as the digits Cloudflare wrote: a caller asking for text gets
+        // something rather than a null it has to explain.
+        Assert.Equal("7200", rule.Actions[1].ValueAsText());
         Assert.Equal(JsonValueKind.Object, rule.Actions[2].Value!.Value.ValueKind);
         Assert.Equal(301, rule.Actions[2].Value!.Value.GetProperty("status_code").GetInt32());
         Assert.Equal("https://example.org/*", rule.Actions[2].Value!.Value.GetProperty("url").GetString());

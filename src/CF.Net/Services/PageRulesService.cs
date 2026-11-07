@@ -30,6 +30,13 @@ namespace CFNet.Services;
 /// Needs <b>Page Rules Write</b> for the writes and <b>Page Rules Read</b> for the reads, or <b>Zone
 /// Read/Write</b>, which Cloudflare accepts for all of them.
 /// </para>
+/// <para>
+/// <b>And it needs a token that belongs to a person.</b> Cloudflare answers <c>400</c> with error
+/// <c>1011</c>, "Page Rules endpoint does not support account owned tokens", to every call on this path for an
+/// account-owned token (the <c>cfat_</c> kind an account creates for itself) - the list as much as the create.
+/// A user-owned token (<c>cfut_</c>, created under a person's profile) or the legacy global API key is what
+/// reaches page rules, and no permission group changes that.
+/// </para>
 /// </remarks>
 public interface IPageRulesService
 {

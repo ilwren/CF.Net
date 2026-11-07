@@ -3905,6 +3905,18 @@ public class WriteIntegrationTests : CloudflareIntegrationTest
             return;
         }
 
+        // A live run settled this before it settled anything else: Cloudflare answers 400 [1011] "Page Rules
+        // endpoint does not support account owned tokens" to every call here, the list as much as the create,
+        // so an account-owned token cannot exercise page rules at all and the fact opts out with that reason.
+        if (!SkipUnless(
+                !IsAccountOwnedToken,
+                "Every page rule call is refused for an account-owned token: Cloudflare answers 400 [1011] " +
+                "'Page Rules endpoint does not support account owned tokens', for the list as much as the " +
+                "create. Configure a user token (cfut_) to exercise this one."))
+        {
+            return;
+        }
+
         var pattern = $"{UniqueSuffix("cfnet-pr")}.{zone!.Name}/*";
         var unmodelled = new SortedSet<string>();
         var surprises = new List<string>();
@@ -3927,12 +3939,13 @@ public class WriteIntegrationTests : CloudflareIntegrationTest
             }
             catch (CloudflareApiException exception)
             {
-                // A plan carries an allowance of page rules - three on a free plan - so a refusal here is as
-                // likely to be a full zone as anything wrong with the rule, and everything after this needs a
-                // rule to work on.
+                // Everything after this needs a rule to work on. A plan carries an allowance of page rules -
+                // three on a free plan - so a full zone reads like this, and so does a token kind Cloudflare
+                // refuses the endpoint for, which is what an account-owned one gets with 1011.
                 Warn($"POST /zones/{{zone_id}}/pagerules was refused: {exception.StatusCode} " +
                      $"[{exception.ErrorCode}] {Truncate(exception.Message, 240)}. A plan carries an allowance " +
-                     "of page rules, three on a free plan, so a full zone reads exactly like this.");
+                     "of page rules, three on a free plan, so a full zone reads exactly like this - and so does " +
+                     "a token kind the endpoint refuses, which 1011 is.");
                 return;
             }
 
@@ -3940,9 +3953,9 @@ public class WriteIntegrationTests : CloudflareIntegrationTest
             var ruleId = created.Id!;
             Assert.Equal(PageRuleStatus.Active, created.Status);
             Assert.Equal(pattern, created.Targets!.Single().Constraint!.Value);
-            Assert.Equal(PageRuleTargetOperator.Matches, created.Targets.Single().Constraint!.Operator);
+            Assert.Equal(PageRuleTargetOperator.Matches, created.Targets!.Single().Constraint!.Operator);
             Assert.Equal(PageRuleActionIds.BrowserCheck, created.Actions!.Single().Id);
-            Assert.Equal("on", created.Actions.Single().ValueAsText());
+            Assert.Equal("on", created.Actions!.Single().ValueAsText());
             CollectPageRule(unmodelled, "pagerules.create", created);
             Log($"created page rule {ruleId} for {pattern}");
 
@@ -4027,7 +4040,7 @@ public class WriteIntegrationTests : CloudflareIntegrationTest
                     "before it, so a PUT resets a field its body leaves out rather than keeping it");
             }
 
-            var value = forwarded.Actions.Single().Value;
+            var value = forwarded.Actions!.Single().Value;
             if (value is not { ValueKind: JsonValueKind.Object } ||
                 !value.Value.TryGetProperty("status_code", out _) ||
                 !value.Value.TryGetProperty("url", out _))

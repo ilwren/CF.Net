@@ -202,7 +202,10 @@ public abstract class CloudflareIntegrationTest : IDisposable
     /// True when the configured token is account-owned (<c>cfat_...</c>). Cloudflare verifies those at
     /// <c>GET /accounts/{account_id}/tokens/verify</c> and rejects them at the user-scoped endpoints -
     /// <c>GET /user</c> and <c>GET /user/tokens/verify</c> - with <c>1000 Invalid API Token</c>, so a
-    /// test that has to use one of those opts out instead of failing.
+    /// test that has to use one of those opts out instead of failing. It also rejects them at
+    /// <c>/zones/{zone_id}/pagerules</c>, every method of it, with <c>1011 Page Rules endpoint does not
+    /// support account owned tokens</c> - a zone-scoped endpoint that wants a person rather than a service
+    /// principal, which no permission group can grant.
     /// </summary>
     protected bool IsAccountOwnedToken =>
         ApiToken is not null &&

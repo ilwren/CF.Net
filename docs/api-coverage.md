@@ -1121,6 +1121,13 @@ it: forward them elsewhere, cache them longer, switch a feature off. Rulesets ar
 most of the same ground, but a page rule still has actions no ruleset does — forwarding a URL among them — and
 every zone carries a plan-sized allowance of them, **three on a free plan**.
 
+**Cloudflare refuses this whole endpoint for an account-owned token.** A live run answered `400` with error
+`1011`, *"Page Rules endpoint does not support account owned tokens"*, to the `GET` of the list as much as to
+the `POST` — so a `cfat_` token, the kind an account creates for itself, cannot reach page rules at all, and no
+permission group changes that. A **user-owned token** (`cfut_`, created under a person's profile) or the legacy
+global API key is what does. The live fact therefore opts out with that reason for an account-owned token, and
+the reach matrix reports the `1011` as the token kind rather than as a missing permission.
+
 Three things about the shape are worth knowing. The path is `pagerules`, one word, not the `page_rules` the
 resource's own name suggests. Only one page rule runs per request, and when two could match the one with the
 **higher** priority wins — the opposite of an evaluation order counted from one. And Cloudflare publishes that

@@ -417,8 +417,9 @@ jobs:
                '5d78fd7895974fd0bdbbbb079482721b', 'read', ''),
               ('pagerules', 'GET /zones/{zone_id}/pagerules', 'Page Rules - Read',
                'b415b70a4fd1412886f164451f20405c', 'read',
-               'a zone with no page rules answers 200 and an empty list; Zone Read is accepted for this too, '
-               'so a 403 here is neither group'),
+               'refused with 400 [1011] "Page Rules endpoint does not support account owned tokens" for a '
+               'cfat_ token, the list as much as the writes, so a 400 here is the token kind and not the '
+               'permission; a user-owned cfut_ token or the global key is what answers it'),
               ('workers_routes', 'GET /zones/{zone_id}/workers/routes', 'Workers Routes - Read',
                '2072033d694d415a936eaeb94e6405b8', 'read',
                'a zone with no routes answers 200 and an empty list; this one is zone-scoped, so it needs '

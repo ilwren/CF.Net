@@ -4764,7 +4764,13 @@ public class WriteIntegrationTests : CloudflareIntegrationTest
             new X509SubjectKeyIdentifierExtension(signingRequest.PublicKey, false));
 
         var serial = RandomNumberGenerator.GetBytes(16);
+
+        // Self-signed, but with a serial number this test chose rather than one the runtime picked: the
+        // overload that takes a generator wants the issuer's name beside it, and for a self-signed certificate
+        // the issuer is the subject. CreateSelfSigned would be shorter and would hide the serial, which is one
+        // of the two things this fact compares against what Cloudflare prints.
         using var certificate = signingRequest.Create(
+            signingRequest.SubjectName,
             X509SignatureGenerator.CreateForRSA(key, RSASignaturePadding.Pkcs1),
             DateTimeOffset.UtcNow.AddDays(-1),
             DateTimeOffset.UtcNow.AddDays(365),
@@ -4800,8 +4806,14 @@ public class WriteIntegrationTests : CloudflareIntegrationTest
             // The serial has two plausible spellings - DER order or its byte reverse, with or without colons -
             // and both are accepted here. A third way is worth a line, because a caller comparing this against
             // a certificate in its own store needs to know which one Cloudflare prints.
+            // Reversed by hand rather than with Enumerable.Reverse: on an array that call binds to the
+            // in-place MemoryExtensions.Reverse, which answers void, and the clone keeps the serial the
+            // certificate was made with untouched.
+            var reversed = (byte[])serial.Clone();
+            Array.Reverse(reversed);
+
             var forward = Convert.ToHexString(serial);
-            var backward = Convert.ToHexString(serial.Reverse().ToArray());
+            var backward = Convert.ToHexString(reversed);
             var answered = (saved.SerialNumber ?? string.Empty)
                 .Replace(":", string.Empty, StringComparison.Ordinal)
                 .Replace(" ", string.Empty, StringComparison.Ordinal)

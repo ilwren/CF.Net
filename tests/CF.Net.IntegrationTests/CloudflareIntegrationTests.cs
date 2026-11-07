@@ -1,5 +1,6 @@
 using System.Reflection;
 using System.Security.Cryptography;
+using System.Security.Cryptography.X509Certificates;
 using System.Text.Json;
 using CFNet.Exceptions;
 using CFNet.Http;
@@ -4139,8 +4140,12 @@ public class WriteIntegrationTests : CloudflareIntegrationTest
             RSASignaturePadding.Pkcs1);
 
         // PemEncoding writes the block; whether it uses LF or CRLF depends on the platform it runs on, and
-        // Cloudflare asks for newline-encoded PEM, so the request settles the line endings itself.
-        var csr = PemEncoding.Write("CERTIFICATE REQUEST", signingRequest.CreateSigningRequest());
+        // Cloudflare asks for newline-encoded PEM, so the request settles the line endings itself. Typed
+        // explicitly rather than with var, because the two calls are the whole reason this fact exists and a
+        // build error in either of them should say which one it was.
+        byte[] signingRequestBytes = signingRequest.CreateSigningRequest();
+        string csr = PemEncoding.Write("CERTIFICATE REQUEST", signingRequestBytes);
+        Assert.StartsWith("-----BEGIN CERTIFICATE REQUEST-----", csr, StringComparison.Ordinal);
         var unmodelled = new SortedSet<string>();
         string? serial = null;
 

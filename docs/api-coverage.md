@@ -416,7 +416,7 @@ would be wrong for one of them.
 **A path collision worth knowing.** `…/hostnames/{hostname}` and `…/hostnames/certificates` are siblings, so a
 hostname literally called `certificates` would be indistinguishable from the certificate collection.
 
-
+---
 
 ## Origin CA certificates
 

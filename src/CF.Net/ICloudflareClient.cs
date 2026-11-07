@@ -88,6 +88,12 @@ public interface ICloudflareClient : IDisposable
     IRulesetService Rulesets { get; }
 
     /// <summary>
+    /// Page rules: a zone's URL patterns and what Cloudflare should do differently for the requests that match
+    /// them - forwarding one, caching another, turning a feature off for a third.
+    /// </summary>
+    IPageRulesService PageRules { get; }
+
+    /// <summary>
     /// Workers Observability: the telemetry destinations an account exports Worker logs, traces and metrics
     /// to.
     /// </summary>

@@ -316,6 +316,7 @@ jobs:
             # account-scoped Workers probes below: a token holding Workers Routes Read but no Zone Resources
             # entry for this zone answers 10007 here, and that is the failure this probe exists to name.
             probe workers_routes "$zone/workers/routes"
+            probe pagerules "$zone/pagerules"
           fi
 
           if [ -n "${CLOUDFLARE_ACCOUNT_ID:-}" ]; then
@@ -414,6 +415,10 @@ jobs:
                'Rulesets and Mass URL Redirects'),
               ('turnstile', 'GET /accounts/{account_id}/challenges/widgets', 'Turnstile Sites - Read',
                '5d78fd7895974fd0bdbbbb079482721b', 'read', ''),
+              ('pagerules', 'GET /zones/{zone_id}/pagerules', 'Page Rules - Read',
+               'b415b70a4fd1412886f164451f20405c', 'read',
+               'a zone with no page rules answers 200 and an empty list; Zone Read is accepted for this too, '
+               'so a 403 here is neither group'),
               ('workers_routes', 'GET /zones/{zone_id}/workers/routes', 'Workers Routes - Read',
                '2072033d694d415a936eaeb94e6405b8', 'read',
                'a zone with no routes answers 200 and an empty list; this one is zone-scoped, so it needs '

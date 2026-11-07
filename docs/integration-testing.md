@@ -216,6 +216,7 @@ For the full suite:
 | Zone | DNS — Edit | DNS records, zone file export and import, **and DNSSEC** — DNSSEC has no permission group of its own, it rides on DNS |
 | Zone | Zone Settings — Edit | `GET`/`PATCH /zones/{id}/settings`, including the SSL enrolment settings Cloudflare serves from that path |
 | Zone | Cache Purge — Purge | `POST /zones/{id}/purge_cache` |
+| Zone | Page Rules — Edit | `GET`/`POST`/`PUT`/`PATCH`/`DELETE /zones/{id}/pagerules`. **Zone — Edit** is accepted instead, and a plan only allows three page rules, so a create can be refused for a full zone rather than for the token |
 | Zone | SSL and Certificates — Edit | certificate packs, Universal SSL, custom hostnames, the fallback origin, origin TLS client auth |
 | Account | Account Settings — Read | `GET /accounts`, `GET /accounts/{id}` |
 | Account | Workers Scripts — Edit | scripts, deployments, secrets, the `workers.dev` subdomain and custom domains |
@@ -309,10 +310,10 @@ permissions but no zone resource returns `10007 Route not found` for a zone you 
 in the dashboard, which reads like a bug in the client and is not.
 
 This is common enough that the workflow checks for it before running anything. The step named *Check what
-the credentials can actually reach* makes one `curl` call per product area — thirty-one of them, covering
+the credentials can actually reach* makes one `curl` call per product area — thirty-two of them, covering
 zones, DNS records, DNSSEC and its ZSK, zone settings, certificate packs, custom hostnames, origin TLS
 client auth, cache purge, the account, Workers scripts, domains and routes, Pages, D1, KV, R2, rulesets,
-filter lists, Turnstile, load balancing, Workers AI and account tokens — with the same
+filter lists, page rules, Turnstile, load balancing, Workers AI and account tokens — with the same
 credentials, and reports each answer as `label=status[shape]`:
 
 ```
@@ -611,6 +612,7 @@ assertion failure mid-test still removes the resource.
 | `A_turnstile_widget_can_be_created_read_updated_rotated_and_deleted` | a widget, then a `PUT` of it and a rotated secret | `DELETE` the widget |
 | `A_worker_secret_can_be_written_listed_read_bulk_written_and_removed` | a script with a `secret_text` binding, a secret written onto it, and a bulk write that adds one and removes the other | the secret, then `DELETE` the script |
 | `A_worker_route_can_be_created_read_changed_and_removed` | a script, a proxied A record in your zone, a route on that hostname, and two `PUT`s of it - one that moves the pattern, one that takes the script off | the route, the record, then `DELETE` the script |
+| `A_page_rule_can_be_created_read_patched_replaced_and_removed` | one page rule on a generated hostname, then a `PATCH` of its status and a `PUT` that turns it into a redirect | `DELETE` the rule - which also frees the allowance slot it used |
 
 Resource names are generated with a timestamp and a random suffix (`cfnet-it-20260101120000-a1b2c3d4`)
 so concurrent runs never collide, and a failed cleanup leaves something obviously disposable.

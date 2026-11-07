@@ -1112,6 +1112,52 @@ ruleset overrides an `execute` rule carries, and rate limit rule parameters.
 
 ---
 
+## Page Rules
+
+`IPageRulesService` — `client.PageRules`
+
+A page rule is a URL pattern in one zone and what Cloudflare should do differently for the requests that match
+it: forward them elsewhere, cache them longer, switch a feature off. Rulesets are the newer engine and cover
+most of the same ground, but a page rule still has actions no ruleset does — forwarding a URL among them — and
+every zone carries a plan-sized allowance of them, **three on a free plan**.
+
+Three things about the shape are worth knowing. The path is `pagerules`, one word, not the `page_rules` the
+resource's own name suggests. Only one page rule runs per request, and when two could match the one with the
+**higher** priority wins — the opposite of an evaluation order counted from one. And Cloudflare publishes that
+a rule's actions "can redirect to another URL or override settings, but not both", so `forwarding_url` has to
+be the only action when it is there, which `EnsureValid()` checks locally.
+
+| Method | Endpoint | Notes |
+| --- | --- | --- |
+| `ListAsync(PageRuleListParameters?, zoneId)` | `GET /zones/{zone_id}/pagerules` | a **bare array** with no paging, because an allowance of three needs none. Filters: `status`, `order` ∈ `status`/`priority`, `direction`, `match` ∈ `all`/`any` (the same two words the DNS and zone lists use) |
+| `GetAsync(pageRuleId, zoneId)` | `GET /zones/{zone_id}/pagerules/{pagerule_id}` | the same shape the list answers, so one type covers both; null when the zone has no rule of that id |
+| `CreateAsync(PageRuleRequest, zoneId)` | `POST /zones/{zone_id}/pagerules` | the body **is** the rule: `targets` and `actions` required, `priority` defaults to 1, `status` to active. Needs **Page Rules Write** — or **Zone Write**, which Cloudflare accepts for all six calls |
+| `UpdateAsync(pageRuleId, PageRuleRequest, zoneId)` | `PUT /zones/{zone_id}/pagerules/{pagerule_id}` | **replaces the whole rule**, which Cloudflare says will then exactly match what was sent: a target or an action left out is gone rather than kept |
+| `EditAsync(pageRuleId, PageRuleRequest, zoneId)` | `PATCH /zones/{zone_id}/pagerules/{pagerule_id}` | changes only the fields it is given — how a rule is disabled or reordered without resending the rest. A patch that sets nothing is refused locally rather than sent |
+| `DeleteAsync(pageRuleId, zoneId)` | `DELETE /zones/{zone_id}/pagerules/{pagerule_id}` | Cloudflare answers the id it deleted; deleting also frees the allowance slot |
+
+- **An action's value is raw JSON**, and deliberately so. Page rules publish around thirty actions that share
+  no value shape: `disable_apps` takes none, `cache_level` a word, `edge_cache_ttl` a number of seconds,
+  `cache_key_fields` a nested object, and `cache_ttl_by_status` a map whose values are numbers *or* the words
+  `no-cache` and `no-store`. `PageRuleAction` keeps `Value` as the JSON that arrived and offers factories for
+  the common shapes — `NoValue`, `On`, `Off`, `Flag`, `Text`, `Number`, `Forwarding` — with `ValueAsText()` and
+  `ValueAsNumber()` reading either spelling back, because Cloudflare is not consistent about which one an
+  action uses.
+- **Some action ids belong to page rules and some are zone settings.** `PageRuleActionIds` carries the
+  seventeen of its own (`forwarding_url`, `cache_key_fields`, `edge_cache_ttl`, `disable_zaraz` and the rest);
+  the others are zone-setting ids applied to one set of URLs, and are the words `ZoneSettingIds` already
+  carries, so a page rule action and the setting it overrides are named the same thing.
+- **A target is `{target: "url", constraint: {operator, value}}`**, with `url` the only kind published — kept
+  as a constant rather than an enum with one member — and `operator` ∈ `matches`/`contains`/`equals`/
+  `not_equal`/`not_contain`, which is an enum because it is a closed vocabulary. `PageRuleTarget.Matching()`
+  builds the ordinary wildcard case.
+- **Both timestamps are kept twice**: `CreatedOn` and `ModifiedOn` are the strings Cloudflare sent, and
+  `CreatedOnUtc` and `ModifiedOnUtc` read them through `CloudflareTimestamps`. The endpoint publishes
+  `date-time` for both, and a live answer is what settles whether that promise holds; until then the words
+  survive beside the instant rather than being parsed on the way in and lost if they are not ISO.
+
+---
+
 ## Turnstile
 
 `ITurnstileService` — `client.Turnstile`

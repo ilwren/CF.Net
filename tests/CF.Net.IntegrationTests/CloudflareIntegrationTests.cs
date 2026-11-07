@@ -6,6 +6,7 @@ using CFNet.Models.Common;
 using CFNet.Models.D1;
 using CFNet.Models.Dns;
 using CFNet.Models.Kv;
+using CFNet.Models.PageRules;
 using CFNet.Models.Pages;
 using CFNet.Models.R2;
 using CFNet.Models.Rules;
@@ -3887,6 +3888,199 @@ public class WriteIntegrationTests : CloudflareIntegrationTest
         foreach (var key in additional.Keys)
         {
             into.Add($"{tag}: {key}");
+        }
+    }
+
+    [Fact]
+    public async Task A_page_rule_can_be_created_read_patched_replaced_and_removed()
+    {
+        if (!SkipWithoutZone() || !SkipWithoutWritePermission())
+        {
+            return;
+        }
+
+        var zone = await ReadableZoneAsync();
+        if (zone is null)
+        {
+            return;
+        }
+
+        var pattern = $"{UniqueSuffix("cfnet-pr")}.{zone!.Name}/*";
+        var unmodelled = new SortedSet<string>();
+        var surprises = new List<string>();
+        PageRule? created = null;
+
+        try
+        {
+            try
+            {
+                // One zone setting overridden for one URL pattern. No forwarding action here, because a rule
+                // that redirects cannot carry another action and the redirect gets its own PUT below.
+                created = await Client.PageRules.CreateAsync(
+                    new PageRuleRequest
+                    {
+                        Targets = new List<PageRuleTarget> { PageRuleTarget.Matching(pattern) },
+                        Actions = new List<PageRuleAction> { PageRuleAction.On(PageRuleActionIds.BrowserCheck) },
+                        Status = PageRuleStatus.Active,
+                    },
+                    ZoneId);
+            }
+            catch (CloudflareApiException exception)
+            {
+                // A plan carries an allowance of page rules - three on a free plan - so a refusal here is as
+                // likely to be a full zone as anything wrong with the rule, and everything after this needs a
+                // rule to work on.
+                Warn($"POST /zones/{{zone_id}}/pagerules was refused: {exception.StatusCode} " +
+                     $"[{exception.ErrorCode}] {Truncate(exception.Message, 240)}. A plan carries an allowance " +
+                     "of page rules, three on a free plan, so a full zone reads exactly like this.");
+                return;
+            }
+
+            Assert.False(string.IsNullOrWhiteSpace(created.Id));
+            Assert.Equal(PageRuleStatus.Active, created.Status);
+            Assert.Equal(pattern, created.Targets!.Single().Constraint!.Value);
+            Assert.Equal(PageRuleTargetOperator.Matches, created.Targets.Single().Constraint!.Operator);
+            Assert.Equal(PageRuleActionIds.BrowserCheck, created.Actions!.Single().Id);
+            Assert.Equal("on", created.Actions.Single().ValueAsText());
+            CollectPageRule(unmodelled, "pagerules.create", created);
+            Log($"created page rule {created.Id} for {pattern}");
+
+            if (created.Priority != 1)
+            {
+                surprises.Add(
+                    $"the create answered priority={created.Priority} for a body that sent none, and the " +
+                    "endpoint documents a default of 1");
+            }
+
+            if (created.CreatedOnUtc is null && created.CreatedOn is { Length: > 0 } stamp)
+            {
+                surprises.Add($"created_on arrived as '{Truncate(stamp, 60)}', which is not a timestamp this library can read");
+            }
+
+            var listed = await Client.PageRules.ListAsync(zoneId: ZoneId);
+            Assert.Contains(listed, rule => rule.Id == created.Id);
+
+            // The list takes four filters and no paging. The status one is checkable against a rule this fact
+            // just made active; the ordering one is a claim about Cloudflare rather than about this library, so
+            // it is reported when it does not hold rather than asserted.
+            var disabled = await Client.PageRules.ListAsync(
+                new PageRuleListParameters { Status = PageRuleStatus.Disabled }, ZoneId);
+            Assert.DoesNotContain(disabled, rule => rule.Id == created.Id);
+
+            var ordered = await Client.PageRules.ListAsync(
+                new PageRuleListParameters
+                {
+                    Order = PageRuleListOrder.Priority,
+                    Direction = SortDirection.Descending,
+                },
+                ZoneId);
+            var priorities = ordered.Select(rule => rule.Priority ?? 0).ToList();
+            if (priorities.Count > 1 && !priorities.SequenceEqual(priorities.OrderByDescending(priority => priority)))
+            {
+                surprises.Add(
+                    $"?order=priority&direction=desc answered priorities [{string.Join(", ", priorities)}], " +
+                    "which is not descending");
+            }
+
+            var read = await Client.PageRules.GetAsync(created.Id!, ZoneId);
+            Assert.NotNull(read);
+            Assert.Equal(pattern, read!.Targets!.Single().Constraint!.Value);
+            Assert.Equal(created.Actions!.Single().Id, read.Actions!.Single().Id);
+            CollectPageRule(unmodelled, "pagerules.get", read);
+
+            // The patch is the point of having both a PUT and a PATCH: one field changes, and the targets and
+            // actions are left alone rather than replaced with nothing.
+            var patched = await Client.PageRules.EditAsync(
+                created.Id!,
+                new PageRuleRequest { Status = PageRuleStatus.Disabled },
+                ZoneId);
+            Assert.Equal(PageRuleStatus.Disabled, patched.Status);
+            Assert.Equal(pattern, patched.Targets!.Single().Constraint!.Value);
+            Assert.Equal(PageRuleActionIds.BrowserCheck, patched.Actions!.Single().Id);
+            CollectPageRule(unmodelled, "pagerules.patch", patched);
+
+            var afterPatch = await Client.PageRules.GetAsync(created.Id!, ZoneId);
+            Assert.Equal(PageRuleStatus.Disabled, afterPatch!.Status);
+            Assert.Equal(pattern, afterPatch.Targets!.Single().Constraint!.Value);
+
+            // And the PUT replaces the whole rule: a new target, a different action, a priority of its own, and
+            // no status in the body at all - which is what makes the answer's status worth reporting.
+            var forwarded = await Client.PageRules.UpdateAsync(
+                created.Id!,
+                new PageRuleRequest
+                {
+                    Targets = new List<PageRuleTarget> { PageRuleTarget.Of(PageRuleTargetOperator.Matches, pattern) },
+                    Actions = new List<PageRuleAction> { PageRuleAction.Forwarding(302, $"https://{zone.Name}/") },
+                    Priority = 2,
+                },
+                ZoneId);
+            Assert.Equal(2, forwarded.Priority);
+            Assert.Equal(PageRuleActionIds.ForwardingUrl, forwarded.Actions!.Single().Id);
+            Assert.Equal(pattern, forwarded.Targets!.Single().Constraint!.Value);
+            CollectPageRule(unmodelled, "pagerules.put", forwarded);
+
+            if (forwarded.Status != PageRuleStatus.Disabled)
+            {
+                surprises.Add(
+                    $"a PUT that sent no status answered '{forwarded.Status}' where the rule was disabled " +
+                    "before it, so a PUT resets a field its body leaves out rather than keeping it");
+            }
+
+            var value = forwarded.Actions.Single().Value;
+            if (value is not { ValueKind: JsonValueKind.Object } ||
+                !value.Value.TryGetProperty("status_code", out _) ||
+                !value.Value.TryGetProperty("url", out _))
+            {
+                surprises.Add(
+                    $"the forwarding_url value came back as {Truncate(value?.GetRawText(), 200)}, which is not " +
+                    "the {status_code, url} object the create takes");
+            }
+
+            await Client.PageRules.DeleteAsync(created.Id!, ZoneId);
+            Assert.Null(await Client.PageRules.GetAsync(created.Id!, ZoneId));
+            Log($"deleted page rule {created.Id}, and the GET of it answers 'not there'");
+            created = null;
+        }
+        finally
+        {
+            if (created?.Id is { Length: > 0 } id)
+            {
+                await Client.PageRules.DeleteAsync(id, ZoneId);
+                Log($"deleted page rule {id} on the way out");
+            }
+
+            if (surprises.Count > 0)
+            {
+                Warn($"Page rules answered something other than what the reference publishes: " +
+                     $"{string.Join("; ", surprises)}.");
+            }
+
+            if (unmodelled.Count > 0)
+            {
+                Warn("Fields the page rule answers carried that this library does not model: " +
+                     $"{string.Join("; ", unmodelled)}. They are readable through AdditionalData, and naming " +
+                     "them here is how they become properties instead of guesses.");
+            }
+        }
+    }
+
+    /// <summary>
+    /// Records the fields a page rule answer carried that this library does not model - on the rule, on each of
+    /// its targets and constraints, and on each of its actions, tagged with the call they came from.
+    /// </summary>
+    private static void CollectPageRule(SortedSet<string> into, string tag, PageRule rule)
+    {
+        Collect(into, tag, rule.AdditionalData);
+
+        foreach (var target in rule.Targets ?? new List<PageRuleTarget>())
+        {
+            Collect(into, $"{tag}.target", target.AdditionalData);
+            Collect(into, $"{tag}.constraint", target.Constraint?.AdditionalData);
+        }
+
+        foreach (var action in rule.Actions ?? new List<PageRuleAction>())
+        {
+            Collect(into, $"{tag}.action.{action.Id}", action.AdditionalData);
         }
     }
 

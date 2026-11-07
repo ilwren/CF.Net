@@ -62,6 +62,7 @@ public sealed class CloudflareClient : ICloudflareClient, IDisposable
         R2 = new R2Service(transport);
         Lists = new RulesListService(transport);
         Rulesets = new RulesetService(transport);
+        PageRules = new PageRulesService(transport);
         WorkersObservability = new WorkersObservabilityService(transport);
         WorkersAi = new WorkersAiService(transport);
         Turnstile = new TurnstileService(transport);
@@ -117,6 +118,9 @@ public sealed class CloudflareClient : ICloudflareClient, IDisposable
 
     /// <inheritdoc />
     public IRulesetService Rulesets { get; }
+
+    /// <inheritdoc />
+    public IPageRulesService PageRules { get; }
 
     /// <inheritdoc />
     public IWorkersObservabilityService WorkersObservability { get; }

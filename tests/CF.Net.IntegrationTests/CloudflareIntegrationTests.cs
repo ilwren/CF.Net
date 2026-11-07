@@ -3647,7 +3647,12 @@ public class WriteIntegrationTests : CloudflareIntegrationTest
             // A binding in a script's metadata names a secret; the secrets endpoint is what stores a value
             // behind the name. Whether an upload that carried one already stored it is worth knowing, so it is
             // recorded rather than assumed.
-            var before = await Client.Workers.ListSecretsAsync(name);
+            // A script Cloudflare has just accepted with a 200 can take a moment to be visible to the secrets
+            // path beside it, which answers 404 [10007] "This Worker does not exist on your account" until it
+            // is - a live run failed here on the delay rather than on anything about the request.
+            var before = await ReadUntilAsync(
+                () => Client.Workers.ListSecretsAsync(name),
+                secrets => secrets.Any(secret => secret.Name == firstName));
             Log($"secrets straight after the upload: {before.Count} - {string.Join(", ", before)}");
             ReportSecretFields("GET /accounts/{account_id}/workers/scripts/{script_name}/secrets", before);
 
@@ -3677,7 +3682,9 @@ public class WriteIntegrationTests : CloudflareIntegrationTest
                 "PATCH /accounts/{account_id}/workers/scripts/{script_name}/secrets-bulk",
                 bulk.Values.ToList());
 
-            var after = await Client.Workers.ListSecretsAsync(name);
+            var after = await ReadUntilAsync(
+                () => Client.Workers.ListSecretsAsync(name),
+                secrets => secrets.Any(secret => secret.Name == secondName));
             Assert.Contains(after, secret => secret.Name == secondName);
 
             if (after.Any(secret => secret.Name == firstName))
@@ -3696,7 +3703,9 @@ public class WriteIntegrationTests : CloudflareIntegrationTest
             }
 
             await Client.Workers.DeleteSecretAsync(name, secondName);
-            var emptied = await Client.Workers.ListSecretsAsync(name);
+            var emptied = await ReadUntilAsync(
+                () => Client.Workers.ListSecretsAsync(name),
+                secrets => !secrets.Any(secret => secret.Name == secondName));
             Assert.DoesNotContain(emptied, secret => secret.Name == secondName);
             Log($"deleted {secondName}; {emptied.Count} secret(s) left on {name}");
         }
@@ -3768,7 +3777,11 @@ public class WriteIntegrationTests : CloudflareIntegrationTest
             Collect(unmodelled, "routes.create", created.AdditionalData);
             Log($"created route {created.Id}: {created}");
 
-            var listed = await Client.Workers.ListRoutesAsync(ZoneId);
+            // A route the create has just answered with its own id can take a moment to turn up in the zone's
+            // list, which is what failed a live run with an empty collection here rather than with a refusal.
+            var listed = await ReadUntilAsync(
+                () => Client.Workers.ListRoutesAsync(ZoneId),
+                routes => routes.Any(route => route.Id == created.Id));
             Assert.Contains(listed, route => route.Id == created.Id);
             Collect(
                 unmodelled,
@@ -3777,10 +3790,14 @@ public class WriteIntegrationTests : CloudflareIntegrationTest
 
             // The list takes no filter, so which routes belong to one Worker is answered locally - and the
             // script name here belongs to nothing else, so this is exactly one route.
-            var mine = await Client.Workers.ListRoutesForWorkerAsync(scriptName, ZoneId);
+            var mine = await ReadUntilAsync(
+                () => Client.Workers.ListRoutesForWorkerAsync(scriptName, ZoneId),
+                routes => routes.Count > 0);
             Assert.Equal(new[] { created.Id }, mine.Select(route => route.Id));
 
-            var read = await Client.Workers.GetRouteAsync(created.Id!, ZoneId);
+            var read = await ReadUntilAsync(
+                () => Client.Workers.GetRouteAsync(created.Id!, ZoneId),
+                route => route is not null);
             Assert.NotNull(read);
             Assert.Equal(pattern, read!.Pattern);
             Assert.Equal(scriptName, read.Script);
@@ -3815,7 +3832,12 @@ public class WriteIntegrationTests : CloudflareIntegrationTest
             }
 
             await Client.Workers.DeleteRouteAsync(created.Id!, ZoneId);
-            Assert.Null(await Client.Workers.GetRouteAsync(created.Id!, ZoneId));
+            // The same delay runs the other way here: a deleted route can still be readable for a moment, so
+            // "gone" is read until it is rather than asserted on the first answer.
+            var gone = await ReadUntilAsync(
+                () => Client.Workers.GetRouteAsync(created.Id!, ZoneId),
+                route => route is null);
+            Assert.Null(gone);
             Log($"deleted route {created.Id} and the GET of it answers 'not there'");
 
             // The account's Workers settings ride along: the read and the write are the same two fields, so
@@ -3971,7 +3993,12 @@ public class WriteIntegrationTests : CloudflareIntegrationTest
                 surprises.Add($"created_on arrived as '{Truncate(stamp, 60)}', which is not a timestamp this library can read");
             }
 
-            var listed = await Client.PageRules.ListAsync(zoneId: ZoneId);
+            // Cloudflare answers a write with a 200 and then takes a moment to show it on the read beside it,
+            // which is what the route and secret facts met live, so the reads here wait for the rule rather
+            // than assert on the first answer.
+            var listed = await ReadUntilAsync(
+                () => Client.PageRules.ListAsync(zoneId: ZoneId),
+                rules => rules.Any(rule => rule.Id == ruleId));
             Assert.Contains(listed, rule => rule.Id == ruleId);
 
             // The list takes four filters and no paging. The status one is checkable against a rule this fact
@@ -3996,7 +4023,9 @@ public class WriteIntegrationTests : CloudflareIntegrationTest
                     "which is not descending");
             }
 
-            var read = await Client.PageRules.GetAsync(ruleId, ZoneId);
+            var read = await ReadUntilAsync(
+                () => Client.PageRules.GetAsync(ruleId, ZoneId),
+                rule => rule is not null);
             Assert.NotNull(read);
             Assert.Equal(pattern, read!.Targets!.Single().Constraint!.Value);
             Assert.Equal(created.Actions!.Single().Id, read.Actions!.Single().Id);
@@ -4051,7 +4080,11 @@ public class WriteIntegrationTests : CloudflareIntegrationTest
             }
 
             await Client.PageRules.DeleteAsync(ruleId, ZoneId);
-            Assert.Null(await Client.PageRules.GetAsync(ruleId, ZoneId));
+            // The same delay runs the other way for a delete: a rule can still be readable for a moment.
+            var gone = await ReadUntilAsync(
+                () => Client.PageRules.GetAsync(ruleId, ZoneId),
+                rule => rule is null);
+            Assert.Null(gone);
             Log($"deleted page rule {ruleId}, and the GET of it answers 'not there'");
             created = null;
         }

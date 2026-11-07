@@ -328,6 +328,51 @@ public abstract class CloudflareIntegrationTest : IDisposable
     /// <param name="exception">The exception the transport threw.</param>
     /// <returns>A reason for the run report.</returns>
     /// <summary>
+    /// Reads until an answer satisfies a predicate, or the attempts run out and the last answer is returned for
+    /// the caller to assert on. Cloudflare accepts a write with a 200 and then answers the read beside it as
+    /// though nothing had happened for a moment: a live run failed one fact with <b>404 [10007] This Worker does
+    /// not exist on your account</b> on the secrets path of a script it had just uploaded, and another with an
+    /// empty route list a call after the route's own create had answered its id. Neither is a defect in the
+    /// request, so the write facts read again rather than fail - and a 404 is retried here for the same reason,
+    /// because "not there yet" and "not there" arrive the same way.
+    /// </summary>
+    /// <typeparam name="T">What the read answers with.</typeparam>
+    /// <param name="read">The read to make.</param>
+    /// <param name="satisfied">What makes an answer good enough to return.</param>
+    /// <param name="attempts">How many reads to make in total.</param>
+    /// <param name="delay">How long to wait between them.</param>
+    /// <returns>The first answer that satisfied the predicate, or the last one read.</returns>
+    protected static async Task<T> ReadUntilAsync<T>(
+        Func<Task<T>> read,
+        Func<T, bool> satisfied,
+        int attempts = 4,
+        TimeSpan? delay = null)
+    {
+        var wait = delay ?? TimeSpan.FromSeconds(3);
+        for (var attempt = 1; ; attempt++)
+        {
+            T answer;
+            try
+            {
+                answer = await read().ConfigureAwait(false);
+            }
+            catch (CloudflareApiException exception)
+                when (attempt < attempts && exception.StatusCode is { } status && (int)status == 404)
+            {
+                await Task.Delay(wait).ConfigureAwait(false);
+                continue;
+            }
+
+            if (satisfied(answer) || attempt >= attempts)
+            {
+                return answer;
+            }
+
+            await Task.Delay(wait).ConfigureAwait(false);
+        }
+    }
+
+    /// <summary>
     /// Runs a call again when Cloudflare answers 5xx, which it does from time to time for reasons of its own:
     /// one live run failed three facts with <b>503 Service Unavailable</b> and no structured error in the body
     /// at all, while uploading and deleting a Worker script. A 5xx is not an answer about the request, so

@@ -3937,13 +3937,14 @@ public class WriteIntegrationTests : CloudflareIntegrationTest
             }
 
             Assert.False(string.IsNullOrWhiteSpace(created.Id));
+            var ruleId = created.Id!;
             Assert.Equal(PageRuleStatus.Active, created.Status);
             Assert.Equal(pattern, created.Targets!.Single().Constraint!.Value);
             Assert.Equal(PageRuleTargetOperator.Matches, created.Targets.Single().Constraint!.Operator);
             Assert.Equal(PageRuleActionIds.BrowserCheck, created.Actions!.Single().Id);
             Assert.Equal("on", created.Actions.Single().ValueAsText());
             CollectPageRule(unmodelled, "pagerules.create", created);
-            Log($"created page rule {created.Id} for {pattern}");
+            Log($"created page rule {ruleId} for {pattern}");
 
             if (created.Priority != 1)
             {
@@ -3958,14 +3959,14 @@ public class WriteIntegrationTests : CloudflareIntegrationTest
             }
 
             var listed = await Client.PageRules.ListAsync(zoneId: ZoneId);
-            Assert.Contains(listed, rule => rule.Id == created.Id);
+            Assert.Contains(listed, rule => rule.Id == ruleId);
 
             // The list takes four filters and no paging. The status one is checkable against a rule this fact
             // just made active; the ordering one is a claim about Cloudflare rather than about this library, so
             // it is reported when it does not hold rather than asserted.
             var disabled = await Client.PageRules.ListAsync(
                 new PageRuleListParameters { Status = PageRuleStatus.Disabled }, ZoneId);
-            Assert.DoesNotContain(disabled, rule => rule.Id == created.Id);
+            Assert.DoesNotContain(disabled, rule => rule.Id == ruleId);
 
             var ordered = await Client.PageRules.ListAsync(
                 new PageRuleListParameters
@@ -3982,7 +3983,7 @@ public class WriteIntegrationTests : CloudflareIntegrationTest
                     "which is not descending");
             }
 
-            var read = await Client.PageRules.GetAsync(created.Id!, ZoneId);
+            var read = await Client.PageRules.GetAsync(ruleId, ZoneId);
             Assert.NotNull(read);
             Assert.Equal(pattern, read!.Targets!.Single().Constraint!.Value);
             Assert.Equal(created.Actions!.Single().Id, read.Actions!.Single().Id);
@@ -3991,7 +3992,7 @@ public class WriteIntegrationTests : CloudflareIntegrationTest
             // The patch is the point of having both a PUT and a PATCH: one field changes, and the targets and
             // actions are left alone rather than replaced with nothing.
             var patched = await Client.PageRules.EditAsync(
-                created.Id!,
+                ruleId,
                 new PageRuleRequest { Status = PageRuleStatus.Disabled },
                 ZoneId);
             Assert.Equal(PageRuleStatus.Disabled, patched.Status);
@@ -3999,14 +4000,14 @@ public class WriteIntegrationTests : CloudflareIntegrationTest
             Assert.Equal(PageRuleActionIds.BrowserCheck, patched.Actions!.Single().Id);
             CollectPageRule(unmodelled, "pagerules.patch", patched);
 
-            var afterPatch = await Client.PageRules.GetAsync(created.Id!, ZoneId);
+            var afterPatch = await Client.PageRules.GetAsync(ruleId, ZoneId);
             Assert.Equal(PageRuleStatus.Disabled, afterPatch!.Status);
             Assert.Equal(pattern, afterPatch.Targets!.Single().Constraint!.Value);
 
             // And the PUT replaces the whole rule: a new target, a different action, a priority of its own, and
             // no status in the body at all - which is what makes the answer's status worth reporting.
             var forwarded = await Client.PageRules.UpdateAsync(
-                created.Id!,
+                ruleId,
                 new PageRuleRequest
                 {
                     Targets = new List<PageRuleTarget> { PageRuleTarget.Of(PageRuleTargetOperator.Matches, pattern) },
@@ -4036,9 +4037,9 @@ public class WriteIntegrationTests : CloudflareIntegrationTest
                     "the {status_code, url} object the create takes");
             }
 
-            await Client.PageRules.DeleteAsync(created.Id!, ZoneId);
-            Assert.Null(await Client.PageRules.GetAsync(created.Id!, ZoneId));
-            Log($"deleted page rule {created.Id}, and the GET of it answers 'not there'");
+            await Client.PageRules.DeleteAsync(ruleId, ZoneId);
+            Assert.Null(await Client.PageRules.GetAsync(ruleId, ZoneId));
+            Log($"deleted page rule {ruleId}, and the GET of it answers 'not there'");
             created = null;
         }
         finally

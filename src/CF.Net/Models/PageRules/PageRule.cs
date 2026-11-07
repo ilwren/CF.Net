@@ -65,9 +65,11 @@ public sealed class PageRule
     /// <returns>The rule described in one line.</returns>
     public override string ToString()
     {
-        var targets = Targets is { } list ? string.Join(", ", list.Select(target => target.ToString())) : "(none)";
-        var actions = Actions is { } actions
-            ? string.Join(", ", actions.Select(action => action.ToString()))
+        var targets = Targets is { } targetList
+            ? string.Join(", ", targetList.Select(target => target.ToString()))
+            : "(none)";
+        var actions = Actions is { } actionList
+            ? string.Join(", ", actionList.Select(action => action.ToString()))
             : "(none)";
         return $"{targets} => {actions} (priority {Priority}, {Status})";
     }

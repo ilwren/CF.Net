@@ -410,6 +410,10 @@ jobs:
                'Rulesets and Mass URL Redirects'),
               ('turnstile', 'GET /accounts/{account_id}/challenges/widgets', 'Turnstile Sites - Read',
                '5d78fd7895974fd0bdbbbb079482721b', 'read', ''),
+              ('workers_routes', 'GET /zones/{zone_id}/workers/routes', 'Workers Routes - Read',
+               '2072033d694d415a936eaeb94e6405b8', 'read',
+               'a zone with no routes answers 200 and an empty list; this one is zone-scoped, so it needs '
+               'CLOUDFLARE_ZONE_ID to name a zone inside the Zone Resources the token was given'),
               ('lb_monitors', 'GET /accounts/{account_id}/load_balancers/monitors',
                'Load Balancing: Monitors and Pools - Read', '9d24387c6e8544e2bc4024a03991339f', 'read', ''),
               ('lb_pools', 'GET /accounts/{account_id}/load_balancers/pools',

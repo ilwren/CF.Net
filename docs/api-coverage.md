@@ -464,6 +464,14 @@ Credentials created before 2026 carry no prefix, so a prefix check can only ever
 | `PutSecretAsync(scriptName, WorkerSecretRequest, accountId)` | `PUT …/workers/scripts/{script_name}/secrets` | the body **is** the secret, unwrapped: `{name, type, text}` for a string, `{name, type, key_base64 or key_jwk, format, usages, algorithm}` for a key. Replaces any secret already stored under that name, and a request mixing the two kinds is refused locally. A `(scriptName, secretName, text)` overload covers the ordinary case. **The only call a secret's value ever travels on** |
 | `DeleteSecretAsync(scriptName, secretName, bool urlEncoded, accountId)` | `DELETE …/workers/scripts/{script_name}/secrets/{secret_name}` | nothing modelled back - the answer is `null` |
 | `UpdateSecretsBulkAsync(scriptName, WorkerSecretBulkRequest, accountId)` | `PATCH …/workers/scripts/{script_name}/secrets-bulk` | **`secrets-bulk`, not a sub-path of `secrets`**. One body writes several secrets and removes others - **a name mapped to `null` is a deletion**, which is why the type has its own converter: this library's writer omits nulls, and here that would turn a removal into nothing at all. Answers `{name: secret}`. Worth one call rather than several because each write makes a version of the script |
+| `ListRoutesAsync(zoneId)` | `GET /zones/{zone_id}/workers/routes` | **zone-scoped**, unlike everything else in this service: a bare array of `WorkerRoute` (`id`, `pattern`, `script`), no paging and no filters. Needs **Workers Routes Read** |
+| `ListRoutesForWorkerAsync(scriptName, zoneId)` | `GET /zones/{zone_id}/workers/routes` | the same call, filtered here - the endpoint takes no filter, so "which routes run this Worker" is a local answer, the way `ListDomainsForWorkerAsync` is. A route with no script belongs to no Worker |
+| `GetRouteAsync(routeId, zoneId)` | `GET /zones/{zone_id}/workers/routes/{route_id}` | one route; null when the zone has no route of that id |
+| `CreateRouteAsync(WorkerRouteRequest, zoneId)` | `POST /zones/{zone_id}/workers/routes` | the body is the route: `{pattern, script?}`. Needs **Workers Routes Write**. Leaving `script` out creates a route that runs nothing, which **negates the less specific patterns around it** - `WorkerRouteRequest.Bypassing(pattern)` says that in so many words, and `WorkerRoute.BypassesWorkers` reads it back |
+| `UpdateRouteAsync(routeId, WorkerRouteRequest, zoneId)` | `PUT /zones/{zone_id}/workers/routes/{route_id}` | **a whole-route replacement**: a `script` left null takes the Worker off a route that had one. Read it first when only one of the two is meant to change |
+| `DeleteRouteAsync(routeId, zoneId)` | `DELETE /zones/{zone_id}/workers/routes/{route_id}` | Cloudflare answers the id it removed and nothing else worth modelling |
+| `GetAccountSettingsAsync(accountId)` | `GET /accounts/{account_id}/workers/account-settings` | the account-wide defaults - `default_usage_model` and `green_compute` - not one script's settings, which live on `…/script-settings` |
+| `UpdateAccountSettingsAsync(WorkersAccountSettings, accountId)` | `PUT /accounts/{account_id}/workers/account-settings` | the same two fields, so a read can be handed straight back. Cloudflare documents this write as needing **Account Settings Write**, a group the Workers permissions do not include |
 | `UploadAsync(UploadWorkerScriptRequest, accountId)` | `PUT …/workers/scripts/{script_name}` | `multipart/form-data`: a JSON `metadata` part plus one file part per module |
 | `UploadAsync(scriptName, source, compatibilityDate, bindings, accountId)` | `PUT …/workers/scripts/{script_name}` | convenience overload for a single-module worker |
 | `DeleteAsync(scriptName, accountId)` | `DELETE …/workers/scripts/{script_name}` | |
@@ -503,6 +511,24 @@ key rather than a string: `format` and `usages` are closed vocabularies, so they
 stays the JSON Cloudflare sent, because an algorithm object differs per algorithm the way WebCrypto's own do.
 Secrets are covered by the **Workers Scripts Read and Write** permissions a script already needs, so no extra
 group is wanted for them.
+
+Routes are the one zone-scoped corner of this service, and their pattern grammar is Cloudflare's own rather
+than a regex: `*` is the only operator, a pattern may begin with `http://` or `https://` (and matches both
+schemes when it does not), a hostname may begin with `*` or `*.`, a path may end with `*`, query parameters may
+not appear at all, and the pattern has to include the zone it is created in. `*example.com` matches any
+hostname *ending* in `example.com` - `not-example.com` included - which is why matching only a zone and its
+subdomains takes two routes. The most specific pattern wins when several match, the path component is case
+sensitive, and the hostname is not for routes created on or after 15 October 2023. Only the shapes the
+published rules rule out outright - no pattern, a query or fragment, whitespace - are refused locally; whether
+a pattern belongs to the zone is Cloudflare's call, and it refuses one that does not and says why. A route also
+needs a **proxied DNS record** for its hostname before any traffic reaches it, which is a DNS matter rather
+than a routing one.
+
+The account settings are typed as the strings and flags Cloudflare publishes, with one deliberate exception:
+`default_usage_model` stays a `string` because the endpoint's own documentation does not enumerate its words,
+and `standard` - which `WorkerUsageModels` carries beside `bundled` and `unbound` - is not one of the words the
+documentation mentions. An enum there would make a word this library has not met a hard failure on an account
+that is working perfectly.
 
 ⛔ The newer JSON-only flow (`POST /workers/workers` → `…/versions` → `…/deployments`), static asset
 upload sessions, Workers for Platforms dispatch namespaces, and query filters on the domain list. Workers AI

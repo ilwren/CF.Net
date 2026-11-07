@@ -3725,6 +3725,158 @@ public class WriteIntegrationTests : CloudflareIntegrationTest
     }
 
     [Fact]
+    public async Task A_worker_route_can_be_created_read_changed_and_removed()
+    {
+        if (!SkipWithoutZone() || !SkipWithoutWritePermission())
+        {
+            return;
+        }
+
+        var zone = await ReadableZoneAsync();
+        if (zone is null)
+        {
+            return;
+        }
+
+        var scriptName = $"cfnet-it-{Guid.NewGuid().ToString("N")[..10]}";
+
+        // A route only carries traffic for a hostname that has a proxied DNS record in the zone, so this makes
+        // one rather than borrowing a hostname that may or may not be there.
+        var hostname = $"{UniqueSuffix("cfnet-route")}.{zone!.Name}";
+        var unmodelled = new SortedSet<string>();
+        DnsRecord? record = null;
+
+        try
+        {
+            await Retrying5xxAsync(() => Client.Workers.UploadAsync(
+                scriptName,
+                "export default { async fetch(request) { return new Response('cf-net'); } }",
+                "2025-01-01"));
+
+            record = await Retrying5xxAsync(() => Client.DnsRecords.CreateAddressRecordAsync(
+                hostname, "192.0.2.1", proxied: true, ttl: 1, ZoneId));
+            Log($"created the proxied record {record.Name} for the route to point at");
+
+            var pattern = $"{hostname}/*";
+            var created = await Client.Workers.CreateRouteAsync(
+                WorkerRouteRequest.For(pattern, scriptName), ZoneId);
+            Assert.False(string.IsNullOrWhiteSpace(created.Id));
+            Assert.Equal(pattern, created.Pattern);
+            Assert.Equal(scriptName, created.Script);
+            Assert.False(created.BypassesWorkers);
+            Collect(unmodelled, "routes.create", created.AdditionalData);
+            Log($"created route {created.Id}: {created}");
+
+            var listed = await Client.Workers.ListRoutesAsync(ZoneId);
+            Assert.Contains(listed, route => route.Id == created.Id);
+
+            // The list takes no filter, so which routes belong to one Worker is answered locally - and the
+            // script name here belongs to nothing else, so this is exactly one route.
+            var mine = await Client.Workers.ListRoutesForWorkerAsync(scriptName, ZoneId);
+            Assert.Equal(new[] { created.Id }, mine.Select(route => route.Id));
+
+            var read = await Client.Workers.GetRouteAsync(created.Id!, ZoneId);
+            Assert.NotNull(read);
+            Assert.Equal(pattern, read!.Pattern);
+            Assert.Equal(scriptName, read.Script);
+            Collect(unmodelled, "routes.get", read.AdditionalData);
+
+            // A PUT replaces the whole route, so this one keeps the script and moves the pattern.
+            var narrower = $"{hostname}/api/*";
+            var updated = await Client.Workers.UpdateRouteAsync(
+                created.Id!,
+                WorkerRouteRequest.For(narrower, scriptName),
+                ZoneId);
+            Assert.Equal(narrower, updated.Pattern);
+            Assert.Equal(scriptName, updated.Script);
+            Collect(unmodelled, "routes.put", updated.AdditionalData);
+
+            // The same PUT with no script is what turns a route into a bypass - a documented kind of route,
+            // which negates the less specific patterns around it. Not asserted on, because no published
+            // example answers one; if Cloudflare keeps the script instead, the Warn below says so.
+            var bypass = await Client.Workers.UpdateRouteAsync(
+                created.Id!,
+                WorkerRouteRequest.Bypassing(narrower),
+                ZoneId);
+            Collect(unmodelled, "routes.put-without-script", bypass.AdditionalData);
+            var afterBypass = await Client.Workers.GetRouteAsync(created.Id!, ZoneId);
+            if (bypass.Script is not null || afterBypass?.Script is not null)
+            {
+                Warn($"PUT /zones/{{zone_id}}/workers/routes/{{route_id}} with no script in the body answered " +
+                     $"'{bypass.Script}', and the GET after it answered '{afterBypass?.Script}'. A route with " +
+                     "no script is documented as one that runs nothing and negates the less specific patterns " +
+                     "around it, so either this library is dropping the field on the way out or Cloudflare is " +
+                     "keeping the previous one.");
+            }
+
+            await Client.Workers.DeleteRouteAsync(created.Id!, ZoneId);
+            Assert.Null(await Client.Workers.GetRouteAsync(created.Id!, ZoneId));
+            Log($"deleted route {created.Id} and the GET of it answers 'not there'");
+
+            // The account's Workers settings ride along: the read and the write are the same two fields, so
+            // this reads them and hands them straight back, which changes nothing either way.
+            var settings = await Client.Workers.GetAccountSettingsAsync();
+            Log($"workers account settings: {settings}");
+            Collect(unmodelled, "account-settings.get", settings.AdditionalData);
+
+            try
+            {
+                var put = await Client.Workers.UpdateAccountSettingsAsync(settings);
+                Log($"the account-settings PUT answered {put}");
+                Collect(unmodelled, "account-settings.put", put.AdditionalData);
+            }
+            catch (CloudflareApiException exception)
+            {
+                // Cloudflare's own page for this endpoint says the write needs Account Settings Write, a
+                // different group from the Workers ones the rest of this fact runs on, so a refusal here is
+                // that rather than a defect in the call - and it is the one thing worth reporting.
+                Warn($"PUT /accounts/{{account_id}}/workers/account-settings was refused: " +
+                     $"{exception.StatusCode} [{exception.ErrorCode}] {Truncate(exception.Message, 240)}. " +
+                     "Cloudflare documents this write as needing Account Settings Write, which the token this " +
+                     "run uses does not carry.");
+            }
+        }
+        finally
+        {
+            if (record?.Id is { Length: > 0 } recordId)
+            {
+                await Client.DnsRecords.DeleteAsync(recordId, ZoneId);
+                Log($"deleted the proxied record {hostname}");
+            }
+
+            await Client.Workers.DeleteAsync(scriptName);
+            Log($"deleted the script {scriptName}");
+
+            if (unmodelled.Count > 0)
+            {
+                Warn("Fields the Workers routes and account-settings answers carried that this library does not " +
+                     $"model: {string.Join("; ", unmodelled)}. They are readable through AdditionalData, and " +
+                     "naming them here is how they become properties instead of guesses.");
+            }
+        }
+    }
+
+    /// <summary>
+    /// Records the fields an answer carried that this library does not model, tagged with the call they came
+    /// from, so one Warn at the end of a fact can name them all.
+    /// </summary>
+    private static void Collect(
+        SortedSet<string> into,
+        string tag,
+        IDictionary<string, System.Text.Json.JsonElement>? additional)
+    {
+        if (additional is not { Count: > 0 })
+        {
+            return;
+        }
+
+        foreach (var key in additional.Keys)
+        {
+            into.Add($"{tag}: {key}");
+        }
+    }
+
+    [Fact]
     public async Task A_turnstile_widget_can_be_created_read_updated_rotated_and_deleted()
     {
         if (!SkipWithoutAccount() || !SkipWithoutWritePermission())

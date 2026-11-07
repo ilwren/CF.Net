@@ -418,6 +418,139 @@ public interface IWorkersScriptsService
         string? accountId = null,
         CancellationToken cancellationToken = default);
 
+    /// <summary>Lists the Workers routes in a zone.</summary>
+    /// <param name="zoneId">Zone whose routes to list; falls back to the configured default when null.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>Every route in the zone, in whatever order Cloudflare keeps them.</returns>
+    /// <remarks>
+    /// <c>GET /zones/{zone_id}/workers/routes</c>, a bare array with no paging and no filters - and note that
+    /// routes are <b>zone-scoped</b>, unlike the rest of this service, which is account-scoped. Which of them
+    /// belong to one Worker is answered by <see cref="ListRoutesForWorkerAsync"/>.
+    /// </remarks>
+    Task<IReadOnlyList<WorkerRoute>> ListRoutesAsync(
+        string? zoneId = null,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>Lists the routes in a zone that run one Worker.</summary>
+    /// <param name="scriptName">The Worker whose routes to pick out.</param>
+    /// <param name="zoneId">Zone whose routes to list; falls back to the configured default when null.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>The zone's routes whose script is this Worker, empty when it has none there.</returns>
+    /// <remarks>
+    /// The endpoint takes no filter, so this reads the zone's routes and picks the matching ones out - the same
+    /// way <c>ListDomainsForWorkerAsync</c> answers which custom domains a Worker has. Routes that run no
+    /// script at all never match, whatever the name.
+    /// </remarks>
+    Task<IReadOnlyList<WorkerRoute>> ListRoutesForWorkerAsync(
+        string scriptName,
+        string? zoneId = null,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>Reads one route.</summary>
+    /// <param name="routeId">The route's id, as the create or the list gave it.</param>
+    /// <param name="zoneId">Zone the route lives in; falls back to the configured default when null.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>The route, or null when the zone has no route of that id.</returns>
+    /// <remarks>
+    /// <c>GET /zones/{zone_id}/workers/routes/{route_id}</c> answers the same three fields the list does.
+    /// </remarks>
+    Task<WorkerRoute?> GetRouteAsync(
+        string routeId,
+        string? zoneId = null,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>Creates a route in a zone, mapping a URL pattern to a Worker.</summary>
+    /// <param name="route">The pattern, and the Worker to run on it - or no Worker, for a bypass.</param>
+    /// <param name="zoneId">Zone to create the route in; falls back to the configured default when null.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>The route as Cloudflare stored it, with the id it gave it.</returns>
+    /// <remarks>
+    /// <para>
+    /// <c>POST /zones/{zone_id}/workers/routes</c>, needing <b>Workers Routes Write</b>. The pattern is matched
+    /// against the whole request URL, the most specific pattern wins when several match, and the hostname it
+    /// names has to have a proxied DNS record in the zone for any traffic to reach it.
+    /// </para>
+    /// <para>
+    /// Leaving <see cref="WorkerRouteRequest.Script"/> null creates a route that runs nothing, which negates the
+    /// less specific patterns around it - how one path is taken back out of a Worker rather than given a
+    /// second one.
+    /// </para>
+    /// <para>
+    /// Only the pattern shapes Cloudflare documents as invalid are refused locally; that a pattern belongs to
+    /// the zone is left to Cloudflare, which refuses it and says why.
+    /// </para>
+    /// </remarks>
+    Task<WorkerRoute> CreateRouteAsync(
+        WorkerRouteRequest route,
+        string? zoneId = null,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>Changes a route's pattern, its Worker, or both.</summary>
+    /// <param name="routeId">The route to change.</param>
+    /// <param name="route">The pattern and the Worker, as the route should be afterwards.</param>
+    /// <param name="zoneId">Zone the route lives in; falls back to the configured default when null.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>The route as Cloudflare stored it.</returns>
+    /// <remarks>
+    /// <c>PUT /zones/{zone_id}/workers/routes/{route_id}</c> is a whole-route replacement, so a
+    /// <see cref="WorkerRouteRequest.Script"/> left null takes the Worker off a route that had one and turns it
+    /// into a bypass. Read the route first when only one of the two is meant to change.
+    /// </remarks>
+    Task<WorkerRoute> UpdateRouteAsync(
+        string routeId,
+        WorkerRouteRequest route,
+        string? zoneId = null,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>Removes a route from a zone.</summary>
+    /// <param name="routeId">The route to remove.</param>
+    /// <param name="zoneId">Zone the route lives in; falls back to the configured default when null.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <remarks>
+    /// <c>DELETE /zones/{zone_id}/workers/routes/{route_id}</c>. Cloudflare answers the id it removed and
+    /// nothing else worth modelling, so there is nothing to return; requests to that pattern go back to
+    /// whatever less specific route or origin was there before.
+    /// </remarks>
+    Task DeleteRouteAsync(
+        string routeId,
+        string? zoneId = null,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>Reads the account's Workers settings.</summary>
+    /// <param name="accountId">Account id; falls back to the configured default when null.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>The account's default usage model and whether it prefers renewable energy.</returns>
+    /// <remarks>
+    /// <c>GET /accounts/{account_id}/workers/account-settings</c> - account-wide defaults, not one script's
+    /// settings, which live on <c>…/workers/scripts/{script_name}/script-settings</c>.
+    /// </remarks>
+    Task<WorkersAccountSettings> GetAccountSettingsAsync(
+        string? accountId = null,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>Changes the account's Workers settings.</summary>
+    /// <param name="settings">The settings as they should be afterwards.</param>
+    /// <param name="accountId">Account id; falls back to the configured default when null.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>The settings as Cloudflare stored them.</returns>
+    /// <remarks>
+    /// <para>
+    /// <c>PUT /accounts/{account_id}/workers/account-settings</c>, which Cloudflare's own documentation says
+    /// needs <b>Account Settings Write</b> - a different group from the Workers Scripts permissions the rest of
+    /// this service uses, and one a token built only for Workers will not have.
+    /// </para>
+    /// <para>
+    /// The read and the write are the same two fields, so handing <see cref="GetAccountSettingsAsync"/> its own
+    /// answer back changes nothing and is the safe way to prove the call works. Writing
+    /// <see cref="WorkerUsageModels.Unbound"/> is a Workers Paid feature, and Cloudflare refuses it on an
+    /// account without that plan.
+    /// </para>
+    /// </remarks>
+    Task<WorkersAccountSettings> UpdateAccountSettingsAsync(
+        WorkersAccountSettings settings,
+        string? accountId = null,
+        CancellationToken cancellationToken = default);
+
     /// <summary>
     /// Uploads (creates or replaces) a Worker. Uses the <c>multipart/form-data</c> shape Cloudflare
     /// requires: a <c>metadata</c> part plus one part per module.
@@ -1379,6 +1512,132 @@ public sealed class WorkersScriptsService : CloudflareService, IWorkersScriptsSe
         return response.Result ?? new Dictionary<string, WorkerSecret>();
     }
 
+    /// <inheritdoc />
+    public async Task<IReadOnlyList<WorkerRoute>> ListRoutesAsync(
+        string? zoneId = null,
+        CancellationToken cancellationToken = default)
+    {
+        var request = CloudflareRequest.Get(RoutesPath(ResolveZoneId(zoneId)));
+        request.OperationName = "List Worker Routes";
+
+        // Zone-scoped, and a bare array: the published list is a single page with nothing to filter by.
+        var response = await Transport
+            .SendAsync<List<WorkerRoute>>(request, cancellationToken)
+            .ConfigureAwait(false);
+        return response.Result ?? new List<WorkerRoute>();
+    }
+
+    /// <inheritdoc />
+    public async Task<IReadOnlyList<WorkerRoute>> ListRoutesForWorkerAsync(
+        string scriptName,
+        string? zoneId = null,
+        CancellationToken cancellationToken = default)
+    {
+        var name = Require(scriptName, nameof(scriptName));
+        var routes = await ListRoutesAsync(zoneId, cancellationToken).ConfigureAwait(false);
+
+        return routes
+            .Where(route => string.Equals(route.Script, name, StringComparison.Ordinal))
+            .ToList();
+    }
+
+    /// <inheritdoc />
+    public async Task<WorkerRoute?> GetRouteAsync(
+        string routeId,
+        string? zoneId = null,
+        CancellationToken cancellationToken = default)
+    {
+        var request = CloudflareRequest
+            .Get(RoutePath(ResolveZoneId(zoneId), routeId))
+            .Tolerate(System.Net.HttpStatusCode.NotFound);
+        request.OperationName = "Get Worker Route";
+
+        var response = await Transport
+            .SendAsync<WorkerRoute>(request, cancellationToken)
+            .ConfigureAwait(false);
+        return response.Result;
+    }
+
+    /// <inheritdoc />
+    public async Task<WorkerRoute> CreateRouteAsync(
+        WorkerRouteRequest route,
+        string? zoneId = null,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(route);
+        route.EnsureValid();
+
+        var request = CloudflareRequest.Post(RoutesPath(ResolveZoneId(zoneId)), route);
+        request.OperationName = "Create Worker Route";
+
+        var response = await Transport
+            .SendAsync<WorkerRoute>(request, cancellationToken)
+            .ConfigureAwait(false);
+        return response.EnsureResult();
+    }
+
+    /// <inheritdoc />
+    public async Task<WorkerRoute> UpdateRouteAsync(
+        string routeId,
+        WorkerRouteRequest route,
+        string? zoneId = null,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(route);
+        route.EnsureValid();
+
+        var request = CloudflareRequest.Put(RoutePath(ResolveZoneId(zoneId), routeId), route);
+        request.OperationName = "Update Worker Route";
+
+        var response = await Transport
+            .SendAsync<WorkerRoute>(request, cancellationToken)
+            .ConfigureAwait(false);
+        return response.EnsureResult();
+    }
+
+    /// <inheritdoc />
+    public async Task DeleteRouteAsync(
+        string routeId,
+        string? zoneId = null,
+        CancellationToken cancellationToken = default)
+    {
+        var request = CloudflareRequest.Delete(RoutePath(ResolveZoneId(zoneId), routeId));
+        request.OperationName = "Delete Worker Route";
+
+        await SendVoidAsync(request, cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <inheritdoc />
+    public async Task<WorkersAccountSettings> GetAccountSettingsAsync(
+        string? accountId = null,
+        CancellationToken cancellationToken = default)
+    {
+        var request = CloudflareRequest.Get(AccountSettingsPath(ResolveAccountId(accountId)));
+        request.OperationName = "Get Workers Account Settings";
+
+        var response = await Transport
+            .SendAsync<WorkersAccountSettings>(request, cancellationToken)
+            .ConfigureAwait(false);
+        return response.EnsureResult();
+    }
+
+    /// <inheritdoc />
+    public async Task<WorkersAccountSettings> UpdateAccountSettingsAsync(
+        WorkersAccountSettings settings,
+        string? accountId = null,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(settings);
+
+        var request = CloudflareRequest.Put(AccountSettingsPath(ResolveAccountId(accountId)), settings);
+        request.OperationName = "Update Workers Account Settings";
+
+        var response = await Transport
+            .SendAsync<WorkersAccountSettings>(request, cancellationToken)
+            .ConfigureAwait(false);
+        return response.EnsureResult();
+    }
+
     private static string ScriptPath(string accountId, string scriptName) =>
         $"{AccountPath(accountId)}/workers/scripts/{CloudflareUrl.EncodeSegment(Require(scriptName, nameof(scriptName)))}";
 
@@ -1390,4 +1649,12 @@ public sealed class WorkersScriptsService : CloudflareService, IWorkersScriptsSe
 
     private static string SecretPath(string accountId, string scriptName, string secretName) =>
         $"{SecretsPath(accountId, scriptName)}/{CloudflareUrl.EncodeSegment(Require(secretName, nameof(secretName)))}";
+
+    private static string RoutesPath(string zoneId) => $"{ZonePath(zoneId)}/workers/routes";
+
+    private static string RoutePath(string zoneId, string routeId) =>
+        $"{RoutesPath(zoneId)}/{CloudflareUrl.EncodeSegment(Require(routeId, nameof(routeId)))}";
+
+    private static string AccountSettingsPath(string accountId) =>
+        $"{AccountPath(accountId)}/workers/account-settings";
 }

@@ -97,7 +97,7 @@ Console.WriteLine($"{zones.Count} of {zones.TotalCount} zones");
 | `client.Ssl` | `ISslService` | certificate packs, Universal SSL, validation details, the enrolment settings Cloudflare files under SSL, the origin TLS compliance modes that bound them, certificate analysis |
 | `client.CustomHostnames` | `ICustomHostnamesService` | SSL for SaaS: custom hostnames, their certificates, the challenges that validate them and the zone-wide fallback origin |
 | `client.OriginTlsClientAuth` | `IOriginTlsClientAuthService` | mutual TLS towards the origin: the zone switch, per-hostname certificate associations, uploaded client certificates, and the deprecated zone-level ones |
-| `client.Workers` | `IWorkersScriptsService` | scripts, module content, script settings, deployments, secrets, `workers.dev` subdomain |
+| `client.Workers` | `IWorkersScriptsService` | scripts, module content, script settings, deployments, secrets, routes, account settings, `workers.dev` subdomain |
 | `client.Pages` | `IPagesProjectsService` | projects, deployments, custom domains |
 | `client.D1` | `ID1DatabaseService` | databases, SQL queries, batches, backups |
 | `client.Kv` | `IKvService` | namespaces, key listings, values, bulk writes |
@@ -190,7 +190,7 @@ Phase 1 covers six product areas. See [docs/api-coverage.md](docs/api-coverage.m
 
 **Domains (Zones + DNS)** — list/get/create/update/delete zones, `ListAllAsync` across pages, activation checks, cache purge (everything, files, tags, hosts, prefixes, ignore-tags), DNS records with typed `A`/`AAAA`/`CNAME`/`TXT`/`MX`/`NS`/`SRV`/`CAA`/`LOC` data, `FindAsync`, PATCH and PUT semantics, and DNSSEC — the DS record and its parts, enable/disable/delete, the multi-signer / presigned / NSEC3 switches, and the Zone Signing Keys.
 
-**Workers** — list/search scripts, get script metadata, download module content (base64 decoded for you), read `script-settings`, multipart upload with any mix of modules and bindings, delete, gradual deployments with percentage validation, secrets (write, list, bulk write and remove - no read of a secret ever answers its value), account and per-script `workers.dev` subdomain.
+**Workers** — list/search scripts, get script metadata, download module content (base64 decoded for you), read `script-settings`, multipart upload with any mix of modules and bindings, delete, gradual deployments with percentage validation, secrets (write, list, bulk write and remove - no read of a secret ever answers its value), zone routes including the ones that run no script, the account's Workers settings, account and per-script `workers.dev` subdomain.
 
 **Pages** — projects (list/get/create/update/delete), deployments (list/get/create/delete), custom domains (list/add/verify/delete), build and deployment configuration models with `[JsonExtensionData]` so unknown fields survive a round trip.
 

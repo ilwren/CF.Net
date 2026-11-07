@@ -4152,6 +4152,7 @@ public class WriteIntegrationTests : CloudflareIntegrationTest
         string csr = new string(pem);
         Assert.StartsWith("-----BEGIN CERTIFICATE REQUEST-----", csr, StringComparison.Ordinal);
         var unmodelled = new SortedSet<string>();
+        var surprises = new List<string>();
         string? serial = null;
 
         try
@@ -4171,9 +4172,20 @@ public class WriteIntegrationTests : CloudflareIntegrationTest
             Assert.Equal(OriginCaCertificateValidities.OneYear, signed.RequestedValidity);
             Assert.Contains(hostname, signed.Hostnames!);
             Assert.StartsWith("-----BEGIN CERTIFICATE-----", signed.Certificate!, StringComparison.Ordinal);
-            Assert.NotNull(signed.ExpiresOnUtc);
             Collect(unmodelled, "origin-ca.create", signed.AdditionalData);
             Log($"signed {signed}");
+
+            // Both of this resource's timestamps are optional in what Cloudflare publishes for them, and a
+            // live run is what says which of them actually arrives - so the words are reported, the instant is
+            // read when there is one to read, and a shape CloudflareTimestamps cannot parse is a surprise
+            // rather than a failure. A field this library does not model at all is reported by the Collect
+            // above, which is how a renamed timestamp would show up.
+            ReportTimestamp(
+                surprises,
+                "the create",
+                "expires_on",
+                signed.ExpiresOn,
+                signed.ExpiresOnUtc);
 
             var listed = await ReadUntilAsync(
                 () => Client.OriginCaCertificates.ListAsync(ZoneId),
@@ -4198,9 +4210,9 @@ public class WriteIntegrationTests : CloudflareIntegrationTest
 
             var revoked = await Retrying5xxAsync(() => Client.OriginCaCertificates.RevokeAsync(certificateId));
             Assert.Equal(certificateId, revoked.Id);
-            Assert.NotNull(revoked.RevokedAtUtc);
             Collect(unmodelled, "origin-ca.revoke", revoked.AdditionalData);
             Log($"{revoked}");
+            ReportTimestamp(surprises, "the revoke", "revoked_at", revoked.RevokedAt, revoked.RevokedAtUtc);
 
             // A revoked certificate drops out of the list rather than changing status, which makes the list the
             // only place this resource says a revoke happened - so it is read until it stops naming the serial.
@@ -4247,6 +4259,12 @@ public class WriteIntegrationTests : CloudflareIntegrationTest
                 }
             }
 
+            if (surprises.Count > 0)
+            {
+                Warn($"Origin CA certificates answered something other than what the reference publishes: " +
+                     $"{string.Join("; ", surprises)}.");
+            }
+
             if (unmodelled.Count > 0)
             {
                 Warn("Fields the origin CA certificate answers carried that this library does not model: " +
@@ -4254,6 +4272,38 @@ public class WriteIntegrationTests : CloudflareIntegrationTest
                      "them here is how they become properties instead of guesses.");
             }
         }
+    }
+
+    /// <summary>
+    /// Reports a timestamp this resource publishes as optional: what arrived, whether it parsed, and - when it
+    /// did not - a line for the run's surprises rather than a failed assertion. Cloudflare documents both of
+    /// this resource's timestamps as optional, so an absent one is an answer to learn from and not a defect.
+    /// <c>CloudflareTimestamps</c> reads ISO 8601, a space where the standard puts a <c>T</c>, and a bare date,
+    /// so a value it cannot read is a shape nobody has met yet.
+    /// </summary>
+    /// <param name="surprises">The list a shape this library cannot read is added to.</param>
+    /// <param name="call">Which call answered it, for the log line.</param>
+    /// <param name="field">The field's name on the wire.</param>
+    /// <param name="raw">The string that arrived.</param>
+    /// <param name="parsed">What <c>CloudflareTimestamps</c> made of it.</param>
+    private void ReportTimestamp(
+        List<string> surprises,
+        string call,
+        string field,
+        string? raw,
+        DateTimeOffset? parsed)
+    {
+        if (parsed is { } instant)
+        {
+            Log($"{call} answered {field}='{raw}', which reads as {instant:o}");
+            return;
+        }
+
+        var arrived = string.IsNullOrWhiteSpace(raw) ? "nothing at all" : $"'{Truncate(raw, 80)}'";
+        Log($"{call} answered {field} as {arrived}, which is not an instant this library can read");
+        surprises.Add(
+            $"{call} answered {field} as {arrived} - the field is optional in what Cloudflare publishes for " +
+            "it, so this records what a live answer actually carries rather than failing on it");
     }
 
     /// <summary>

@@ -94,6 +94,12 @@ public interface ICloudflareClient : IDisposable
     IPageRulesService PageRules { get; }
 
     /// <summary>
+    /// Origin CA certificates: the certificates Cloudflare's own CA signs for an origin server, from a CSR the
+    /// caller generated so that the private key never leaves the origin.
+    /// </summary>
+    IOriginCaCertificatesService OriginCaCertificates { get; }
+
+    /// <summary>
     /// Workers Observability: the telemetry destinations an account exports Worker logs, traces and metrics
     /// to.
     /// </summary>

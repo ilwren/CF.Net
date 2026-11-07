@@ -104,6 +104,7 @@ Console.WriteLine($"{zones.Count} of {zones.TotalCount} zones");
 | `client.R2` | `IR2Service` | buckets, including jurisdiction-restricted ones |
 | `client.Lists` | `IRulesListService` | account rule lists — IPs, hostnames, ASNs and redirect pairs — their items, and the bulk operations that change them |
 | `client.PageRules` | `IPageRulesService` | a zone's page rules: list with filters, get, create, replace (`PUT`), change one field (`PATCH`), delete |
+| `client.OriginCaCertificates` | `IOriginCaCertificatesService` | origin CA certificates: have Cloudflare's CA sign a CSR you generated, list a zone's, read one by its serial number, revoke it |
 | `client.Rulesets` | `IRulesetService` | the ruleset engine at every phase, served from an account path or a zone path |
 | `client.WorkersObservability` | `IWorkersObservabilityService` | telemetry destinations, keys and values, live tail, and the telemetry query API |
 | `client.WorkersAi` | `IWorkersAiService` | the model catalogue, tasks, authors and model schemas, inference, fine-tune listings, to-markdown |

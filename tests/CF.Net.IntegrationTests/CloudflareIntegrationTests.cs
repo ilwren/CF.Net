@@ -1,4 +1,5 @@
 using System.Reflection;
+using System.Security.Cryptography;
 using System.Text.Json;
 using CFNet.Exceptions;
 using CFNet.Http;
@@ -6,6 +7,7 @@ using CFNet.Models.Common;
 using CFNet.Models.D1;
 using CFNet.Models.Dns;
 using CFNet.Models.Kv;
+using CFNet.Models.OriginCa;
 using CFNet.Models.PageRules;
 using CFNet.Models.Pages;
 using CFNet.Models.R2;
@@ -4105,6 +4107,139 @@ public class WriteIntegrationTests : CloudflareIntegrationTest
             if (unmodelled.Count > 0)
             {
                 Warn("Fields the page rule answers carried that this library does not model: " +
+                     $"{string.Join("; ", unmodelled)}. They are readable through AdditionalData, and naming " +
+                     "them here is how they become properties instead of guesses.");
+            }
+        }
+    }
+
+    [Fact]
+    public async Task An_origin_ca_certificate_can_be_requested_listed_read_and_revoked()
+    {
+        if (!SkipWithoutZone() || !SkipWithoutWritePermission())
+        {
+            return;
+        }
+
+        var zone = await ReadableZoneAsync();
+        if (zone is null)
+        {
+            return;
+        }
+
+        // The private key is generated here and never leaves this process, which is the whole design of an
+        // origin CA certificate: the caller makes a key and a CSR on the origin, Cloudflare's CA signs the CSR,
+        // and the answer is a certificate for a key nobody else has ever seen.
+        var hostname = $"{UniqueSuffix("cfnet-oca")}.{zone!.Name}";
+        using var rsa = RSA.Create(2048);
+        var signingRequest = new CertificateRequest(
+            $"CN={hostname}",
+            rsa,
+            HashAlgorithmName.SHA256,
+            RSASignaturePadding.Pkcs1);
+
+        // PemEncoding writes the block; whether it uses LF or CRLF depends on the platform it runs on, and
+        // Cloudflare asks for newline-encoded PEM, so the request settles the line endings itself.
+        var csr = PemEncoding.Write("CERTIFICATE REQUEST", signingRequest.CreateSigningRequest());
+        var unmodelled = new SortedSet<string>();
+        string? serial = null;
+
+        try
+        {
+            var signed = await Retrying5xxAsync(() => Client.OriginCaCertificates.CreateAsync(
+                OriginCaCertificateRequest.ForRsa(
+                    csr,
+                    new[] { hostname },
+                    OriginCaCertificateValidities.OneYear)));
+
+            // The id is the certificate's x509 serial number rather than a UUID, and it is what the read and
+            // the revoke both take.
+            serial = signed.Id;
+            var certificateId = signed.Id!;
+            Assert.False(string.IsNullOrWhiteSpace(certificateId));
+            Assert.Equal(OriginCaCertificateRequestType.OriginRsa, signed.RequestType);
+            Assert.Equal(OriginCaCertificateValidities.OneYear, signed.RequestedValidity);
+            Assert.Contains(hostname, signed.Hostnames!);
+            Assert.StartsWith("-----BEGIN CERTIFICATE-----", signed.Certificate!, StringComparison.Ordinal);
+            Assert.NotNull(signed.ExpiresOnUtc);
+            Collect(unmodelled, "origin-ca.create", signed.AdditionalData);
+            Log($"signed {signed}");
+
+            var listed = await ReadUntilAsync(
+                () => Client.OriginCaCertificates.ListAsync(ZoneId),
+                page => page.Items.Any(certificate => certificate.Id == certificateId));
+            Assert.Contains(listed.Items, certificate => certificate.Id == certificateId);
+            Collect(
+                unmodelled,
+                "origin-ca.list",
+                listed.Items.First(certificate => certificate.Id == certificateId).AdditionalData);
+
+            var read = await ReadUntilAsync(
+                () => Client.OriginCaCertificates.GetAsync(certificateId),
+                certificate => certificate is not null);
+            Assert.NotNull(read);
+            Assert.Equal(certificateId, read!.Id);
+
+            // The same certificate, read back by its serial number: an origin is meant to be able to compare
+            // what it was given with what it can fetch again.
+            Assert.Equal(signed.Certificate, read.Certificate);
+            Assert.Equal(signed.Hostnames, read.Hostnames);
+            Collect(unmodelled, "origin-ca.get", read.AdditionalData);
+
+            var revoked = await Retrying5xxAsync(() => Client.OriginCaCertificates.RevokeAsync(certificateId));
+            Assert.Equal(certificateId, revoked.Id);
+            Assert.NotNull(revoked.RevokedAtUtc);
+            Collect(unmodelled, "origin-ca.revoke", revoked.AdditionalData);
+            Log($"{revoked}");
+
+            // A revoked certificate drops out of the list rather than changing status, which makes the list the
+            // only place this resource says a revoke happened - so it is read until it stops naming the serial.
+            var emptied = await ReadUntilAsync(
+                () => Client.OriginCaCertificates.ListAsync(ZoneId),
+                page => !page.Items.Any(certificate => certificate.Id == certificateId));
+            Assert.DoesNotContain(emptied.Items, certificate => certificate.Id == certificateId);
+
+            var afterRevoke = await Client.OriginCaCertificates.GetAsync(certificateId);
+            if (afterRevoke is not null)
+            {
+                Warn($"GET /accounts/{{account_id}}/origin_ca_certificates/{{certificate_id}} still answers a " +
+                     $"revoked certificate: {Truncate(afterRevoke.ToString(), 200)}. The list drops revoked " +
+                     "certificates, so a single read is the one place a revoked one survives - which is worth " +
+                     "knowing before an origin trusts a read to mean 'still valid'.");
+            }
+            else
+            {
+                Log("the GET of a revoked certificate answers 'not there', the same as the list");
+            }
+        }
+        catch (CloudflareApiException exception)
+        {
+            // Nothing after a refused create can be done, and the reason is the interesting part: an account
+            // is entitled to origin CA certificates on every plan, so a refusal here is about the token, the
+            // hostname or the CSR rather than about a paid feature.
+            Warn($"an origin CA certificate call was refused: {exception.StatusCode} [{exception.ErrorCode}] " +
+                 $"{Truncate(exception.Message, 300)}. Origin CA certificates are free on every plan, so this " +
+                 $"is about the token, the hostname '{hostname}' or the CSR rather than about entitlement.");
+        }
+        finally
+        {
+            if (serial is { Length: > 0 } id)
+            {
+                try
+                {
+                    await Client.OriginCaCertificates.RevokeAsync(id);
+                    Log($"revoked origin CA certificate {id} on the way out");
+                }
+                catch (CloudflareApiException exception)
+                {
+                    // Already revoked is the expected answer when the fact got that far itself.
+                    Log($"revoking {id} on the way out answered {exception.StatusCode} [{exception.ErrorCode}]");
+                }
+            }
+
+            if (unmodelled.Count > 0)
+            {
+                Warn("Fields the origin CA certificate answers carried that this library does not model: " +
                      $"{string.Join("; ", unmodelled)}. They are readable through AdditionalData, and naming " +
                      "them here is how they become properties instead of guesses.");
             }

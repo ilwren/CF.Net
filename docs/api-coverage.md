@@ -418,6 +418,72 @@ hostname literally called `certificates` would be indistinguishable from the cer
 
 
 
+## Origin CA certificates
+
+`IOriginCaCertificatesService` — `client.OriginCaCertificates`
+
+An Origin CA certificate is one Cloudflare's own certificate authority signs for an **origin server**, so the
+leg between Cloudflare's edge and the machine behind it is encrypted without a certificate from a public CA.
+It is free on every plan, browsers do not trust it, and it is not meant to be served to them — it is what the
+dashboard's *SSL/TLS → Origin Server* tab creates.
+
+| Method | Endpoint | Notes |
+| --- | --- | --- |
+| `CreateAsync(OriginCaCertificateRequest)` | `POST /accounts/{account_id}/origin_ca_certificates` | body is the CSR, the hostnames and the request type; `zone_id` too for a `keyless-certificate` request, which answers only `id`, `certificate` and `expires_on` |
+| `ListAsync(zoneId, OriginCaCertificateListParameters?)` | `GET /accounts/{account_id}/origin_ca_certificates` | **`zone_id` is required** by the endpoint, so it is a parameter of the method rather than an optional filter; `page`, `per_page` bounded 5–50; revoked certificates are not included |
+| `ListAllAsync(zoneId, OriginCaCertificateListParameters?)` | `GET /accounts/{account_id}/origin_ca_certificates` | `IAsyncEnumerable<OriginCaCertificate>`, walks every page and stops on `result_info` or on an empty one |
+| `GetAsync(certificateId)` | `GET /accounts/{account_id}/origin_ca_certificates/{certificate_id}` | `certificateId` is the **x509 serial number**; null on 404 |
+| `RevokeAsync(certificateId)` | `DELETE /accounts/{account_id}/origin_ca_certificates/{certificate_id}` | a revoke rather than a delete: answers `{id, revoked_at}` as `OriginCaCertificateRevocation` |
+
+Five things about this resource shaped the wrapper:
+
+- **The id is the certificate's x509 serial number**, not a UUID — Cloudflare documents it as such, and it is
+  what the read and the revoke both take. `ToString()` calls it a serial number for the same reason.
+- **The private key never comes near this library.** The caller generates a key and a Certificate Signing
+  Request on the origin, sends the CSR here and gets a signed certificate back, so nothing that could decrypt
+  the origin's traffic is ever transmitted. `System.Security.Cryptography.CertificateRequest` writes such a CSR
+  in three lines — `CreateSigningRequest()`, then `PemEncoding.Write("CERTIFICATE REQUEST", …)` — and the live
+  test does exactly that rather than carrying a fixture key around.
+- **Both the CSR and the certificate are newline-encoded PEM**, and Cloudflare asks for `\n`. A CSR written on
+  Windows carries `\r\n`, so the factories and `EnsureValid()` both settle the line endings — the validator
+  changing the request is deliberate, because the service validates before it sends and a caller who set the
+  properties by hand should still get a request Cloudflare accepts.
+- **There is no update and no status.** A certificate is signed or it is not; `DELETE` is a *revoke*, and a
+  revoked certificate drops out of the list rather than changing state. That makes the list the only place this
+  resource says a revoke happened, and a read of one serial number the way to ask whether it is still trusted.
+- **The list pages the ordinary way** — `page`/`per_page` with a `result_info` block — so it is a
+  `CloudflarePage<T>` like most of the API, and not the bare array page rules answer.
+
+Two things this library deliberately does not decide:
+
+- `requested_validity` is an `int?` with the published day counts as constants in
+  `OriginCaCertificateValidities` — 7, 30, 90, 365, 730, 1095, 5475 — rather than an enum, because the
+  published set has changed over the life of this endpoint (older documentation offered 2190, 3650 and 7300 and
+  none of the short ones), and refusing a number outside today's list would refuse a request Cloudflare might
+  accept. A number that is not a length of time is still refused locally.
+- The hostname grammar *is* checked locally, because Cloudflare publishes it exactly: fully qualified names
+  belonging to zones on the account, with a wildcard allowed only as a single `*.` prefix over a multi-label
+  domain. So `*.example.com` passes and `*.*.example.com`, `foo.*.example.com` and `*.com` are refused before a
+  call is spent — and which zones a hostname belongs to is left to Cloudflare, which is the only party that
+  knows.
+
+Cloudflare also accepts a different credential on this path — an **Origin CA Key**, sent as
+`X-Auth-User-Service-Key` — which this library has no notion of, because it sends an API token or the legacy key
+and email everywhere. Its published documentation names no permission group of its own for the endpoint, so the
+reach matrix probes `GET …/origin_ca_certificates?zone_id=…` and a live run says which of the token's groups
+reaches it.
+
+Tests: `OriginCaCertificatesServiceTests` (13 facts) pin the exact create body, the settled line endings on both
+paths that can carry a CSR, the `zone_id` the list cannot do without, the page walk, the tolerant 404, the
+revocation answer, every way `EnsureValid()` says no at once, and a request type Cloudflare has not published
+reading as `Unknown` on the way in while being refused on the way out. Live:
+`An_origin_ca_certificate_can_be_requested_listed_read_and_revoked` generates a key inside the test, has
+Cloudflare sign a CSR for a generated hostname in your zone for a year, reads the certificate back by its serial
+number, revokes it, and checks that the list stopped naming it — revoking again in a `finally`, so a failure
+mid-test cannot leave a signed certificate behind.
+
+---
+
 ## Users and accounts
 
 `IUserService` — `client.User`; `IAccountsService` — `client.Accounts`

@@ -64,6 +64,7 @@ public sealed class CloudflareClient : ICloudflareClient, IDisposable
         Rulesets = new RulesetService(transport);
         PageRules = new PageRulesService(transport);
         OriginCaCertificates = new OriginCaCertificatesService(transport);
+        Firewall = new FirewallService(transport);
         WorkersObservability = new WorkersObservabilityService(transport);
         WorkersAi = new WorkersAiService(transport);
         Turnstile = new TurnstileService(transport);
@@ -125,6 +126,9 @@ public sealed class CloudflareClient : ICloudflareClient, IDisposable
 
     /// <inheritdoc />
     public IOriginCaCertificatesService OriginCaCertificates { get; }
+
+    /// <inheritdoc />
+    public IFirewallService Firewall { get; }
 
     /// <inheritdoc />
     public IWorkersObservabilityService WorkersObservability { get; }

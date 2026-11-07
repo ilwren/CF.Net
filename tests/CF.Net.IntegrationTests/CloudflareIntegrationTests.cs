@@ -7,6 +7,7 @@ using CFNet.Http;
 using CFNet.Models.Common;
 using CFNet.Models.D1;
 using CFNet.Models.Dns;
+using CFNet.Models.Firewall;
 using CFNet.Models.Kv;
 using CFNet.Models.OriginCa;
 using CFNet.Models.PageRules;
@@ -4300,6 +4301,317 @@ public class WriteIntegrationTests : CloudflareIntegrationTest
         surprises.Add(
             $"{call} answered {field} as {arrived} - the field is optional in what Cloudflare publishes for " +
             "it, so this records what a live answer actually carries rather than failing on it");
+    }
+
+    [Fact]
+    public async Task A_firewall_filter_can_be_created_listed_read_changed_bulk_changed_and_removed()
+    {
+        if (!SkipWithoutZone() || !SkipWithoutWritePermission())
+        {
+            return;
+        }
+
+        var zone = await ReadableZoneAsync();
+        if (zone is null)
+        {
+            return;
+        }
+
+        // The filters API is deprecated in favour of the ruleset engine, so what a live run says about it is
+        // whether Cloudflare still serves it - and, since an account with older rules can only read or remove
+        // its filters here, that it still serves them faithfully.
+        var tag = UniqueSuffix("cfnet-filter");
+        var unmodelled = new SortedSet<string>();
+        var surprises = new List<string>();
+        var created = new List<FirewallFilter>();
+
+        try
+        {
+            // One POST saves both: the body is a bare array, and there is no single-filter create.
+            var saved = await Retrying5xxAsync(() => Client.Firewall.CreateFiltersAsync(
+                new[]
+                {
+                    FirewallFilterRequest.For("(ip.src eq 192.0.2.1)", $"cf-net first {tag}").Tagged(tag),
+                    FirewallFilterRequest.For("(ip.src eq 192.0.2.2)", $"cf-net second {tag}").SetPaused().Tagged(tag),
+                },
+                ZoneId));
+
+            Assert.Equal(2, saved.Count);
+            created.AddRange(saved);
+            Assert.All(saved, filter => Assert.False(string.IsNullOrWhiteSpace(filter.Id)));
+            Assert.Equal("(ip.src eq 192.0.2.1)", saved[0].Expression);
+            Assert.Equal("(ip.src eq 192.0.2.2)", saved[1].Expression);
+
+            // The paused flag is Cloudflare's word for "saved but not applied", and it is the one field here
+            // that a caller would not guess the name of.
+            Assert.False(saved[0].Paused);
+            Assert.True(saved[1].Paused);
+            Assert.All(saved, filter => Assert.Equal(tag, filter.Ref));
+            Collect(unmodelled, "filters.create", saved[0].AdditionalData);
+            Log($"saved {saved.Count} filters: {string.Join("; ", saved.Select(filter => filter.ToString()))}");
+
+            var firstId = saved[0].Id!;
+            var secondId = saved[1].Id!;
+
+            // The list takes a filter per field, and ref is the one that selects the pair back out of a zone
+            // that may hold any number of other filters.
+            var byTag = await ReadUntilAsync(
+                () => Client.Firewall.ListFiltersAsync(new FirewallFilterListParameters { Ref = tag }, ZoneId),
+                page => page.Items.Count(filter => filter.Ref == tag) == 2);
+            Assert.Equal(2, byTag.Items.Count(filter => filter.Ref == tag));
+            Collect(unmodelled, "filters.list", byTag.Items.First(filter => filter.Id == firstId).AdditionalData);
+
+            var byExpression = await Client.Firewall.ListFiltersAsync(
+                new FirewallFilterListParameters { Expression = "(ip.src eq 192.0.2.1)" },
+                ZoneId);
+            if (!byExpression.Items.Any(filter => filter.Id == firstId))
+            {
+                surprises.Add(
+                    $"GET /zones/{{zone_id}}/filters?expression=(ip.src eq 192.0.2.1) answered " +
+                    $"{byExpression.Items.Count} filter(s) and none of them was {firstId}, so the expression " +
+                    "filter is not the exact match its documentation implies");
+            }
+
+            var read = await ReadUntilAsync(
+                () => Client.Firewall.GetFilterAsync(firstId, ZoneId),
+                filter => filter is not null);
+            Assert.NotNull(read);
+            Assert.Equal(firstId, read!.Id);
+            Assert.Equal("(ip.src eq 192.0.2.1)", read.Expression);
+            Collect(unmodelled, "filters.get", read.AdditionalData);
+
+            // A PUT replaces the whole filter, so this one keeps the description and the tag and changes the
+            // expression - leaving either of them out would remove it.
+            var updated = await Client.Firewall.UpdateFilterAsync(
+                firstId,
+                FirewallFilterRequest
+                    .For("(ip.src eq 192.0.2.7)", read.Description)
+                    .Tagged(tag),
+                ZoneId);
+            Assert.Equal("(ip.src eq 192.0.2.7)", updated.Expression);
+            Assert.Equal(tag, updated.Ref);
+            Collect(unmodelled, "filters.put", updated.AdditionalData);
+
+            // The bulk PUT is the same call with an array, and its members carry their own ids because there is
+            // no path left to say which filter each one is.
+            var bulk = await Client.Firewall.UpdateFiltersAsync(
+                new[]
+                {
+                    FirewallFilterRequest.FromFilter(updated).SetPaused(true),
+                    FirewallFilterRequest.FromFilter(saved[1]).SetPaused(false),
+                },
+                ZoneId);
+            Assert.Equal(2, bulk.Count);
+            Assert.True(bulk.Single(filter => filter.Id == firstId).Paused);
+            Assert.False(bulk.Single(filter => filter.Id == secondId).Paused);
+            Collect(unmodelled, "filters.put-bulk", bulk[0].AdditionalData);
+            Log($"the bulk update paused {firstId} and resumed {secondId}");
+
+            var deleted = await Client.Firewall.DeleteFilterAsync(firstId, ZoneId);
+            Assert.Equal(firstId, deleted?.Id);
+            created.RemoveAll(filter => filter.Id == firstId);
+
+            // The bulk delete is a DELETE with a body: {"id":["…"]}, singular name for a list.
+            var bulkDeleted = await Client.Firewall.DeleteFiltersAsync(new[] { secondId }, ZoneId);
+            Assert.Contains(bulkDeleted, deletion => deletion.Id == secondId);
+            created.RemoveAll(filter => filter.Id == secondId);
+
+            var emptied = await ReadUntilAsync(
+                () => Client.Firewall.ListFiltersAsync(new FirewallFilterListParameters { Ref = tag }, ZoneId),
+                page => !page.Items.Any(filter => filter.Ref == tag));
+            Assert.DoesNotContain(emptied.Items, filter => filter.Ref == tag);
+            Assert.Null(await Client.Firewall.GetFilterAsync(firstId, ZoneId));
+            Log($"both filters are gone, and the list filtered by ref='{tag}' answers none of them");
+        }
+        catch (CloudflareApiException exception)
+        {
+            // A deprecated API can be switched off, and an account whose rules were all migrated has nothing
+            // here. Either is worth one line rather than a red run, because nothing about the request would
+            // change the answer.
+            Warn($"a firewall filter call was refused: {exception.StatusCode} [{exception.ErrorCode}] " +
+                 $"{Truncate(exception.Message, 300)}. Cloudflare deprecated the filters API in favour of the " +
+                 "ruleset engine, so a refusal here is as likely to be the deprecation reaching this account " +
+                 "as anything about the request - and 'Firewall Services Write' is the group it wants.");
+        }
+        finally
+        {
+            foreach (var filter in created)
+            {
+                if (filter.Id is { Length: > 0 } id)
+                {
+                    await Client.Firewall.DeleteFilterAsync(id, ZoneId);
+                    Log($"deleted filter {id} on the way out");
+                }
+            }
+
+            if (surprises.Count > 0)
+            {
+                Warn($"Firewall filters answered something other than what the reference publishes: " +
+                     $"{string.Join("; ", surprises)}.");
+            }
+
+            if (unmodelled.Count > 0)
+            {
+                Warn("Fields the firewall filter answers carried that this library does not model: " +
+                     $"{string.Join("; ", unmodelled)}. They are readable through AdditionalData, and naming " +
+                     "them here is how they become properties instead of guesses.");
+            }
+        }
+    }
+
+    [Fact]
+    public async Task An_ip_access_rule_can_be_created_listed_read_changed_and_removed()
+    {
+        if (!SkipWithoutZone() || !SkipWithoutWritePermission())
+        {
+            return;
+        }
+
+        var zone = await ReadableZoneAsync();
+        if (zone is null)
+        {
+            return;
+        }
+
+        // A zone-scoped rule rather than an account-scoped one, so what this makes applies to one zone and is
+        // removed from the same place - and the address is 192.0.2.1, which is documentation space and routes
+        // nowhere, so blocking it cannot keep anybody out.
+        var notes = UniqueSuffix("cfnet-access");
+        var unmodelled = new SortedSet<string>();
+        var surprises = new List<string>();
+        string? ruleId = null;
+
+        try
+        {
+            var created = await Client.Firewall.CreateAccessRuleAsync(
+                AccessRuleRequest.For(
+                    AccessRuleConfiguration.ForIp("192.0.2.1"),
+                    AccessRuleMode.Block,
+                    notes),
+                zoneId: ZoneId);
+
+            ruleId = created.Id;
+            Assert.False(string.IsNullOrWhiteSpace(ruleId));
+            Assert.Equal(AccessRuleMode.Block, created.Mode);
+            Assert.Equal(AccessRuleTarget.Ip, created.Configuration!.Target);
+            Assert.Equal("192.0.2.1", created.Configuration.Value);
+            Assert.Equal(notes, created.Notes);
+            Assert.NotNull(created.CreatedOnUtc);
+            CollectAccessRule(unmodelled, "access-rules.create", created);
+            Log($"created {created}, which Cloudflare says may become " +
+                $"{string.Join(", ", (created.AllowedModes ?? new List<AccessRuleMode>()).Select(mode => mode.ToString()))}");
+
+            var listed = await ReadUntilAsync(
+                () => Client.Firewall.ListAccessRulesAsync(zoneId: ZoneId),
+                page => page.Items.Any(rule => rule.Id == ruleId));
+            Assert.Contains(listed.Items, rule => rule.Id == ruleId);
+            CollectAccessRule(
+                unmodelled,
+                "access-rules.list",
+                listed.Items.First(rule => rule.Id == ruleId));
+
+            // The same resource is served from an account path, where a rule applies to every zone in the
+            // account. Whether a zone's rule is listed there too is Cloudflare's business, so this reads it
+            // and says what it found rather than asserting either answer.
+            var accountWide = await Client.Firewall.ListAccessRulesAsync();
+            Log($"the account-scoped list answers {accountWide.Items.Count} rule(s), of which " +
+                $"{accountWide.Items.Count(rule => rule.Id == ruleId)} is the one this fact just made");
+
+            var read = await ReadUntilAsync(
+                () => Client.Firewall.GetAccessRuleAsync(created.Id!, zoneId: ZoneId),
+                rule => rule is not null);
+            Assert.NotNull(read);
+            Assert.Equal(ruleId, read!.Id);
+            Assert.Equal("192.0.2.1", read.Configuration!.Value);
+            CollectAccessRule(unmodelled, "access-rules.get", read);
+
+            // The filter narrows by a dotted configuration.target and configuration.value, which is this
+            // library's reading of a nested query parameter - so a list that does not carry the rule says the
+            // reading was wrong, which is worth a line rather than a red run.
+            var filtered = await Client.Firewall.ListAccessRulesAsync(
+                new AccessRuleListParameters
+                {
+                    Configuration = AccessRuleListConfiguration.Of(AccessRuleFilterTarget.Ip, "192.0.2.1"),
+                    Mode = AccessRuleMode.Block,
+                },
+                zoneId: ZoneId);
+            if (!filtered.Items.Any(rule => rule.Id == ruleId))
+            {
+                surprises.Add(
+                    $"GET …/firewall/access_rules/rules?configuration.target=ip&configuration.value=192.0.2.1" +
+                    $"&mode=block answered {filtered.Items.Count} rule(s) and none of them was {ruleId}, so a " +
+                    "nested filter is not sent as dotted names after all");
+            }
+
+            // Cloudflare answers which modes a rule may be switched to, so the change asks for one of those
+            // rather than guessing: which modes an account may use depends on its plan.
+            var next = created.AllowedModes?.FirstOrDefault(
+                           mode => mode != AccessRuleMode.Unknown && mode != created.Mode)
+                       ?? AccessRuleMode.Challenge;
+            var changed = await Client.Firewall.EditAccessRuleAsync(
+                ruleId,
+                AccessRuleRequest.For(created.Configuration!, next, notes),
+                zoneId: ZoneId);
+            Assert.Equal(next, changed.Mode);
+            Assert.Equal("192.0.2.1", changed.Configuration!.Value);
+            CollectAccessRule(unmodelled, "access-rules.patch", changed);
+            Log($"changed the rule to '{next}', one of the modes Cloudflare offered");
+
+            var deleted = await Client.Firewall.DeleteAccessRuleAsync(ruleId, zoneId: ZoneId);
+            Assert.Equal(ruleId, deleted?.Id);
+            ruleId = null;
+
+            var emptied = await ReadUntilAsync(
+                () => Client.Firewall.ListAccessRulesAsync(zoneId: ZoneId),
+                page => !page.Items.Any(rule => rule.Id == created.Id));
+            Assert.DoesNotContain(emptied.Items, rule => rule.Id == created.Id);
+            Assert.Null(await Client.Firewall.GetAccessRuleAsync(created.Id!, zoneId: ZoneId));
+            Log($"deleted access rule {created.Id} and neither the list nor the GET answers it");
+        }
+        catch (CloudflareApiException exception) when (exception.IsAuthenticationFailure)
+        {
+            // IP Access rules have a permission group of their own, and it is not Firewall Services: a token
+            // that can read a zone's filters can still be refused here, and no assertion can turn that into a
+            // result. Saying which group to add beats failing.
+            SkipUnless(
+                false,
+                $"Cloudflare refused the IP Access rule call with {exception.ErrorCode}: " +
+                $"{Truncate(exception.Message, 120)}. These need their own group, Account Firewall Access " +
+                "Rules Read (de7a688cc47d43bd9ea700b467a09c96) and Write " +
+                "(a416acf9ef5a4af19fb11ed3b96b1fe6) - Firewall Services does not cover them.");
+        }
+        finally
+        {
+            if (ruleId is { Length: > 0 } id)
+            {
+                await Client.Firewall.DeleteAccessRuleAsync(id, zoneId: ZoneId);
+                Log($"deleted access rule {id} on the way out");
+            }
+
+            if (surprises.Count > 0)
+            {
+                Warn($"IP Access rules answered something other than what the reference publishes: " +
+                     $"{string.Join("; ", surprises)}.");
+            }
+
+            if (unmodelled.Count > 0)
+            {
+                Warn("Fields the IP Access rule answers carried that this library does not model: " +
+                     $"{string.Join("; ", unmodelled)}. They are readable through AdditionalData, and naming " +
+                     "them here is how they become properties instead of guesses.");
+            }
+        }
+    }
+
+    /// <summary>
+    /// Records the fields an access rule answer carried that this library does not model - on the rule, on the
+    /// configuration and on the scope, tagged with the call they came from.
+    /// </summary>
+    private static void CollectAccessRule(SortedSet<string> into, string tag, AccessRule rule)
+    {
+        Collect(into, tag, rule.AdditionalData);
+        Collect(into, $"{tag}.configuration", rule.Configuration?.AdditionalData);
+        Collect(into, $"{tag}.scope", rule.Scope?.AdditionalData);
     }
 
     /// <summary>

@@ -322,6 +322,10 @@ jobs:
             # entry for this zone answers 10007 here, and that is the failure this probe exists to name.
             probe workers_routes "$zone/workers/routes"
             probe pagerules "$zone/pagerules"
+            # The deprecated half of the firewall API: a zone's saved filters, which a firewall rule points
+            # at. Cloudflare still serves the list, so a 403 here says Firewall Services is missing while a
+            # 404 would say the deprecation has reached this account and the path is gone.
+            probe filters "$zone/filters?per_page=1"
           fi
 
           if [ -n "${CLOUDFLARE_ACCOUNT_ID:-}" ]; then
@@ -343,6 +347,10 @@ jobs:
             probe rulesets "$account/rulesets?per_page=1"
             probe rule_lists "$account/rules/lists?per_page=1"
             probe turnstile "$account/challenges/widgets?per_page=1"
+            # IP Access rules carry a permission group of their own - Account Firewall Access Rules, not
+            # Firewall Services - so this probe is the one that says whether that group is there. The same
+            # resource is served from a zone path too, and one answer covers both.
+            probe access_rules "$account/firewall/access_rules/rules?per_page=1"
             probe lb_monitors "$account/load_balancers/monitors"
             probe lb_pools "$account/load_balancers/pools"
             probe workers_ai "$account/ai/models/search?per_page=1"
@@ -425,6 +433,15 @@ jobs:
                'refused with 400 [1011] "Page Rules endpoint does not support account owned tokens" for a '
                'cfat_ token, the list as much as the writes, so a 400 here is the token kind and not the '
                'permission; a user-owned cfut_ token or the global key is what answers it'),
+              ('filters', 'GET /zones/{zone_id}/filters', 'Firewall Services - Read',
+               '4ec32dfcb35641c5bb32d5ef1ab963b4', 'read',
+               'the saved filters a firewall rule points at; Cloudflare documents the create as deprecated in '
+               'favour of the ruleset engine, so a 200 with an empty list is the healthy answer and a 404 '
+               'would mean the deprecation has reached this account'),
+              ('access_rules', 'GET /accounts/{account_id}/firewall/access_rules/rules',
+               'Account Firewall Access Rules - Read', 'de7a688cc47d43bd9ea700b467a09c96', 'read',
+               'a group of its own: Firewall Services does not cover IP Access rules, so a token that reads '
+               'the filters above can still be refused here, and this row is what names that refusal'),
               ('workers_routes', 'GET /zones/{zone_id}/workers/routes', 'Workers Routes - Read',
                '2072033d694d415a936eaeb94e6405b8', 'read',
                'a zone with no routes answers 200 and an empty list; this one is zone-scoped, so it needs '
@@ -613,7 +630,8 @@ jobs:
                              if any(word in json.dumps(g).lower() for word in wanted)]
               lines += ['#### Permission groups this account can grant', '',
                         f'{len(groups)} groups in total. These are the ones that matter for the endpoints '
-                        'still to be wrapped - Bulk Redirects, the Rulesets API, firewall and WAF rules - and '
+                        'still to be wrapped - the WAF\'s custom rules and rate limits, lockdowns and user '
+                        'agent rules, and whatever the firewall group names below turns out to be - and '
                         'the `id` or key shown here is what a `permissionGroupKeys` URL has to carry:', '',
                         '```json', json.dumps(interesting, indent=1)[:7000], '```', '',
                         '<details><summary>All ' + str(len(groups)) + ' groups</summary>', '',
@@ -681,6 +699,10 @@ jobs:
               ('28f4b596e7d643029c524985477ae49a', 'Workers Routes Write', 'account', 'edit'),
               ('fb39996ee9044d2a8725921e02744b39', 'Account Rulesets Read', 'account', 'read'),
               ('56907406c3d548ed902070ec4df0e328', 'Account Rulesets Write', 'account', 'edit'),
+              # IP Access rules are the current half of the firewall API this library wraps, and they do not
+              # ride on Firewall Services - the group above covers the zone's saved filters and nothing else.
+              ('de7a688cc47d43bd9ea700b467a09c96', 'Account Firewall Access Rules Read', 'account', 'read'),
+              ('a416acf9ef5a4af19fb11ed3b96b1fe6', 'Account Firewall Access Rules Write', 'account', 'edit'),
               ('4f1071168de8466e9808de86febfc516', 'Account Rule Lists Read', 'account', 'read'),
               ('2edbf20661fd4661b0fe10e9e12f485c', 'Account Rule Lists Write', 'account', 'edit'),
               ('429a068902904c5a9ed9fc267c67da9a', 'Mass URL Redirects Read', 'account', 'read'),

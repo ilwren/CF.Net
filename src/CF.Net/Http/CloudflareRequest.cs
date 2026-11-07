@@ -70,6 +70,14 @@ public sealed class CloudflareRequest
     /// <summary>Creates a DELETE request.</summary>
     public static CloudflareRequest Delete(string path) => new(HttpMethod.Delete, path);
 
+    /// <summary>
+    /// Creates a DELETE request with a JSON body. Most deletes carry nothing, but some of Cloudflare's take the
+    /// identifiers to remove in the body - the filters API's bulk delete is one, whose schema publishes
+    /// <c>{"id":["…"]}</c> rather than a query string of repeated ids.
+    /// </summary>
+    public static CloudflareRequest Delete(string path, object? body) =>
+        new(HttpMethod.Delete, path) { Body = body is null ? null : new JsonRequestBody(body) };
+
     /// <summary>Marks the given status codes as non-fatal.</summary>
     public CloudflareRequest Tolerate(params HttpStatusCode[] statusCodes)
     {

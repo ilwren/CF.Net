@@ -100,6 +100,12 @@ public interface ICloudflareClient : IDisposable
     IOriginCaCertificatesService OriginCaCertificates { get; }
 
     /// <summary>
+    /// The firewall's older surface: a zone's saved filters, which are deprecated but still served, and the IP
+    /// Access rules of an account or of one zone, which are current and have a permission group of their own.
+    /// </summary>
+    IFirewallService Firewall { get; }
+
+    /// <summary>
     /// Workers Observability: the telemetry destinations an account exports Worker logs, traces and metrics
     /// to.
     /// </summary>

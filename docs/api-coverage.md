@@ -1204,6 +1204,91 @@ ruleset overrides an `execute` rule carries, and rate limit rule parameters.
 
 ---
 
+## Firewall filters and IP Access rules
+
+`IFirewallService` — `client.Firewall`
+
+Two halves of the firewall that the ruleset engine did not absorb, and they are not alike. A **filter** is a
+saved wirefilter expression in a zone that a firewall rule then points at, and Cloudflare documents the create
+as **deprecated in favour of the Ruleset Engine** — a zone whose rules have all been migrated has no reason to
+make one, which is why `client.Rulesets` is where new work belongs. An **IP Access rule** is current: it says
+what to do with requests from one address, range, ASN or country — block them, challenge them, or skip the rest
+of the firewall for them.
+
+The two halves do not share a permission group either. Filters ride on **Firewall Services**; IP Access rules
+need **Account Firewall Access Rules**, a group of their own, so a token that can read a zone's filters can
+still be refused on the rules. That is the one new permission this service asks for.
+
+**Saved filters** — deprecated, still served, one zone at a time.
+
+| Method | Endpoint | Notes |
+| --- | --- | --- |
+| `ListFiltersAsync(FirewallFilterListParameters?, zoneId)` | `GET /zones/{zone_id}/filters` | paged; a filter per field — `id`, `description`, `expression`, `paused`, `ref` — each an exact match on the value |
+| `ListAllFiltersAsync(FirewallFilterListParameters?, zoneId)` | the same, walked | one async sequence over every page, stopping when Cloudflare stops reporting more |
+| `GetFilterAsync(filterId, zoneId)` | `GET /zones/{zone_id}/filters/{filter_id}` | null when the zone has no filter of that id |
+| `CreateFiltersAsync(filters, zoneId)` | `POST /zones/{zone_id}/filters` | the body is a **bare array** and there is no single-filter create, so one filter is an array of one; Cloudflare assigns the `id` |
+| `UpdateFilterAsync(filterId, filter, zoneId)` | `PUT /zones/{zone_id}/filters/{filter_id}` | replaces the filter, so a field left out is a field removed; refuses a body whose `id` names a different filter than the path does |
+| `UpdateFiltersAsync(filters, zoneId)` | `PUT /zones/{zone_id}/filters` | the bulk form: the same array with an `id` on each member, which is what says which filter changes |
+| `DeleteFilterAsync(filterId, zoneId)` | `DELETE /zones/{zone_id}/filters/{filter_id}` | answers `{"id": …}`; null rather than a throw when the filter is already gone |
+| `DeleteFiltersAsync(filterIds, zoneId)` | `DELETE /zones/{zone_id}/filters` | a **`DELETE` with a body** — `{"id":["…"]}`, a singular wire name for a list |
+
+`FirewallFilterRequest` is what all three writes take. `For(expression, description)` starts one, `WithId`
+makes the bulk form of it, `FromFilter` copies a filter that was read so a bulk update can change one field and
+keep the rest, and `SetPaused()` / `Tagged(ref)` fill in the other two. `EnsureValid()` refuses a filter with no
+expression — one that matches nothing does nothing — and checks the description against the **500** characters
+and the `ref` against the **50** that Cloudflare publishes. It does not check the `id`'s length on the way in:
+Cloudflare says an id is exactly 32 characters, and a locally enforced minimum would refuse an id Cloudflare is
+willing to accept. `expression` is wirefilter and is passed through untouched, so what the firewall can express
+is never narrower than what this library knows about.
+
+That `DELETE` with a body is why `CloudflareRequest.Delete` has an overload taking a payload. It is the only
+one in the API this library wraps: every other delete carries its identifiers in the path or in the query.
+
+**IP Access rules** — current, and served from two scopes.
+
+| Method | Endpoint | Notes |
+| --- | --- | --- |
+| `ListAccessRulesAsync(AccessRuleListParameters?, accountId, zoneId)` | `GET /{accounts\|zones}/{id}/firewall/access_rules/rules` | paged. One filter is **nested** and goes out as dotted names — `configuration.target` and `configuration.value` — beside `mode`, `notes`, `order` ∈ `configuration.target`/`configuration.value`/`mode`, `direction` and `match` |
+| `GetAccessRuleAsync(ruleId, accountId, zoneId)` | `GET …/rules/{rule_id}` | null when that scope holds no rule of that id |
+| `CreateAccessRuleAsync(AccessRuleRequest, accountId, zoneId)` | `POST …/rules` | `configuration` and `mode` are both required, `notes` optional |
+| `EditAccessRuleAsync(ruleId, AccessRuleRequest, accountId, zoneId)` | `PATCH …/rules/{rule_id}` | spelled `PATCH`, behaving like a `PUT`: the published schema requires the configuration **and** the mode here, so there is no changing one of them on its own |
+| `DeleteAccessRuleAsync(ruleId, accountId, zoneId)` | `DELETE …/rules/{rule_id}` | answers `{"id": …}`; null rather than a throw when the rule is already gone |
+
+**Scope** is the same pair of parameters `client.Rulesets` uses, and the zone wins — but only when it is passed
+explicitly. A client configured with a default zone does *not* quietly move an access rule call from the account
+path to the zone one, because the two answers mean different things: a rule under the account applies to every
+zone in it, a rule under a zone applies to that zone alone. Pass the zone to get the zone.
+
+`AccessRuleConfiguration` covers the five targets with one type and one factory each — `ForIp`, `ForIpv6`,
+`ForRange`, `ForAsn`, `ForCountry`. `EnsureValid()` enforces what Cloudflare publishes rather than what looks
+plausible: a range takes a prefix length of **/16 or /24** for IPv4 and **/32, /48 or /64** for IPv6, so
+`192.0.2.0/23` is refused here instead of being refused there; a country target takes an **ISO-3166-1 alpha-2**
+code, which is why `GBR` is refused — three letters is the alpha-3 code from a different standard.
+
+`mode` ∈ `block`, `challenge`, `whitelist`, `js_challenge`, `managed_challenge`. **`whitelist` is the word the
+API still uses for what the dashboard calls *skip*** — a rule that lets its addresses past the rest of the
+firewall — so the member is named `AccessRuleMode.Whitelist` for the wire and documented as the skip. Cloudflare
+renamed it in the product and not in the API, and sending `skip` would be refused.
+
+A created rule answers `allowed_modes`, Cloudflare's own list of the modes that rule may be switched to, which
+depends on the plan. `AccessRule.Allows(mode)` reads it, so a change can ask for a mode the account will accept
+rather than guessing at one — the live fact does exactly that instead of hardcoding `challenge`.
+
+One asymmetry is worth knowing before you write a query. The **list's filter vocabulary is shorter than the
+rule's**: Cloudflare types the list's `configuration.target` separately and leaves `ip6` out of it, so there is
+no way to narrow a list to a single IPv6 address. That is why `AccessRuleListConfiguration.Of` takes an
+`AccessRuleFilterTarget` — four values — rather than the `AccessRuleTarget` a rule carries, five.
+
+Both enums are tolerant on the way in and strict on the way out, like every enum here: a word this version has
+never met reads as `Unknown` and prints as *"an unpublished mode"*, and writing one throws rather than sending
+Cloudflare a word it has not published.
+
+⛔ Not wrapped: firewall **lockdowns** (`…/firewall/lockdowns`) and **user agent rules**
+(`…/firewall/ua_rules`), both superseded by custom rules in the ruleset engine, and the WAF's own surfaces
+(`…/firewall/waf/…`), which are plan-gated.
+
+---
+
 ## Page Rules
 
 `IPageRulesService` — `client.PageRules`

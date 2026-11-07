@@ -4144,7 +4144,12 @@ public class WriteIntegrationTests : CloudflareIntegrationTest
         // explicitly rather than with var, because the two calls are the whole reason this fact exists and a
         // build error in either of them should say which one it was.
         byte[] signingRequestBytes = signingRequest.CreateSigningRequest();
-        string csr = PemEncoding.Write("CERTIFICATE REQUEST", signingRequestBytes);
+
+        // PemEncoding answers the block as chars rather than as a string, so the one conversion this fact has
+        // to make is here - which is worth writing down, because the obvious `string csr = PemEncoding.Write(…)`
+        // does not compile.
+        char[] pem = PemEncoding.Write("CERTIFICATE REQUEST", signingRequestBytes);
+        string csr = new string(pem);
         Assert.StartsWith("-----BEGIN CERTIFICATE REQUEST-----", csr, StringComparison.Ordinal);
         var unmodelled = new SortedSet<string>();
         string? serial = null;

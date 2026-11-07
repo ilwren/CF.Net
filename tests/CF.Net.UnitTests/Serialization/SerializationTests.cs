@@ -930,7 +930,7 @@ public class ZonePublishedExampleTests
     }
 
     [Fact]
-    public void The_two_ways_Cloudflare_writes_a_timestamp_both_read_as_one_instant()
+    public void The_three_ways_Cloudflare_writes_a_timestamp_all_read_as_one_instant()
     {
         // ISO 8601 with its offset, which is most of the API, and the space-separated form Workers AI answers
         // with no offset at all, which the strict ISO 8601 reader refuses outright.
@@ -954,6 +954,26 @@ public class ZonePublishedExampleTests
         Assert.Equal(
             new DateTimeOffset(2024, 5, 8, 0, 0, 0, TimeSpan.Zero),
             CloudflareTimestamps.Read("2024-05-08")!.Value);
+
+        // Go's default time layout, which is what the Origin CA API answered live for a certificate's
+        // expires_on: a space where ISO puts a T, an offset with no colon in it, and the zone's name after it.
+        Assert.Equal(
+            new DateTimeOffset(2027, 11, 7, 3, 42, 0, TimeSpan.Zero),
+            CloudflareTimestamps.Read("2027-11-07 03:42:00 +0000 UTC")!.Value);
+
+        // The same shape with an offset that is not UTC comes back at zero like everything else, and a
+        // fraction of a second rides along inside the time without being special-cased.
+        Assert.Equal(
+            new DateTimeOffset(2027, 11, 7, 1, 42, 0, TimeSpan.Zero),
+            CloudflareTimestamps.Read("2027-11-07 03:42:00 +0200 CEST")!.Value);
+        Assert.Equal(
+            new DateTimeOffset(2027, 11, 7, 3, 42, 0, 123, TimeSpan.Zero),
+            CloudflareTimestamps.Read("2027-11-07 03:42:00.123 +0000 UTC")!.Value);
+
+        // Something that only looks like that shape is left alone, and fails in the general parser instead:
+        // a zone name with punctuation in it, and a first word that is not a date.
+        Assert.Null(CloudflareTimestamps.Read("2027-11-07 03:42:00 +0000 not-a-zone"));
+        Assert.Null(CloudflareTimestamps.Read("yesterday +0000 UTC"));
 
         // Nothing said, and something said that is not a timestamp.
         Assert.Null(CloudflareTimestamps.Read(null));

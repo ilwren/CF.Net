@@ -27,7 +27,11 @@ namespace CFNet.Models.OriginCa;
 /// </remarks>
 public sealed class OriginCaCertificate
 {
-    /// <summary>The certificate's x509 serial number, which is what identifies it to every other method.</summary>
+    /// <summary>
+    /// The certificate's x509 serial number, which is what identifies it to every other method. It is a string
+    /// because a live answer carried 48 digits — <c>147655896959702262542621997354679733308596274878</c> — and
+    /// no integer type in .NET holds that.
+    /// </summary>
     [JsonPropertyName("id")]
     public string? Id { get; set; }
 
@@ -39,7 +43,10 @@ public sealed class OriginCaCertificate
     [JsonPropertyName("csr")]
     public string? Csr { get; set; }
 
-    /// <summary>When the certificate expires, exactly as Cloudflare wrote it.</summary>
+    /// <summary>
+    /// When the certificate expires, exactly as Cloudflare wrote it — which a live run showed to be Go's
+    /// default time layout, <c>2027-11-07 03:42:00 +0000 UTC</c>, and not ISO 8601.
+    /// </summary>
     [JsonPropertyName("expires_on")]
     public string? ExpiresOn { get; set; }
 
@@ -384,7 +391,9 @@ public sealed class OriginCaCertificateRequest
 /// <summary>What <c>DELETE /certificates/{certificate_id}</c> answers.</summary>
 /// <remarks>
 /// A revoke is not a delete in the usual sense: the certificate's serial number stops being trusted, and the
-/// answer says when that happened.
+/// answer says when that happened — in ISO 8601, where the certificate's own <c>expires_on</c> arrives in Go's
+/// layout. A revoked certificate drops out of the list but still answers a read of its serial number, so the
+/// list is the place to ask whether one is still trusted.
 /// </remarks>
 public sealed class OriginCaCertificateRevocation
 {

@@ -85,8 +85,11 @@ public interface IOriginCaCertificatesService
     /// <summary>Reads one certificate by its serial number.</summary>
     /// <param name="certificateId">The certificate's x509 serial number, as <see cref="OriginCaCertificate.Id"/>.</param>
     /// <param name="cancellationToken">Cancellation token.</param>
-    /// <returns>The certificate, or null when there is no unrevoked certificate with that serial number.</returns>
-    /// <remarks><c>GET /certificates/{certificate_id}</c>.</remarks>
+    /// <returns>The certificate, or null when Cloudflare has no certificate with that serial number.</returns>
+    /// <remarks>
+    /// <c>GET /certificates/{certificate_id}</c>. A revoked certificate still answers here — observed live —
+    /// while <see cref="ListAsync"/> drops it, so the list is the call that says whether one is still trusted.
+    /// </remarks>
     Task<OriginCaCertificate?> GetAsync(
         string certificateId,
         CancellationToken cancellationToken = default);

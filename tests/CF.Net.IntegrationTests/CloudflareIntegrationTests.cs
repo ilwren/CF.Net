@@ -4221,18 +4221,14 @@ public class WriteIntegrationTests : CloudflareIntegrationTest
                 page => !page.Items.Any(certificate => certificate.Id == certificateId));
             Assert.DoesNotContain(emptied.Items, certificate => certificate.Id == certificateId);
 
+            // Observed live, so it is asserted rather than reported: a revoked certificate drops out of the
+            // list but still answers its own GET. The list is therefore the place to ask whether a certificate
+            // is still trusted, and a read of one serial number is not - which an origin has to know before it
+            // treats a 200 here as "still valid".
             var afterRevoke = await Client.OriginCaCertificates.GetAsync(certificateId);
-            if (afterRevoke is not null)
-            {
-                Warn($"GET /certificates/{{certificate_id}} still answers a " +
-                     $"revoked certificate: {Truncate(afterRevoke.ToString(), 200)}. The list drops revoked " +
-                     "certificates, so a single read is the one place a revoked one survives - which is worth " +
-                     "knowing before an origin trusts a read to mean 'still valid'.");
-            }
-            else
-            {
-                Log("the GET of a revoked certificate answers 'not there', the same as the list");
-            }
+            Assert.NotNull(afterRevoke);
+            Assert.Equal(certificateId, afterRevoke!.Id);
+            Log($"the GET of a revoked certificate still answers it: {afterRevoke}");
         }
         catch (CloudflareApiException exception)
         {

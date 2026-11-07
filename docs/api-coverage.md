@@ -475,6 +475,24 @@ Two things this library deliberately does not decide:
   call is spent — and which zones a hostname belongs to is left to Cloudflare, which is the only party that
   knows.
 
+**What a live run answered**, which is where four of the notes above come from and one of them was written
+afterwards:
+
+- `expires_on` arrives as **`2027-11-07 03:42:00 +0000 UTC`** — Go's default time layout, a space where ISO
+  8601 puts a `T`, an offset with no colon in it, and the zone's name spelled out after it. `CloudflareTimestamps`
+  did not read that shape and now does, which is the third way Cloudflare writes a timestamp; the same resource
+  answers `revoked_at` in ISO 8601, so one endpoint carries two of the three.
+- A revoked certificate **drops out of the list but still answers its own `GET`**. So the list is the place to
+  ask whether a certificate is still trusted, and a read of one serial number is not — which matters to an
+  origin that would otherwise treat a 200 as "still valid".
+- The create answers `requested_validity`; the read of the same certificate afterwards does not. Both are
+  nullable here, and neither is invented.
+- The serial number that came back was **48 digits** — `147655896959702262542621997354679733308596274878` —
+  which no integer type in .NET holds, so `Id` is a string and a caller must not try to make it a number.
+
+No answer in the four calls carried a field this library does not model, so the model is complete for what this
+account's plan answers.
+
 Cloudflare also accepts a different credential on this path — an **Origin CA Key**, sent as
 `X-Auth-User-Service-Key` — which this library has no notion of, because it sends an API token or the legacy key
 and email everywhere. Its published documentation names no permission group of its own for the endpoint, so the
@@ -1308,7 +1326,7 @@ the server that checked a visitor rather than to the account that owns the widge
 | Query strings | `QueryStringBuilder` (`Uri.EscapeDataString` for values; `.`/`[`/`]` left readable in names) |
 | URL construction | `CloudflareUrl`, `CloudflareRequest` |
 | Bodies | `JsonRequestBody`, `TextRequestBody`, `BinaryRequestBody`, `MultipartRequestBody` - whose parts go out with **quoted** `name` and `filename`, because .NET leaves a token-safe value bare and Cloudflare's AI endpoints answer that with 400 and error 6005 |
-| Serialization | `CloudflareJson.Default`, `CloudflareValueAttribute`, `CloudflareEnumConverter<T>`, `TolerantBooleanConverter` (a flag Cloudflare wrote as a number or a word), `CloudflareTimestamps` (the two ways it writes a timestamp), `WorkerSecretBulkRequestConverter` (writes a bulk secret write by hand, because a null in that body is a deletion this writer would otherwise omit) |
+| Serialization | `CloudflareJson.Default`, `CloudflareValueAttribute`, `CloudflareEnumConverter<T>`, `TolerantBooleanConverter` (a flag Cloudflare wrote as a number or a word), `CloudflareTimestamps` (the three ways it writes a timestamp: ISO 8601, a space where the standard puts a `T`, and Go's `+0000 UTC` tail), `WorkerSecretBulkRequestConverter` (writes a bulk secret write by hand, because a null in that body is a deletion this writer would otherwise omit) |
 | Retry / backoff | `CloudflareTransport` — 408, 429, 5xx; `Retry-After` wins; exponential + jitter; clamped |
 | Auth headers | `CloudflareTransport` — exactly one scheme per call |
 | Diagnostics | `CloudflareResponse<T>.RayId` from `CF-RAY`; `CloudflareApiException.RayId` |

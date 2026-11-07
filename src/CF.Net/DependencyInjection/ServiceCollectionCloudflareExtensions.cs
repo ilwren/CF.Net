@@ -268,6 +268,7 @@ public static class ServiceCollectionCloudflareExtensions
         services.TryAddSingleton<ICustomHostnamesService>(provider => provider.GetRequiredService<ICloudflareClient>().CustomHostnames);
         services.TryAddSingleton<IOriginTlsClientAuthService>(provider => provider.GetRequiredService<ICloudflareClient>().OriginTlsClientAuth);
         services.TryAddSingleton<IWorkersScriptsService>(provider => provider.GetRequiredService<ICloudflareClient>().Workers);
+        services.TryAddSingleton<IWorkersAssetsService>(provider => provider.GetRequiredService<ICloudflareClient>().WorkersAssets);
         services.TryAddSingleton<IPagesProjectsService>(provider => provider.GetRequiredService<ICloudflareClient>().Pages);
         services.TryAddSingleton<ID1DatabaseService>(provider => provider.GetRequiredService<ICloudflareClient>().D1);
         services.TryAddSingleton<IKvService>(provider => provider.GetRequiredService<ICloudflareClient>().Kv);

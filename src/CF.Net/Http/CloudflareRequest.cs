@@ -37,6 +37,12 @@ public sealed class CloudflareRequest
     /// <summary>Additional request headers (merged after the authentication headers).</summary>
     public IDictionary<string, string> Headers { get; } = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
 
+    /// <summary>
+    /// True when the request carries its own credentials and the transport must not add the configured API
+    /// token or API key. Set by <see cref="WithBearerToken"/>.
+    /// </summary>
+    public bool UsesCustomAuthentication { get; private set; }
+
     /// <summary>Request payload, or <c>null</c> for methods without a body.</summary>
     public CloudflareRequestBody? Body { get; set; }
 
@@ -93,6 +99,28 @@ public sealed class CloudflareRequest
     public CloudflareRequest WithHeader(string name, string value)
     {
         Headers[name] = value;
+        return this;
+    }
+
+    /// <summary>
+    /// Authenticates this one call with a bearer token of the caller's choosing, instead of the API token or
+    /// API key the transport is configured with.
+    /// </summary>
+    /// <param name="token">The token, sent as <c>Authorization: Bearer …</c>.</param>
+    /// <returns>This request, for chaining.</returns>
+    /// <remarks>
+    /// A few Cloudflare endpoints issue a short-lived JWT for a single job and expect it, not the API
+    /// credentials, on the calls that do the job: the Workers static asset uploads are the ones this library
+    /// wraps. Such a call is authorized by the JWT alone, so the configured credentials are left off entirely -
+    /// which also means these calls work for a caller that configured none.
+    /// </remarks>
+    /// <exception cref="ArgumentException">The token is null or empty.</exception>
+    public CloudflareRequest WithBearerToken(string token)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(token);
+
+        Headers[CloudflareDefaults.Headers.Authorization] = "Bearer " + token.Trim();
+        UsesCustomAuthentication = true;
         return this;
     }
 

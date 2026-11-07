@@ -327,6 +327,7 @@ public class CloudflareClientTests
         Assert.IsAssignableFrom<IDnsRecordsService>(client.DnsRecords);
         Assert.IsAssignableFrom<IDnssecService>(client.Dnssec);
         Assert.IsAssignableFrom<IWorkersScriptsService>(client.Workers);
+        Assert.IsAssignableFrom<IWorkersAssetsService>(client.WorkersAssets);
         Assert.IsAssignableFrom<IPagesProjectsService>(client.Pages);
         Assert.IsAssignableFrom<ID1DatabaseService>(client.D1);
         Assert.IsAssignableFrom<IKvService>(client.Kv);
@@ -536,6 +537,7 @@ public class ServiceCollectionExtensionsTests
         Assert.Same(client.DnsRecords, provider.GetRequiredService<IDnsRecordsService>());
         Assert.Same(client.Dnssec, provider.GetRequiredService<IDnssecService>());
         Assert.Same(client.Workers, provider.GetRequiredService<IWorkersScriptsService>());
+        Assert.Same(client.WorkersAssets, provider.GetRequiredService<IWorkersAssetsService>());
         Assert.Same(client.Pages, provider.GetRequiredService<IPagesProjectsService>());
         Assert.Same(client.D1, provider.GetRequiredService<ID1DatabaseService>());
         Assert.Same(client.Kv, provider.GetRequiredService<IKvService>());

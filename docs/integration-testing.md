@@ -313,10 +313,10 @@ permissions but no zone resource returns `10007 Route not found` for a zone you 
 in the dashboard, which reads like a bug in the client and is not.
 
 This is common enough that the workflow checks for it before running anything. The step named *Check what
-the credentials can actually reach* makes one `curl` call per product area — thirty-seven of them, covering
+the credentials can actually reach* makes one `curl` call per product area — thirty-eight of them, covering
 zones, DNS records, DNSSEC and its ZSK, zone settings, certificate packs, custom hostnames, origin TLS
-client auth, origin CA certificates, cache purge, the account, Workers scripts, domains and routes, Pages,
-D1, KV, R2, rulesets, filter lists, page rules, firewall filters, IP Access rules, mTLS
+client auth, origin CA certificates, cache purge, the account, Workers scripts, domains, routes and static
+assets, Pages, D1, KV, R2, rulesets, filter lists, page rules, firewall filters, IP Access rules, mTLS
 certificates, the Cloudflare IP ranges, Turnstile, load balancing, Workers AI and account tokens — with the
 same
 credentials, and reports each answer as `label=status[shape]`:
@@ -624,6 +624,7 @@ assertion failure mid-test still removes the resource.
 | `A_firewall_filter_can_be_created_listed_read_changed_bulk_changed_and_removed` | two saved filters in one `POST` (one of them paused), a `PUT` of one and a bulk `PUT` of both — **skipped when Cloudflare answers `410 [10020] filters.api.deprecated`, which is what it does for an account whose filters API has been retired** | the single `DELETE`, then the bulk `DELETE` with a body |
 | `An_ip_access_rule_can_be_created_listed_read_changed_and_removed` | one IP Access rule in **your zone** blocking `192.0.2.1` — documentation space, which routes nowhere — then a `PATCH` to one of the modes Cloudflare offered. It also reads the **account-scoped** list of the same resource, and a refusal there is reported rather than failing the fact | `DELETE` the rule |
 | `An_mtls_certificate_can_be_uploaded_listed_read_asked_about_associations_and_removed` | a 2048-bit RSA key **generated inside the test**, a self-signed CA certificate from it, and the upload of that CA — no private key leaves the test, because a BYO-CA upload does not want one | `DELETE` the certificate, after reading what it is associated with |
+| `Worker_static_assets_can_be_asked_for_uploaded_and_redeemed_by_a_deployment` | a script, an asset upload session for a two-file manifest, both files uploaded once each and once together as a multipart call, and a redeployment that redeems the completion token | `DELETE` the script |
 | `A_page_rule_can_be_created_read_patched_replaced_and_removed` | one page rule on a generated hostname, then a `PATCH` of its status and a `PUT` that turns it into a redirect — **skipped for an account-owned token**, which Cloudflare refuses this endpoint for with `1011` | `DELETE` the rule - which also frees the allowance slot it used |
 
 Resource names are generated with a timestamp and a random suffix (`cfnet-it-20260101120000-a1b2c3d4`)

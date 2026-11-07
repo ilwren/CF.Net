@@ -63,6 +63,13 @@ public interface ICloudflareClient : IDisposable
     /// <summary>Workers scripts, deployments and the <c>workers.dev</c> subdomain.</summary>
     IWorkersScriptsService Workers { get; }
 
+    /// <summary>
+    /// Workers static assets: which of a manifest's files Cloudflare is missing, and the JWT-authenticated
+    /// uploads that send them. The completion token they return is what a script or version upload redeems in
+    /// its <c>assets</c> block.
+    /// </summary>
+    IWorkersAssetsService WorkersAssets { get; }
+
     /// <summary>Pages projects, deployments and custom domains.</summary>
     IPagesProjectsService Pages { get; }
 

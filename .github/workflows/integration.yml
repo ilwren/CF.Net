@@ -341,6 +341,11 @@ jobs:
             probe permission_groups "$account/tokens/permission_groups"
             probe workers_scripts "$account/workers/scripts?per_page=1"
             probe workers_domains "$account/workers/domains"
+            # The static asset upload session is a POST whose only path argument is a script name, so it is
+            # probed against a name nothing owns: a 404 says the permission is there and the script is not,
+            # while a 403 says the token lacks Workers Scripts write. The asset bytes go up under the JWT this
+            # call answers with rather than under the API token, so the live test covers them instead.
+            probe workers_assets "$account/workers/scripts/cfnet-probe-does-not-exist/assets-upload-session" POST '{"manifest":{"/probe.txt":{"hash":"00000000000000000000000000000000","size":5}}}'
             probe pages "$account/pages/projects"
             probe d1 "$account/d1/database?per_page=1"
             probe kv "$account/storage/kv/namespaces?per_page=1"
@@ -418,6 +423,12 @@ jobs:
                'workers_scripts', 'read',
                'workers domains only exist once the account has a workers.dev subdomain or a custom domain, '
                'so a refusal here while scripts read fine is usually that rather than the token'),
+              ('workers_assets',
+               'POST /accounts/{account_id}/workers/scripts/{script_name}/assets-upload-session',
+               'Workers Scripts - Write', 'workers_scripts', 'edit',
+               'probed against a script name nothing owns, so 404 is the answer that proves the permission; '
+               'the two upload endpoints it hands a JWT to take no API credentials at all and are covered by '
+               'the live test'),
               ('pages', 'GET /accounts/{account_id}/pages/projects', 'Pages - Read', 'page', 'read',
                'this endpoint refuses page and per_page with 8000024 on some accounts, which the library '
                'retries without'),

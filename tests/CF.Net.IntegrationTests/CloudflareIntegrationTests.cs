@@ -4915,6 +4915,208 @@ public class WriteIntegrationTests : CloudflareIntegrationTest
     }
 
     /// <summary>
+    /// The static asset flow, end to end: a Worker is uploaded, Cloudflare is asked which of the manifest's
+    /// assets it is missing, the bytes go up under the session JWT - once asset by asset and once as a single
+    /// multipart call - and the completion token those answers carry is redeemed by a deployment whose metadata
+    /// carries an <c>assets</c> block.
+    /// </summary>
+    /// <remarks>
+    /// The two upload endpoints take no API credentials at all: their only authorization is the JWT the session
+    /// answered with, so this fact is also the live proof that
+    /// <see cref="CloudflareRequest.WithBearerToken"/> keeps the configured token off those calls. What
+    /// Cloudflare makes of an asset key it did not compute with its own hash function is reported rather than
+    /// asserted: the reference publishes the manifest hash as an opaque string and never says how to build it,
+    /// and this library does not implement the BLAKE3 wrangler uses.
+    /// </remarks>
+    [Fact]
+    public async Task Worker_static_assets_can_be_asked_for_uploaded_and_redeemed_by_a_deployment()
+    {
+        if (!SkipWithoutAccount() || !SkipWithoutWritePermission())
+        {
+            return;
+        }
+
+        var scriptName = $"cfnet-it-{Guid.NewGuid().ToString("N")[..10]}";
+        var unmodelled = new SortedSet<string>();
+        var surprises = new List<string>();
+        var uploadedScript = false;
+
+        // Two small assets, keyed the way wrangler keys them - the file's bytes as base64 with its extension
+        // appended - but hashed with SHA-256 rather than BLAKE3, which this library does not implement. The
+        // flow only needs the manifest, the upload path and the multipart part name to agree with each other.
+        var indexBytes = System.Text.Encoding.UTF8.GetBytes("<!doctype html><title>cf-net</title>");
+        var indexHash = AssetKey(indexBytes, "html");
+        var styleBytes = System.Text.Encoding.UTF8.GetBytes("body{font-family:sans-serif}");
+        var styleHash = AssetKey(styleBytes, "css");
+        var known = new HashSet<string>(StringComparer.Ordinal) { indexHash, styleHash };
+
+        try
+        {
+            await Retrying5xxAsync(() => Client.Workers.UploadAsync(
+                scriptName,
+                "export default { async fetch(request) { return new Response('cf-net'); } }",
+                "2025-01-01"));
+            uploadedScript = true;
+
+            var manifest = new WorkersAssetManifest()
+                .Add(WorkersAssetManifest.NormalizePath("index.html"), indexHash, indexBytes.LongLength)
+                .Add(WorkersAssetManifest.NormalizePath("assets/site.css"), styleHash, styleBytes.LongLength);
+
+            var session = await Client.WorkersAssets.CreateUploadSessionAsync(scriptName, manifest);
+            Assert.False(string.IsNullOrWhiteSpace(session.Jwt));
+            Assert.NotNull(session.Buckets);
+            Collect(unmodelled, "assets.session", session.AdditionalData);
+            Log($"asset session for {scriptName}: {session}");
+
+            // Which of the two Cloudflare asks for is its decision - an account that already holds the bytes is
+            // answered with fewer of them - so this asserts containment, not equality, and says what came back.
+            var requested = session.RequestedHashes.ToList();
+            Assert.All(requested, hash => Assert.Contains(hash, known));
+            Log($"Cloudflare asked for {requested.Count} of the {manifest.Count} asset(s) in the manifest");
+            if (requested.Count == 0)
+            {
+                surprises.Add("the session asked for none of the manifest's assets, so no upload was exercised");
+            }
+
+            var token = session.ReadToken();
+            if (token is null)
+            {
+                surprises.Add("the session JWT had no payload this library could read");
+            }
+            else
+            {
+                Log($"the session token advises single-asset uploads " +
+                    $"{token.SingleAssetUploads?.ToString() ?? "(unspecified)"}, upload concurrency " +
+                    $"{token.EffectiveUploadConcurrency}, expiry {token.ExpiresAt?.ToString("O") ?? "(unspecified)"}");
+            }
+
+            // The completion token the deployment redeems is the last answer's, so every upload that succeeds
+            // replaces it.
+            var completionJwt = session.Jwt;
+
+            foreach (var hash in requested)
+            {
+                var bytes = hash == indexHash ? indexBytes : styleBytes;
+                var contentType = hash == indexHash
+                    ? WorkersAssetContentTypes.Html
+                    : WorkersAssetContentTypes.Css;
+                try
+                {
+                    var single = await Client.WorkersAssets.UploadAssetAsync(
+                        hash, bytes, session.Jwt!, contentType);
+                    Assert.False(string.IsNullOrWhiteSpace(single.Jwt));
+                    completionJwt = single.Jwt;
+                    Collect(unmodelled, "assets.upload", single.AdditionalData);
+                    Log($"uploaded {hash} on its own: {single}");
+                }
+                catch (CloudflareApiException exception)
+                {
+                    // A refusal here is the interesting answer: it says whether Cloudflare checks the key
+                    // against the bytes it was given, which the published schema does not.
+                    surprises.Add(
+                        $"POST …/workers/assets/upload/{{hash}} was refused with {exception.StatusCode} " +
+                        $"[{exception.ErrorCode}] {Truncate(exception.Message, 200)}");
+                }
+            }
+
+            try
+            {
+                var bulk = await Client.WorkersAssets.UploadAssetsAsync(
+                    new[]
+                    {
+                        new WorkersAssetUploadItem(indexHash, indexBytes, WorkersAssetContentTypes.Html),
+                        new WorkersAssetUploadItem(styleHash, styleBytes, WorkersAssetContentTypes.Css),
+                    },
+                    session.Jwt!);
+                Assert.False(string.IsNullOrWhiteSpace(bulk.Jwt));
+                completionJwt = bulk.Jwt;
+                Collect(unmodelled, "assets.upload-bulk", bulk.AdditionalData);
+                Log($"uploaded both assets as one multipart call: {bulk}");
+            }
+            catch (CloudflareApiException exception)
+            {
+                surprises.Add(
+                    $"POST …/workers/assets/upload?base64=true was refused with {exception.StatusCode} " +
+                    $"[{exception.ErrorCode}] {Truncate(exception.Message, 200)}");
+            }
+
+            // The completion token is redeemed by a deployment: the same script upload this fact began with, now
+            // carrying the assets block. Cloudflare may refuse it - whether the classic content upload accepts
+            // assets, or only a version upload does, is not something the reference says - so a refusal is
+            // reported and the fact carries on.
+            try
+            {
+                var deployment = new UploadWorkerScriptRequest(
+                    scriptName,
+                    "export default { async fetch(request) { return new Response('cf-net'); } }",
+                    "2025-01-01")
+                {
+                    Assets = new WorkerAssetsConfiguration
+                    {
+                        Jwt = completionJwt,
+                        Config = new WorkerAssetsRoutingConfiguration
+                        {
+                            HtmlHandling = "auto-trailing-slash",
+                            NotFoundHandling = "single-page-application",
+                        },
+                    },
+                };
+
+                var deployed = await Retrying5xxAsync(() => Client.Workers.UploadAsync(deployment));
+                Assert.Equal(scriptName, deployed.ScriptName);
+                Collect(unmodelled, "assets.deploy", deployed.AdditionalData);
+                Log($"redeployed {deployed.ScriptName} with the completion token; modified {deployed.ModifiedOn:O}");
+            }
+            catch (CloudflareApiException exception)
+            {
+                surprises.Add(
+                    $"the deployment that redeemed the completion token was refused with {exception.StatusCode} " +
+                    $"[{exception.ErrorCode}] {Truncate(exception.Message, 200)}");
+            }
+        }
+        catch (CloudflareApiException exception) when (exception.IsAuthenticationFailure)
+        {
+            SkipUnless(
+                false,
+                $"The Workers static asset flow needs Workers Scripts Write " +
+                $"(e086da7e2179491d91ee5f35b3ca210a): {Truncate(exception.Message, 200)}");
+        }
+        finally
+        {
+            if (uploadedScript)
+            {
+                await Client.Workers.DeleteAsync(scriptName);
+                Log($"deleted the script {scriptName} on the way out");
+            }
+
+            if (surprises.Count > 0)
+            {
+                Warn($"Worker static assets answered something other than what the reference publishes: " +
+                     $"{string.Join("; ", surprises)}.");
+            }
+
+            if (unmodelled.Count > 0)
+            {
+                Warn("Fields the asset upload answers carried that this library does not model: " +
+                     $"{string.Join("; ", unmodelled)}. They are readable through AdditionalData, and naming " +
+                     "them here is how they become properties instead of guesses.");
+            }
+        }
+    }
+
+    /// <summary>
+    /// Builds an asset key of the shape Cloudflare's manifest carries: the bytes as base64 with the extension
+    /// appended, hashed and cut to 32 hex characters. wrangler hashes that string with BLAKE3; this uses
+    /// SHA-256, because the point of the key here is that the three calls agree on it.
+    /// </summary>
+    private static string AssetKey(byte[] content, string extension)
+    {
+        var payload = System.Text.Encoding.UTF8.GetBytes(Convert.ToBase64String(content) + extension);
+        return Convert.ToHexString(SHA256.HashData(payload)).ToLowerInvariant()[..32];
+    }
+
+
+    /// <summary>
     /// Records the fields an access rule answer carried that this library does not model - on the rule, on the
     /// configuration and on the scope, tagged with the call they came from.
     /// </summary>

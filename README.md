@@ -98,6 +98,7 @@ Console.WriteLine($"{zones.Count} of {zones.TotalCount} zones");
 | `client.CustomHostnames` | `ICustomHostnamesService` | SSL for SaaS: custom hostnames, their certificates, the challenges that validate them and the zone-wide fallback origin |
 | `client.OriginTlsClientAuth` | `IOriginTlsClientAuthService` | mutual TLS towards the origin: the zone switch, per-hostname certificate associations, uploaded client certificates, and the deprecated zone-level ones |
 | `client.Workers` | `IWorkersScriptsService` | scripts, module content, script settings, deployments, secrets, routes, account settings, `workers.dev` subdomain |
+| `client.WorkersAssets` | `IWorkersAssetsService` | static assets: which of a manifest's files Cloudflare is missing, the JWT-authenticated uploads that send them, and the completion token a deployment redeems |
 | `client.Pages` | `IPagesProjectsService` | projects, deployments, custom domains |
 | `client.D1` | `ID1DatabaseService` | databases, SQL queries, batches, backups |
 | `client.Kv` | `IKvService` | namespaces, key listings, values, bulk writes |

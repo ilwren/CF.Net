@@ -186,7 +186,14 @@ public sealed class CloudflareTransport : ICloudflareTransport, IDisposable
             message.Content = request.Body.CreateContent(_serializerOptions);
         }
 
-        ApplyAuthentication(message);
+        // A request that carries its own bearer token - an asset upload authorized by the session JWT - is not
+        // given the configured credentials: Cloudflare would see two Authorization values, and the API token is
+        // not what these endpoints accept.
+        if (!request.UsesCustomAuthentication)
+        {
+            ApplyAuthentication(message);
+        }
+
         ApplyUserAgent(message);
 
         foreach (var header in request.Headers)

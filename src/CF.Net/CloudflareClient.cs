@@ -56,6 +56,7 @@ public sealed class CloudflareClient : ICloudflareClient, IDisposable
         CustomHostnames = new CustomHostnamesService(transport);
         OriginTlsClientAuth = new OriginTlsClientAuthService(transport);
         Workers = new WorkersScriptsService(transport);
+        WorkersAssets = new WorkersAssetsService(transport);
         Pages = new PagesProjectsService(transport);
         D1 = new D1DatabaseService(transport);
         Kv = new KvService(transport);
@@ -104,6 +105,9 @@ public sealed class CloudflareClient : ICloudflareClient, IDisposable
 
     /// <inheritdoc />
     public IWorkersScriptsService Workers { get; }
+
+    /// <inheritdoc />
+    public IWorkersAssetsService WorkersAssets { get; }
 
     /// <inheritdoc />
     public IPagesProjectsService Pages { get; }

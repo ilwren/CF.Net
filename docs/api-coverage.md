@@ -543,7 +543,9 @@ expired CA is something an account may upload on purpose. It does check that bot
 because a DER blob or a file name where a certificate belongs is the mistake whose Cloudflare refusal —
 "invalid certificate" — points somewhere unhelpful.
 
-⛔ Not wrapped: `client_certificates` (certificates **issued by** Cloudflare's managed CA), `acm`,
+⛔ Not wrapped: `client_certificates` — the API Shield mTLS client certificates Cloudflare's managed CA
+**issues** for a zone. They need the API Shield add-on, so they are out of scope with the other paid features
+and a live run would only ever report an entitlement refusal for them. Also unwrapped: `acm`,
 `keyless_certificates` and `certificate_authorities`.
 
 ---
@@ -671,9 +673,10 @@ parses as typed - and the settings **write** answered **403 `[10000]`** for a to
 Write**, exactly as its own documentation says. That group is now in the token URL the workflow generates, so
 the next token created from it will let the write be verified too.
 
-⛔ The newer JSON-only flow (`POST /workers/workers` → `…/versions` → `…/deployments`), static asset
-upload sessions, Workers for Platforms dispatch namespaces, and query filters on the domain list. Workers AI
-is wrapped - it has its own section below - and a script's secrets are in the table above.
+⛔ The newer JSON-only flow (`POST /workers/workers` → `…/versions` → `…/deployments`), Workers for
+Platforms dispatch namespaces, and query filters on the domain list. Static asset uploads are wrapped too, in
+*Workers static assets* below. Workers AI is wrapped - it has its own section below - and a script's secrets
+are in the table above.
 
 ---
 
@@ -1488,6 +1491,80 @@ somewhere the caller does not control.
 Older revisions of this endpoint also answered the China network's own ranges beside these, and the published
 schema has moved more than once, so anything this version does not model arrives in `AdditionalData` and the
 live fact reports which fields those were.
+
+---
+
+## Workers static assets
+
+`IWorkersAssetsService` — `client.WorkersAssets`
+
+The files a Worker serves as static assets. A deployment that carries them is three calls, and this service is
+the middle two — the third is the script or version upload this library already wraps, whose metadata has carried
+an `assets` block with a `jwt` field since before the endpoints that produce that JWT were wrapped here.
+
+| Method | Endpoint | Notes |
+| --- | --- | --- |
+| `CreateUploadSessionAsync(scriptName, WorkersAssetManifest, accountId)` | `POST /accounts/{account_id}/workers/scripts/{script_name}/assets-upload-session` | body `{"manifest":{"<path>":{"hash","size"}}}`; answers `{buckets[][], jwt}` — the hashes Cloudflare is **missing**, grouped into upload requests, plus the JWT that authorises sending them. The script has to exist first |
+| `UploadAssetAsync(hash, bytes, jwt, contentType, accountId)` | `POST /accounts/{account_id}/workers/assets/upload/{hash}` | the raw bytes as the body, authorized **by the session JWT**. Not in the published reference: it is the single-asset call wrangler makes when the token allows it |
+| `UploadAssetsAsync(items, jwt, accountId)` | `POST /accounts/{account_id}/workers/assets/upload?base64=true` | one `multipart/form-data` call for a bucket of assets: every part is named and file-named by its hash and holds the bytes as **base64 text** |
+
+Both upload calls answer `{"jwt": …}`, and the published schema calls that "a completion JWT which can be
+redeemed when creating a Worker version". The last upload's token is the one to redeem, so it goes on the
+deployment that follows as `UploadWorkerScriptRequest.Assets.Jwt` — see `client.Workers.UploadAsync` and
+`client.Workers.CreateVersionAsync`.
+
+**These two endpoints take no API credentials at all.** Their only authorization is the session JWT, which is why
+`CloudflareRequest.WithBearerToken(token)` exists: it puts the JWT in `Authorization` *and* tells the transport to
+leave the configured API token or API key off the call. Setting the header with `WithHeader` is not enough — the
+transport adds its own credentials first, and a repeated header is dropped rather than replacing what is already
+there. A client configured with no credentials whatsoever can still upload assets it holds a JWT for.
+
+**The manifest hash is the caller's to compute, and getting it wrong is silent.** Cloudflare publishes it as an
+opaque `string` and never says how to build it; wrangler uses the **BLAKE3** hash of the file's bytes encoded as
+base64 text with its extension appended without the dot, hex encoded and cut to the first 32 characters — the same
+key scheme the Pages Direct Upload flow uses, and for the same reason it is not SHA-256 of the bytes. This library
+does not implement BLAKE3 and does not guess at it: it takes the hash as given and uses that one string in all
+three places that have to agree — the manifest entry, the upload path, and the multipart part name. Nothing
+validates a wrong key. The upload answers 200, the deployment answers 200, and the asset 404s forever, which is
+exactly the failure mode the Pages section below refuses to wrap its way into. Hash the way wrangler does, or let
+wrangler do the uploading.
+
+Manifest keys are root-relative request paths, not file system paths: the published schema's own example is
+`/blog/hello-world.html`, and wrangler builds every key as a slash plus the file's path relative to the assets
+directory with backslashes turned into slashes. `WorkersAssetManifest.NormalizePath` applies that rule, so
+`blog\hello-world.html` becomes `/blog/hello-world.html` on every platform.
+
+`buckets` is documented as "the requests to make to upload assets", and its shape carries two ideas worth keeping.
+An inner list is one upload request, so Cloudflare decides how the work is grouped; and a hash that is absent from
+every bucket is one Cloudflare already holds, so an unchanged site uploads nothing at all and the session's own
+JWT is already the completion token. `WorkersAssetsUploadSession.NothingToUpload` says so, and
+`RequestedHashes` flattens the buckets in order.
+
+The session JWT also carries advice for the uploader, which `WorkersAssetsToken.TryRead` reads without verifying
+the signature — there is no public key to verify against, and the token only ever goes back to Cloudflare.
+`wrangler_single_asset_uploads` says whether the single-asset endpoint may be used, `edge_kv_upload_concurrency`
+says how many buckets may be in flight (wrangler's fallback is 50, mirrored as
+`WorkersAssetsToken.DefaultUploadConcurrency`, and only a positive number is honoured), and `exp` says when the
+token stops working — a deployment that waits too long has to ask for a new session rather than retry the upload.
+
+An asset whose media type is unknown goes up as `application/null`, wrangler's sentinel that Cloudflare's asset
+API parses as "store no content type", so the asset is served without one rather than with a wrong one. That is
+`WorkersAssetContentTypes.Unknown` and the default of both upload calls: sending
+`application/octet-stream` instead would make a browser download an image it should display.
+
+Cloudflare has answered the session endpoint with a null result before (cloudflare/workers-sdk issue 9465), so
+`CreateUploadSessionAsync` goes through `EnsureResult()` and turns that into a `CloudflareApiException` naming the
+request and carrying the ray id, rather than a null reference two calls later.
+
+**Permission:** the session endpoint wants `Workers Scripts` Write
+(`e086da7e2179491d91ee5f35b3ca210a`) — the same group as the script upload it belongs to. The two upload
+endpoints want no group at all, only the JWT.
+
+⛔ **Not wrapped:** Workers for Platforms has its own copy of the session endpoint under
+`/accounts/{account_id}/workers/dispatch/namespaces/{namespace}/scripts/{script}/assets-upload-session`. This
+library wraps no dispatch-namespace endpoint, here or anywhere else. Nothing else is left out of this resource:
+`assets-upload-session` and the two upload paths are all of it, and there is no read, list or delete call for
+assets — Cloudflare garbage-collects what no deployment references.
 
 ---
 

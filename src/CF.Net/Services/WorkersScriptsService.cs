@@ -1,0 +1,1660 @@
+using System.Runtime.CompilerServices;
+using CFNet.Http;
+using CFNet.Models.Workers;
+
+namespace CFNet.Services;
+
+/// <summary>
+/// Operations on Workers scripts: listing and searching them, their versions, their deployments,
+/// uploading and deleting them, and the <c>*.workers.dev</c> subdomain.
+/// </summary>
+public interface IWorkersScriptsService
+{
+    /// <summary>Lists the Worker scripts in an account.</summary>
+    /// <param name="parameters">Optional filters and cursor.</param>
+    /// <param name="accountId">Account id; falls back to the configured default when null.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    Task<CloudflarePage<WorkerScript>> ListAsync(
+        WorkerScriptListParameters? parameters = null,
+        string? accountId = null,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>Enumerates every Worker script, following cursor pagination automatically.</summary>
+    /// <param name="parameters">Optional filters; <c>Cursor</c> is ignored.</param>
+    /// <param name="accountId">Account id; falls back to the configured default when null.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    IAsyncEnumerable<WorkerScript> ListAllAsync(
+        WorkerScriptListParameters? parameters = null,
+        string? accountId = null,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>Searches the account's Worker scripts by id or by name.</summary>
+    /// <param name="parameters">Filters, sort field and page numbering; <c>null</c> for Cloudflare's defaults.</param>
+    /// <param name="accountId">Account id; falls back to the configured default when null.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <remarks>
+    /// <c>GET /accounts/{account_id}/workers/scripts-search</c> is its own endpoint rather than a filter on
+    /// <see cref="ListAsync"/>: it answers with a compact row per script - id, name, created_on,
+    /// modified_on, and the environment and service the script belongs to - and it is page numbered with
+    /// <c>result_info</c>, where the scripts list is cursor paginated. <c>id</c> matches exactly only while
+    /// <c>name</c> matches exactly and partially. Note that <c>result_info.total_count</c> is documented as
+    /// the total available without any search parameters, so it describes the account's script set and not
+    /// the filtered result.
+    /// </remarks>
+    Task<CloudflarePage<WorkerScriptSearchItem>> SearchAsync(
+        WorkerScriptSearchParameters? parameters = null,
+        string? accountId = null,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>Downloads a script's source.</summary>
+    /// <param name="scriptName">The Worker name.</param>
+    /// <param name="accountId">Account id; falls back to the configured default when null.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>The script content, or <c>null</c> when it does not exist.</returns>
+    /// <remarks>
+    /// <c>GET /accounts/{account_id}/workers/scripts/{script_name}</c> is documented by Cloudflare as
+    /// "Download Worker Script - fetch raw content for a Worker script; note this is the original script
+    /// content, not JSON encoded", and their own SDKs return a string from it. Metadata - bindings, usage
+    /// model, compatibility date, observability - comes from <see cref="GetSettingsAsync"/> or from the
+    /// list endpoint, not from here.
+    /// </remarks>
+    Task<string?> GetAsync(
+        string scriptName,
+        string? accountId = null,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>Downloads a script's content through the versioned content endpoint.</summary>
+    /// <param name="scriptName">The Worker name.</param>
+    /// <param name="accountId">Account id; falls back to the configured default when null.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>The script content, or <c>null</c> when it does not exist.</returns>
+    /// <remarks>
+    /// The documented path is <c>…/scripts/{script_name}/content/v2</c> ("fetch script content only"); the
+    /// unversioned <c>…/content</c> is the <c>PUT</c> that replaces content without touching config. This
+    /// answers with raw content too, so like <see cref="GetAsync"/> it returns text rather than a model.
+    /// </remarks>
+    Task<string?> GetContentAsync(
+        string scriptName,
+        string? accountId = null,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>Lists a script's uploaded versions, newest first.</summary>
+    /// <param name="scriptName">The Worker name.</param>
+    /// <param name="parameters">Paging and the <c>deployable</c> filter; <c>null</c> for Cloudflare's defaults.</param>
+    /// <param name="accountId">Account id; falls back to the configured default when null.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <remarks>
+    /// <c>GET …/workers/scripts/{script_name}/versions</c> takes <c>page</c> and <c>per_page</c> but answers
+    /// with <c>{"items":[…]}</c> and no <c>result_info</c>, so this returns a
+    /// <see cref="WorkerVersionListResult"/> rather than the <see cref="CloudflarePage{T}"/> the other list
+    /// endpoints return - there are no totals to read. Cloudflare documents the first entry as the latest
+    /// version, which <see cref="WorkerVersionListResult.Latest"/> exposes. <c>deployable</c> is documented
+    /// as ignoring pagination. Permissions are the Workers Scripts read/write this service already uses.
+    /// </remarks>
+    Task<WorkerVersionListResult?> ListVersionsAsync(
+        string scriptName,
+        WorkerVersionListParameters? parameters = null,
+        string? accountId = null,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>Reads one version of a script in full, including its resources.</summary>
+    /// <param name="scriptName">The Worker name.</param>
+    /// <param name="versionId">The version's id, as <see cref="ListVersionsAsync"/> reports it.</param>
+    /// <param name="accountId">Account id; falls back to the configured default when null.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>The version, or <c>null</c> when the script or the version does not exist.</returns>
+    /// <remarks>
+    /// <c>GET …/workers/scripts/{script_name}/versions/{version_id}</c> answers with the same <c>id</c>,
+    /// <c>number</c> and <c>metadata</c> the list carries, plus a <c>resources</c> block holding that
+    /// version's bindings, the handlers its script exports and its runtime configuration - compatibility
+    /// date and flags, CPU limits, usage model, migration tag and declarative exports. It is the only
+    /// endpoint that shows a version's runtime as it was uploaded; <see cref="GetSettingsAsync"/> describes
+    /// the script rather than a version. The permissions are the ones the list already needs.
+    /// </remarks>
+    Task<WorkerVersionDetail?> GetVersionAsync(
+        string scriptName,
+        string versionId,
+        string? accountId = null,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>Uploads a new version of a script without deploying it.</summary>
+    /// <param name="scriptName">The Worker name.</param>
+    /// <param name="request">The bundle and its configuration. Validated locally first.</param>
+    /// <param name="bindingsInheritStrict">
+    /// Sends <c>bindings_inherit=strict</c>, which fails the upload with error 10057 when an <c>inherit</c>
+    /// binding cannot be resolved against the latest uploaded version - which may not be the deployed one.
+    /// Without it Cloudflare silently drops the inherit bindings it cannot resolve.
+    /// </param>
+    /// <param name="accountId">Account id; falls back to the configured default when null.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>The version that was created, read back in full.</returns>
+    /// <remarks>
+    /// <c>POST …/workers/scripts/{script_name}/versions</c> takes the same <c>multipart/form-data</c> body as
+    /// <see cref="UploadAsync(UploadWorkerScriptRequest, string, CancellationToken)"/> - a <c>metadata</c>
+    /// part plus one part per module - but it creates a version and leaves the deployment alone, so traffic
+    /// keeps going to whatever was serving before. Module syntax is required: the reference publishes
+    /// <c>main_module</c> as mandatory here and offers no <c>body_part</c> alternative. The response is the
+    /// version in full, and adds two things the version read does not: <c>startup_time_ms</c> and
+    /// <c>exports_reconciliation</c>. This endpoint needs Workers Scripts Write, which is narrower than the
+    /// read permission the other version endpoints accept.
+    /// </remarks>
+    Task<WorkerVersionDetail?> CreateVersionAsync(
+        string scriptName,
+        UploadWorkerScriptRequest request,
+        bool? bindingsInheritStrict = null,
+        string? accountId = null,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>Reads a script's cron triggers.</summary>
+    /// <param name="scriptName">The Worker name.</param>
+    /// <param name="accountId">Account id; falls back to the configured default when null.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <remarks>
+    /// <c>GET …/workers/scripts/{script_name}/schedules</c> takes no query parameters and answers with
+    /// <c>{"schedules":[…]}</c> - the array nested inside <c>result</c> and no <c>result_info</c>, so this is
+    /// a <see cref="WorkerScheduleListResult"/> rather than a <see cref="CloudflarePage{T}"/>. A script with
+    /// no triggers answers with an empty array, not an error.
+    /// </remarks>
+    Task<WorkerScheduleListResult?> ListSchedulesAsync(
+        string scriptName,
+        string? accountId = null,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>Replaces a script's cron triggers with the given expressions.</summary>
+    /// <param name="scriptName">The Worker name.</param>
+    /// <param name="cronExpressions">
+    /// The complete new set of expressions. Empty clears every trigger on the script.
+    /// </param>
+    /// <param name="accountId">Account id; falls back to the configured default when null.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>The triggers as Cloudflare recorded them, with their timestamps.</returns>
+    /// <remarks>
+    /// <c>PUT …/workers/scripts/{script_name}/schedules</c> is a whole-set replacement: a trigger not in the
+    /// list is removed, so sending one expression to a script that has three leaves it with one. That is
+    /// worth reading twice before calling. The body is a bare JSON array of <c>{"cron": …}</c> objects - not
+    /// an object holding one - which is unusual for this API and is why the parameter is the expressions
+    /// rather than a request model. Cloudflare validates each expression against its own scheduler; this
+    /// library rejects only blanks and duplicates, because guessing at the grammar would refuse expressions
+    /// the API accepts. Needs Workers Scripts Write, where the read needs only Read.
+    /// </remarks>
+    Task<WorkerScheduleListResult?> UpdateSchedulesAsync(
+        string scriptName,
+        IEnumerable<string> cronExpressions,
+        string? accountId = null,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>Lists a script's deployments, newest first.</summary>
+    /// <param name="scriptName">The Worker name.</param>
+    /// <param name="parameters">Paging and a creation-time range; <c>null</c> for Cloudflare's defaults.</param>
+    /// <param name="accountId">Account id; falls back to the configured default when null.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <remarks>
+    /// <c>GET …/workers/scripts/{script_name}/deployments</c> nests its array under <c>deployments</c> rather
+    /// than returning it as <c>result</c>, so this is a <see cref="WorkerDeploymentListResult"/> and not a
+    /// <see cref="CloudflarePage{T}"/> - though unlike the versions endpoint it does return
+    /// <c>result_info</c>, which the result carries on <see cref="WorkerDeploymentListResult.Info"/>.
+    /// Cloudflare documents the first entry as the latest deployment actively serving traffic. Uploading a
+    /// script deploys it, so a script that exists has at least one deployment.
+    /// </remarks>
+    Task<WorkerDeploymentListResult?> ListDeploymentsAsync(
+        string scriptName,
+        WorkerDeploymentListParameters? parameters = null,
+        string? accountId = null,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>Fetches the script-level settings (Logpush, tail consumers, observability, tags).</summary>
+    /// <param name="scriptName">The Worker name.</param>
+    /// <param name="accountId">Account id; falls back to the configured default when null.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    Task<WorkerScriptSettings?> GetSettingsAsync(
+        string scriptName,
+        string? accountId = null,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>Changes a Worker's script-level settings: Logpush, observability, tags, tail consumers.</summary>
+    /// <param name="scriptName">The Worker name.</param>
+    /// <param name="settings">The fields to change. Only what is set is sent.</param>
+    /// <param name="accountId">Account id; falls back to the configured default when null.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>The script's settings as Cloudflare now holds them.</returns>
+    /// <remarks>
+    /// <para>
+    /// <c>PATCH /accounts/{account_id}/workers/scripts/{script_name}/script-settings</c> - the same path
+    /// <see cref="GetSettingsAsync"/> reads, and the same type both ways. A PATCH changes only the fields that
+    /// are set: this library never writes a JSON <c>null</c>, so an unset field is left as it is, and clearing
+    /// <see cref="WorkerScriptSettings.Tags"/> or <see cref="WorkerScriptSettings.TailConsumers"/> means
+    /// sending an empty list rather than a null one.
+    /// </para>
+    /// <para>
+    /// A request with nothing set is refused locally, because it would send an empty body and change nothing
+    /// while still counting as a write.
+    /// </para>
+    /// <para>
+    /// Everything else about a script - bindings, compatibility date, modules - belongs to the upload, and
+    /// observability destinations of the account-wide kind are their own resource.
+    /// </para>
+    /// </remarks>
+    Task<WorkerScriptSettings> UpdateSettingsAsync(
+        string scriptName,
+        WorkerScriptSettings settings,
+        string? accountId = null,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>Starts a tail on a Worker: a live stream of its logs and exceptions.</summary>
+    /// <param name="scriptName">The Worker to tail.</param>
+    /// <param name="accountId">Account id; falls back to the configured default when null.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>
+    /// The tail, with the url a consumer connects to and when it expires. Listing the script's tails answers
+    /// differently - see <see cref="ListTailsAsync"/>.
+    /// </returns>
+    /// <remarks>
+    /// <para>
+    /// <c>POST /accounts/{account_id}/workers/scripts/{script_name}/tails</c> takes no body - the script in
+    /// the path is the whole request. The events themselves arrive over the returned url rather than
+    /// through this API, so what this gives a caller is the address and the tail's lifetime.
+    /// </para>
+    /// <para>
+    /// A script holds one tail at a time: creating a second replaces the one already running rather than
+    /// adding to it, and answers with the new tail's id.
+    /// </para>
+    /// </remarks>
+    Task<WorkerTail> CreateTailAsync(
+        string scriptName,
+        string? accountId = null,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>Lists the tails a Worker has.</summary>
+    /// <param name="scriptName">The Worker being tailed.</param>
+    /// <param name="accountId">Account id; falls back to the configured default when null.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>
+    /// The script's tails, empty when it is not being tailed - which is the normal state, and what an expired
+    /// tail reads as too.
+    /// </returns>
+    /// <remarks>
+    /// This endpoint answers with an <em>array</em>, unlike the create on the same path, which answers with a
+    /// single tail - the published schema describes the read as one object too, and a live call says
+    /// otherwise, so the array is what is modelled. Its items carry the same fields the create answers with.
+    /// A 404 reads as an empty list rather than an error.
+    /// </remarks>
+    Task<IReadOnlyList<WorkerTail>> ListTailsAsync(
+        string scriptName,
+        string? accountId = null,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>Stops a tail.</summary>
+    /// <param name="scriptName">The Worker being tailed.</param>
+    /// <param name="tailId">The tail's id, as <see cref="CreateTailAsync"/> returned it.</param>
+    /// <param name="accountId">Account id; falls back to the configured default when null.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <remarks>
+    /// A tail also stops by itself at <see cref="WorkerTail.ExpiresAt"/>, so deleting one is how a stream is
+    /// ended early rather than the only way it ends.
+    /// </remarks>
+    Task DeleteTailAsync(
+        string scriptName,
+        string tailId,
+        string? accountId = null,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>Lists the secrets a Worker has, by name and kind.</summary>
+    /// <param name="scriptName">The Worker whose secrets to list.</param>
+    /// <param name="accountId">Account id; falls back to the configured default when null.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>One entry per secret. No value is ever among them, because Cloudflare never answers one.</returns>
+    /// <remarks>
+    /// <c>GET /accounts/{account_id}/workers/scripts/{script_name}/secrets</c>, a bare array with no paging and
+    /// no filters. This is how a deployment is reconciled against what a script needs: a name here and a
+    /// <c>secret_text</c> binding of the same name in the script's metadata are the two halves of one secret.
+    /// </remarks>
+    Task<IReadOnlyList<WorkerSecret>> ListSecretsAsync(
+        string scriptName,
+        string? accountId = null,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>Reads one secret's name and kind.</summary>
+    /// <param name="scriptName">The Worker the secret belongs to.</param>
+    /// <param name="secretName">The secret's name.</param>
+    /// <param name="urlEncoded">
+    /// Cloudflare's own flag saying the name in the path is percent-encoded. This library encodes every path
+    /// segment whether the flag is set or not; the flag is for a name whose characters encoding changed, and
+    /// is left off for the ordinary identifier-shaped one.
+    /// </param>
+    /// <param name="accountId">Account id; falls back to the configured default when null.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>The secret, or null when the script has no secret of that name.</returns>
+    /// <remarks>
+    /// <c>GET /accounts/{account_id}/workers/scripts/{script_name}/secrets/{secret_name}</c>. It answers what
+    /// the list answers - a name and a kind, plus a key's format and usages - and no value, because no read of
+    /// a secret ever answers one.
+    /// </remarks>
+    Task<WorkerSecret?> GetSecretAsync(
+        string scriptName,
+        string secretName,
+        bool urlEncoded = false,
+        string? accountId = null,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>Writes a secret onto a Worker, replacing any secret already stored under that name.</summary>
+    /// <param name="scriptName">The Worker to give the secret to.</param>
+    /// <param name="secret">The secret: a name, a kind, and the value or key material behind it.</param>
+    /// <param name="accountId">Account id; falls back to the configured default when null.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>The secret as Cloudflare describes it back - its name and kind, and no value.</returns>
+    /// <remarks>
+    /// <para>
+    /// <c>PUT /accounts/{account_id}/workers/scripts/{script_name}/secrets</c>. This is the only call a
+    /// secret's value ever travels on, and nothing answers it back afterwards, so a caller that loses one
+    /// writes it again rather than reading it.
+    /// </para>
+    /// <para>
+    /// A request that mixes the two kinds - a <c>secret_text</c> carrying key material, or a
+    /// <c>secret_key</c> with no format or no usages - is refused locally, because Cloudflare would store
+    /// something other than what was meant.
+    /// </para>
+    /// </remarks>
+    Task<WorkerSecret> PutSecretAsync(
+        string scriptName,
+        WorkerSecretRequest secret,
+        string? accountId = null,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>Writes a string secret onto a Worker, which is the ordinary case.</summary>
+    /// <param name="scriptName">The Worker to give the secret to.</param>
+    /// <param name="secretName">The name the script reaches it by.</param>
+    /// <param name="text">The value, which no read ever answers back.</param>
+    /// <param name="accountId">Account id; falls back to the configured default when null.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>The secret as Cloudflare describes it back.</returns>
+    Task<WorkerSecret> PutSecretAsync(
+        string scriptName,
+        string secretName,
+        string text,
+        string? accountId = null,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>Removes a secret from a Worker.</summary>
+    /// <param name="scriptName">The Worker to take the secret from.</param>
+    /// <param name="secretName">The secret's name.</param>
+    /// <param name="urlEncoded">
+    /// Cloudflare's flag saying the name in the path is percent-encoded; see <see cref="GetSecretAsync"/>.
+    /// </param>
+    /// <param name="accountId">Account id; falls back to the configured default when null.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <remarks>
+    /// <c>DELETE /accounts/{account_id}/workers/scripts/{script_name}/secrets/{secret_name}</c>. Cloudflare
+    /// publishes nothing about the answer beyond success, so there is nothing to return: the script keeps
+    /// running, and a binding that reached this secret now reaches nothing.
+    /// </remarks>
+    Task DeleteSecretAsync(
+        string scriptName,
+        string secretName,
+        bool urlEncoded = false,
+        string? accountId = null,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>Writes several secrets in one call, and removes the ones mapped to null.</summary>
+    /// <param name="scriptName">The Worker to change.</param>
+    /// <param name="secrets">The map of name to secret, where a null value is a removal.</param>
+    /// <param name="accountId">Account id; falls back to the configured default when null.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>The secrets as Cloudflare describes them back, keyed by name.</returns>
+    /// <remarks>
+    /// <para>
+    /// <c>PATCH /accounts/{account_id}/workers/scripts/{script_name}/secrets-bulk</c> - note the path is
+    /// <c>secrets-bulk</c>, not a sub-path of <c>secrets</c>. One call for several secrets matters because
+    /// each of them creates a version of the script: writing five one at a time makes five versions.
+    /// </para>
+    /// <para>
+    /// A removal is a name mapped to <see langword="null"/>, which <see cref="WorkerSecretBulkRequest.WithRemoved"/>
+    /// expresses and this library's converter writes on purpose - its serializer omits nulls everywhere else,
+    /// which here would turn a deletion into nothing at all.
+    /// </para>
+    /// </remarks>
+    Task<IReadOnlyDictionary<string, WorkerSecret>> UpdateSecretsBulkAsync(
+        string scriptName,
+        WorkerSecretBulkRequest secrets,
+        string? accountId = null,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>Lists the Workers routes in a zone.</summary>
+    /// <param name="zoneId">Zone whose routes to list; falls back to the configured default when null.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>Every route in the zone, in whatever order Cloudflare keeps them.</returns>
+    /// <remarks>
+    /// <c>GET /zones/{zone_id}/workers/routes</c>, a bare array with no paging and no filters - and note that
+    /// routes are <b>zone-scoped</b>, unlike the rest of this service, which is account-scoped. Which of them
+    /// belong to one Worker is answered by <see cref="ListRoutesForWorkerAsync"/>.
+    /// </remarks>
+    Task<IReadOnlyList<WorkerRoute>> ListRoutesAsync(
+        string? zoneId = null,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>Lists the routes in a zone that run one Worker.</summary>
+    /// <param name="scriptName">The Worker whose routes to pick out.</param>
+    /// <param name="zoneId">Zone whose routes to list; falls back to the configured default when null.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>The zone's routes whose script is this Worker, empty when it has none there.</returns>
+    /// <remarks>
+    /// The endpoint takes no filter, so this reads the zone's routes and picks the matching ones out - the same
+    /// way <c>ListDomainsForWorkerAsync</c> answers which custom domains a Worker has. Routes that run no
+    /// script at all never match, whatever the name.
+    /// </remarks>
+    Task<IReadOnlyList<WorkerRoute>> ListRoutesForWorkerAsync(
+        string scriptName,
+        string? zoneId = null,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>Reads one route.</summary>
+    /// <param name="routeId">The route's id, as the create or the list gave it.</param>
+    /// <param name="zoneId">Zone the route lives in; falls back to the configured default when null.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>The route, or null when the zone has no route of that id.</returns>
+    /// <remarks>
+    /// <c>GET /zones/{zone_id}/workers/routes/{route_id}</c> answers the same three fields the list does.
+    /// </remarks>
+    Task<WorkerRoute?> GetRouteAsync(
+        string routeId,
+        string? zoneId = null,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>Creates a route in a zone, mapping a URL pattern to a Worker.</summary>
+    /// <param name="route">The pattern, and the Worker to run on it - or no Worker, for a bypass.</param>
+    /// <param name="zoneId">Zone to create the route in; falls back to the configured default when null.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>The route as Cloudflare stored it, with the id it gave it.</returns>
+    /// <remarks>
+    /// <para>
+    /// <c>POST /zones/{zone_id}/workers/routes</c>, needing <b>Workers Routes Write</b>. The pattern is matched
+    /// against the whole request URL, the most specific pattern wins when several match, and the hostname it
+    /// names has to have a proxied DNS record in the zone for any traffic to reach it.
+    /// </para>
+    /// <para>
+    /// Leaving <see cref="WorkerRouteRequest.Script"/> null creates a route that runs nothing, which negates the
+    /// less specific patterns around it - how one path is taken back out of a Worker rather than given a
+    /// second one.
+    /// </para>
+    /// <para>
+    /// Only the pattern shapes Cloudflare documents as invalid are refused locally; that a pattern belongs to
+    /// the zone is left to Cloudflare, which refuses it and says why.
+    /// </para>
+    /// </remarks>
+    Task<WorkerRoute> CreateRouteAsync(
+        WorkerRouteRequest route,
+        string? zoneId = null,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>Changes a route's pattern, its Worker, or both.</summary>
+    /// <param name="routeId">The route to change.</param>
+    /// <param name="route">The pattern and the Worker, as the route should be afterwards.</param>
+    /// <param name="zoneId">Zone the route lives in; falls back to the configured default when null.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>The route as Cloudflare stored it.</returns>
+    /// <remarks>
+    /// <c>PUT /zones/{zone_id}/workers/routes/{route_id}</c> is a whole-route replacement, so a
+    /// <see cref="WorkerRouteRequest.Script"/> left null takes the Worker off a route that had one and turns it
+    /// into a bypass. Read the route first when only one of the two is meant to change.
+    /// </remarks>
+    Task<WorkerRoute> UpdateRouteAsync(
+        string routeId,
+        WorkerRouteRequest route,
+        string? zoneId = null,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>Removes a route from a zone.</summary>
+    /// <param name="routeId">The route to remove.</param>
+    /// <param name="zoneId">Zone the route lives in; falls back to the configured default when null.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <remarks>
+    /// <c>DELETE /zones/{zone_id}/workers/routes/{route_id}</c>. Cloudflare answers the id it removed and
+    /// nothing else worth modelling, so there is nothing to return; requests to that pattern go back to
+    /// whatever less specific route or origin was there before.
+    /// </remarks>
+    Task DeleteRouteAsync(
+        string routeId,
+        string? zoneId = null,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>Reads the account's Workers settings.</summary>
+    /// <param name="accountId">Account id; falls back to the configured default when null.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>The account's default usage model and whether it prefers renewable energy.</returns>
+    /// <remarks>
+    /// <c>GET /accounts/{account_id}/workers/account-settings</c> - account-wide defaults, not one script's
+    /// settings, which live on <c>…/workers/scripts/{script_name}/script-settings</c>.
+    /// </remarks>
+    Task<WorkersAccountSettings> GetAccountSettingsAsync(
+        string? accountId = null,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>Changes the account's Workers settings.</summary>
+    /// <param name="settings">The settings as they should be afterwards.</param>
+    /// <param name="accountId">Account id; falls back to the configured default when null.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>The settings as Cloudflare stored them.</returns>
+    /// <remarks>
+    /// <para>
+    /// <c>PUT /accounts/{account_id}/workers/account-settings</c>, which Cloudflare's own documentation says
+    /// needs <b>Account Settings Write</b> - a different group from the Workers Scripts permissions the rest of
+    /// this service uses, and one a token built only for Workers will not have.
+    /// </para>
+    /// <para>
+    /// The read and the write are the same two fields, so handing <see cref="GetAccountSettingsAsync"/> its own
+    /// answer back changes nothing and is the safe way to prove the call works. Writing
+    /// <see cref="WorkerUsageModels.Unbound"/> is a Workers Paid feature, and Cloudflare refuses it on an
+    /// account without that plan.
+    /// </para>
+    /// </remarks>
+    Task<WorkersAccountSettings> UpdateAccountSettingsAsync(
+        WorkersAccountSettings settings,
+        string? accountId = null,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Uploads (creates or replaces) a Worker. Uses the <c>multipart/form-data</c> shape Cloudflare
+    /// requires: a <c>metadata</c> part plus one part per module.
+    /// </summary>
+    /// <param name="request">The bundle and its configuration. Validated locally first.</param>
+    /// <param name="accountId">Account id; falls back to the configured default when null.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    Task<WorkerScript> UploadAsync(
+        UploadWorkerScriptRequest request,
+        string? accountId = null,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>Uploads a single-module Worker from source text.</summary>
+    /// <param name="scriptName">The Worker name.</param>
+    /// <param name="source">JavaScript module source.</param>
+    /// <param name="compatibilityDate">Runtime compatibility date; defaults to today's date.</param>
+    /// <param name="bindings">Bindings to attach.</param>
+    /// <param name="accountId">Account id; falls back to the configured default when null.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    Task<WorkerScript> UploadAsync(
+        string scriptName,
+        string source,
+        string? compatibilityDate = null,
+        IEnumerable<WorkerBinding>? bindings = null,
+        string? accountId = null,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>Deletes a Worker. This removes all of its versions and deployments.</summary>
+    /// <param name="scriptName">The Worker name.</param>
+    /// <param name="accountId">Account id; falls back to the configured default when null.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    Task DeleteAsync(string scriptName, string? accountId = null, CancellationToken cancellationToken = default);
+
+    /// <summary>Creates a deployment, routing traffic to the given versions.</summary>
+    /// <param name="scriptName">The Worker name.</param>
+    /// <param name="request">The rollout description.</param>
+    /// <param name="accountId">Account id; falls back to the configured default when null.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    Task<WorkerDeployment> CreateDeploymentAsync(
+        string scriptName,
+        CreateWorkerDeploymentRequest request,
+        string? accountId = null,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>Fetches the account's <c>*.workers.dev</c> subdomain.</summary>
+    /// <param name="accountId">Account id; falls back to the configured default when null.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    Task<WorkerSubdomain?> GetSubdomainAsync(string? accountId = null, CancellationToken cancellationToken = default);
+
+    /// <summary>Changes the account's <c>*.workers.dev</c> subdomain or enables it.</summary>
+    /// <param name="request">The fields to change.</param>
+    /// <param name="accountId">Account id; falls back to the configured default when null.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    Task<WorkerSubdomain> UpdateSubdomainAsync(
+        UpdateWorkerSubdomainRequest request,
+        string? accountId = null,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>Fetches a script's <c>workers.dev</c> publication state.</summary>
+    /// <param name="scriptName">The Worker name.</param>
+    /// <param name="accountId">Account id; falls back to the configured default when null.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    Task<WorkerScriptSubdomain?> GetScriptSubdomainAsync(
+        string scriptName,
+        string? accountId = null,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>Publishes or unpublishes a script on <c>workers.dev</c>.</summary>
+    /// <param name="scriptName">The Worker name.</param>
+    /// <param name="request">The desired state.</param>
+    /// <param name="accountId">Account id; falls back to the configured default when null.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    Task<WorkerScriptSubdomain?> UpdateScriptSubdomainAsync(
+        string scriptName,
+        UpdateWorkerScriptSubdomainRequest request,
+        string? accountId = null,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Lists the account's Worker custom domains via <c>GET /accounts/{account_id}/workers/domains</c>.
+    /// </summary>
+    /// <param name="accountId">Account id; falls back to the configured default when null.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>Every hostname attached to a Worker in the account.</returns>
+    /// <remarks>
+    /// No query parameters are sent: the published schema for this endpoint documents none, and
+    /// Cloudflare rejects parameters it does not recognise rather than ignoring them. Filter the result
+    /// client-side - <see cref="WorkerDomain.Service"/> names the Worker, <see cref="WorkerDomain.Hostname"/>
+    /// the hostname.
+    /// </remarks>
+    Task<IReadOnlyList<WorkerDomain>> ListDomainsAsync(string? accountId = null, CancellationToken cancellationToken = default);
+
+    /// <summary>Lists the custom domains attached to one Worker.</summary>
+    /// <param name="workerName">Worker (script) name, compared case insensitively with <see cref="WorkerDomain.Service"/>.</param>
+    /// <param name="accountId">Account id; falls back to the configured default when null.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>Every attachment whose <c>service</c> is that Worker, in the order Cloudflare returned them.</returns>
+    /// <remarks>
+    /// The v4 API has no script-scoped domain endpoint: <c>/accounts/{account_id}/workers/domains</c> is the
+    /// only one and it returns every attachment in the account, so this lists once and filters locally.
+    /// Call <see cref="ListDomainsAsync"/> directly when you need the whole account anyway.
+    /// </remarks>
+    Task<IReadOnlyList<WorkerDomain>> ListDomainsForWorkerAsync(
+        string workerName,
+        string? accountId = null,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>Fetches one custom domain via <c>GET /accounts/{account_id}/workers/domains/{domain_id}</c>.</summary>
+    /// <param name="domainId">The attachment id, as listed by <see cref="ListDomainsAsync"/>.</param>
+    /// <param name="accountId">Account id; falls back to the configured default when null.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>The domain, or <c>null</c> when there is no such attachment.</returns>
+    Task<WorkerDomain?> GetDomainAsync(string domainId, string? accountId = null, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Attaches a hostname to a Worker via <c>PUT /accounts/{account_id}/workers/domains</c>.
+    /// </summary>
+    /// <param name="request">Hostname, Worker name and routing flags.</param>
+    /// <param name="accountId">Account id; falls back to the configured default when null.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>The domain as Cloudflare created it, including the certificate id.</returns>
+    /// <remarks>
+    /// Needs <c>Workers Scripts Write</c>. Cloudflare issues a certificate for the hostname, which can
+    /// take a moment to become active.
+    /// </remarks>
+    Task<WorkerDomain> AttachDomainAsync(AttachWorkerDomainRequest request, string? accountId = null, CancellationToken cancellationToken = default);
+
+    /// <summary>Attaches a hostname to a Worker, the common case of <see cref="AttachDomainAsync(AttachWorkerDomainRequest, string?, CancellationToken)"/>.</summary>
+    /// <param name="hostname">Hostname to attach, e.g. <c>app.example.com</c>.</param>
+    /// <param name="workerName">Name of the Worker to route it to.</param>
+    /// <param name="zoneId">Zone the hostname lives in; falls back to the configured default when null.</param>
+    /// <param name="accountId">Account id; falls back to the configured default when null.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>The domain as Cloudflare created it.</returns>
+    Task<WorkerDomain> AttachDomainAsync(string hostname, string workerName, string? zoneId = null, string? accountId = null, CancellationToken cancellationToken = default);
+
+    /// <summary>Detaches a custom domain via <c>DELETE /accounts/{account_id}/workers/domains/{domain_id}</c>.</summary>
+    /// <param name="domainId">The attachment id.</param>
+    /// <param name="accountId">Account id; falls back to the configured default when null.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>A task that completes when Cloudflare has removed the attachment.</returns>
+    Task DeleteDomainAsync(string domainId, string? accountId = null, CancellationToken cancellationToken = default);
+}
+
+
+/// <inheritdoc />
+public sealed class WorkersScriptsService : CloudflareService, IWorkersScriptsService
+{
+    /// <summary>Creates the service.</summary>
+    /// <param name="transport">The transport to execute requests through.</param>
+    public WorkersScriptsService(ICloudflareTransport transport)
+        : base(transport)
+    {
+    }
+
+    /// <inheritdoc />
+    public async Task<CloudflarePage<WorkerScript>> ListAsync(
+        WorkerScriptListParameters? parameters = null,
+        string? accountId = null,
+        CancellationToken cancellationToken = default)
+    {
+        var account = ResolveAccountId(accountId);
+        var request = Apply(CloudflareRequest.Get($"{AccountPath(account)}/workers/scripts"), parameters);
+        request.OperationName = "List Worker Scripts";
+
+        var response = await Transport.SendAsync<List<WorkerScript>>(request, cancellationToken).ConfigureAwait(false);
+        return response.ToPage();
+    }
+
+    /// <inheritdoc />
+    public async IAsyncEnumerable<WorkerScript> ListAllAsync(
+        WorkerScriptListParameters? parameters = null,
+        string? accountId = null,
+        [EnumeratorCancellation] CancellationToken cancellationToken = default)
+    {
+        var account = ResolveAccountId(accountId);
+        string? cursor = null;
+        var guard = 0;
+
+        while (true)
+        {
+            var effective = new WorkerScriptListParameters
+            {
+                PerPage = parameters?.PerPage,
+                Name = parameters?.Name,
+                Order = parameters?.Order,
+                Direction = parameters?.Direction,
+                Cursor = cursor,
+            };
+
+            var page = await ListAsync(effective, account, cancellationToken).ConfigureAwait(false);
+            foreach (var script in page.Items)
+            {
+                yield return script;
+            }
+
+            var next = page.NextCursor;
+            if (string.IsNullOrEmpty(next) || string.Equals(next, cursor, StringComparison.Ordinal) || page.Items.Count == 0)
+            {
+                yield break;
+            }
+
+            cursor = next;
+
+            // A cursor that never terminates would spin forever against a buggy endpoint.
+            if (++guard > 10_000)
+            {
+                yield break;
+            }
+        }
+    }
+
+    /// <inheritdoc />
+    public async Task<CloudflarePage<WorkerScriptSearchItem>> SearchAsync(
+        WorkerScriptSearchParameters? parameters = null,
+        string? accountId = null,
+        CancellationToken cancellationToken = default)
+    {
+        var account = ResolveAccountId(accountId);
+        parameters?.EnsureValid();
+
+        var request = Apply(CloudflareRequest.Get($"{AccountPath(account)}/workers/scripts-search"), parameters);
+        request.OperationName = "Search Worker Scripts";
+
+        var response = await Transport.SendAsync<List<WorkerScriptSearchItem>>(request, cancellationToken).ConfigureAwait(false);
+        return response.ToPage();
+    }
+
+    /// <inheritdoc />
+    public async Task<string?> GetAsync(
+        string scriptName,
+        string? accountId = null,
+        CancellationToken cancellationToken = default)
+    {
+        var account = ResolveAccountId(accountId);
+        var name = Require(scriptName, nameof(scriptName));
+
+        var request = CloudflareRequest.Get($"{AccountPath(account)}/workers/scripts/{CloudflareUrl.EncodeSegment(name)}")
+            .Tolerate(System.Net.HttpStatusCode.NotFound);
+        request.OperationName = "Download Worker Script";
+
+        // Not an envelope: Cloudflare returns the script source verbatim, the way KV returns a stored
+        // value. Reading it as JSON produced a null for a script that had just been uploaded with a 200.
+        var raw = await Transport.SendRawAsync(request, cancellationToken).ConfigureAwait(false);
+        return raw.IsSuccessStatusCode ? raw.Body : null;
+    }
+
+    /// <inheritdoc />
+    public async Task<string?> GetContentAsync(
+        string scriptName,
+        string? accountId = null,
+        CancellationToken cancellationToken = default)
+    {
+        var account = ResolveAccountId(accountId);
+        var name = Require(scriptName, nameof(scriptName));
+
+        var request = CloudflareRequest
+            .Get($"{AccountPath(account)}/workers/scripts/{CloudflareUrl.EncodeSegment(name)}/content/v2")
+            .Tolerate(System.Net.HttpStatusCode.NotFound);
+        request.OperationName = "Get Worker Script Content";
+
+        var raw = await Transport.SendRawAsync(request, cancellationToken).ConfigureAwait(false);
+        return raw.IsSuccessStatusCode ? raw.Body : null;
+    }
+
+    /// <inheritdoc />
+    public async Task<WorkerVersionListResult?> ListVersionsAsync(
+        string scriptName,
+        WorkerVersionListParameters? parameters = null,
+        string? accountId = null,
+        CancellationToken cancellationToken = default)
+    {
+        var account = ResolveAccountId(accountId);
+        var name = Require(scriptName, nameof(scriptName));
+
+        var request = CloudflareRequest.Get(
+            $"{AccountPath(account)}/workers/scripts/{CloudflareUrl.EncodeSegment(name)}/versions");
+        request.OperationName = "List Worker Versions";
+        request.Query.Add("page", parameters?.Page);
+        request.Query.Add("per_page", parameters?.PerPage);
+        request.Query.Add("deployable", parameters?.Deployable);
+
+        // Not the usual paged shape: result is an object holding an items array, with no result_info.
+        var response = await Transport.SendAsync<WorkerVersionListResult>(request, cancellationToken).ConfigureAwait(false);
+        return response.Result;
+    }
+
+    /// <inheritdoc />
+    public async Task<WorkerVersionDetail?> GetVersionAsync(
+        string scriptName,
+        string versionId,
+        string? accountId = null,
+        CancellationToken cancellationToken = default)
+    {
+        var account = ResolveAccountId(accountId);
+        var name = Require(scriptName, nameof(scriptName));
+        var version = Require(versionId, nameof(versionId));
+
+        var request = CloudflareRequest
+            .Get($"{AccountPath(account)}/workers/scripts/{CloudflareUrl.EncodeSegment(name)}/versions/{CloudflareUrl.EncodeSegment(version)}")
+            .Tolerate(System.Net.HttpStatusCode.NotFound);
+        request.OperationName = "Get Worker Script Version";
+
+        var response = await Transport.SendAsync<WorkerVersionDetail>(request, cancellationToken).ConfigureAwait(false);
+        return response.Result;
+    }
+
+    /// <inheritdoc />
+    public async Task<WorkerVersionDetail?> CreateVersionAsync(
+        string scriptName,
+        UploadWorkerScriptRequest request,
+        bool? bindingsInheritStrict = null,
+        string? accountId = null,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+
+        var account = ResolveAccountId(accountId);
+        var name = Require(scriptName, nameof(scriptName));
+
+        // Validate() insists on a script name because an upload carries it in the URL it builds; a version
+        // takes the name from this argument instead, so the argument fills the request in first.
+        request.ScriptName ??= name;
+        request.Validate();
+
+        if (request.BodyPart is { Length: > 0 })
+        {
+            throw new Exceptions.CloudflareConfigurationException(
+                "A version upload requires module syntax: the reference publishes main_module as required " +
+                "for POST …/versions and offers no body_part alternative, so set MainModule instead.");
+        }
+
+        var httpRequest = new CloudflareRequest(
+            HttpMethod.Post,
+            $"{AccountPath(account)}/workers/scripts/{CloudflareUrl.EncodeSegment(name)}/versions")
+        {
+            Body = BuildWorkerBundle(request),
+            OperationName = "Upload Worker Version",
+        };
+
+        if (bindingsInheritStrict == true)
+        {
+            httpRequest.Query.Add("bindings_inherit", "strict");
+        }
+
+        var response = await Transport.SendAsync<WorkerVersionDetail>(httpRequest, cancellationToken).ConfigureAwait(false);
+        return response.Result;
+    }
+
+    /// <inheritdoc />
+    public async Task<WorkerScheduleListResult?> ListSchedulesAsync(
+        string scriptName,
+        string? accountId = null,
+        CancellationToken cancellationToken = default)
+    {
+        var account = ResolveAccountId(accountId);
+        var name = Require(scriptName, nameof(scriptName));
+
+        var request = CloudflareRequest.Get(
+            $"{AccountPath(account)}/workers/scripts/{CloudflareUrl.EncodeSegment(name)}/schedules");
+        request.OperationName = "Get Worker Cron Triggers";
+
+        var response = await Transport.SendAsync<WorkerScheduleListResult>(request, cancellationToken).ConfigureAwait(false);
+        return response.Result;
+    }
+
+    /// <inheritdoc />
+    public async Task<WorkerScheduleListResult?> UpdateSchedulesAsync(
+        string scriptName,
+        IEnumerable<string> cronExpressions,
+        string? accountId = null,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(cronExpressions);
+
+        var account = ResolveAccountId(accountId);
+        var name = Require(scriptName, nameof(scriptName));
+
+        var expressions = cronExpressions
+            .Select(expression => expression?.Trim() ?? string.Empty)
+            .ToList();
+
+        var problems = new List<string>();
+        if (expressions.Any(string.IsNullOrEmpty))
+        {
+            problems.Add("Every cron expression must be non-empty; an empty list clears the triggers.");
+        }
+
+        var duplicates = expressions
+            .GroupBy(expression => expression, StringComparer.Ordinal)
+            .Where(group => group.Count() > 1)
+            .Select(group => group.Key)
+            .ToList();
+        if (duplicates.Count > 0)
+        {
+            // The PUT replaces the whole set, so the same expression twice is a mistake rather than a
+            // request Cloudflare could honour.
+            problems.Add($"Duplicate cron expression(s): {string.Join(", ", duplicates)}.");
+        }
+
+        if (problems.Count > 0)
+        {
+            throw new Exceptions.CloudflareConfigurationException(problems);
+        }
+
+        var request = CloudflareRequest.Put(
+            $"{AccountPath(account)}/workers/scripts/{CloudflareUrl.EncodeSegment(name)}/schedules",
+            expressions.Select(expression => new WorkerSchedule(expression)).ToList());
+        request.OperationName = "Update Worker Cron Triggers";
+
+        var response = await Transport.SendAsync<WorkerScheduleListResult>(request, cancellationToken).ConfigureAwait(false);
+        return response.Result;
+    }
+
+    /// <inheritdoc />
+    public async Task<WorkerDeploymentListResult?> ListDeploymentsAsync(
+        string scriptName,
+        WorkerDeploymentListParameters? parameters = null,
+        string? accountId = null,
+        CancellationToken cancellationToken = default)
+    {
+        var account = ResolveAccountId(accountId);
+        var name = Require(scriptName, nameof(scriptName));
+        parameters?.EnsureValid();
+
+        var request = CloudflareRequest.Get(
+            $"{AccountPath(account)}/workers/scripts/{CloudflareUrl.EncodeSegment(name)}/deployments");
+        request.OperationName = "List Worker Deployments";
+        request.Query.Add("page", parameters?.Page);
+        request.Query.Add("per_page", parameters?.PerPage);
+        request.Query.Add("since", parameters?.Since);
+        request.Query.Add("until", parameters?.Until);
+
+        var response = await Transport.SendAsync<WorkerDeploymentListResult>(request, cancellationToken).ConfigureAwait(false);
+        if (response.Result is { } result)
+        {
+            // result_info sits beside result in the envelope, so it cannot deserialize into the model.
+            result.Info = response.ResultInfo;
+        }
+
+        return response.Result;
+    }
+
+    /// <inheritdoc />
+    public async Task<WorkerScriptSettings?> GetSettingsAsync(
+        string scriptName,
+        string? accountId = null,
+        CancellationToken cancellationToken = default)
+    {
+        var account = ResolveAccountId(accountId);
+        var name = Require(scriptName, nameof(scriptName));
+
+        var request = CloudflareRequest
+            .Get($"{AccountPath(account)}/workers/scripts/{CloudflareUrl.EncodeSegment(name)}/script-settings")
+            .Tolerate(System.Net.HttpStatusCode.NotFound);
+        request.OperationName = "Get Worker Script Settings";
+
+        var response = await Transport.SendAsync<WorkerScriptSettings>(request, cancellationToken).ConfigureAwait(false);
+        return response.Result;
+    }
+
+    /// <inheritdoc />
+    public async Task<WorkerScriptSettings> UpdateSettingsAsync(
+        string scriptName,
+        WorkerScriptSettings settings,
+        string? accountId = null,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(settings);
+        RequireSomethingToUpdate(settings);
+
+        var account = ResolveAccountId(accountId);
+        var name = Require(scriptName, nameof(scriptName));
+
+        var request = CloudflareRequest.Patch(
+            $"{AccountPath(account)}/workers/scripts/{CloudflareUrl.EncodeSegment(name)}/script-settings",
+            settings);
+        request.OperationName = "Update Worker Script Settings";
+
+        var response = await Transport.SendAsync<WorkerScriptSettings>(request, cancellationToken).ConfigureAwait(false);
+        return response.EnsureResult();
+    }
+
+    /// <summary>
+    /// Refuses a settings request with nothing in it. A PATCH only carries the fields that are set, and this
+    /// library never writes a JSON null, so an empty request would be an empty body: a write that cannot
+    /// change anything, and almost always a caller who meant to set a field and did not.
+    /// </summary>
+    /// <param name="settings">The request to check.</param>
+    private static void RequireSomethingToUpdate(WorkerScriptSettings settings)
+    {
+        if (settings.Logpush is null &&
+            settings.Observability is null &&
+            settings.Tags is null &&
+            settings.TailConsumers is null)
+        {
+            throw new Exceptions.CloudflareConfigurationException(new[]
+            {
+                "Updating a Worker's script settings sends only the fields that are set, and this request has " +
+                "none, so it would be an empty body. Set Logpush, Observability, Tags or TailConsumers - an " +
+                "empty list clears tags or tail consumers on purpose.",
+            });
+        }
+    }
+
+    /// <inheritdoc />
+    public async Task<WorkerScript> UploadAsync(
+        UploadWorkerScriptRequest request,
+        string? accountId = null,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        request.Validate();
+
+        var account = ResolveAccountId(accountId);
+        var name = Require(request.ScriptName, nameof(request.ScriptName));
+        var path = $"{AccountPath(account)}/workers/scripts/{CloudflareUrl.EncodeSegment(name)}";
+
+        var httpRequest = new CloudflareRequest(HttpMethod.Put, path)
+        {
+            Body = BuildWorkerBundle(request),
+            OperationName = "Upload Worker Script",
+        };
+
+        var response = await Transport.SendAsync<WorkerScript>(httpRequest, cancellationToken).ConfigureAwait(false);
+
+        // Some accounts get a bare success response for an upload; fall back to the known name so the
+        // caller always receives something usable.
+        return response.Result ?? new WorkerScript { Id = name, ScriptName = name };
+    }
+
+    /// <inheritdoc />
+    public Task<WorkerScript> UploadAsync(
+        string scriptName,
+        string source,
+        string? compatibilityDate = null,
+        IEnumerable<WorkerBinding>? bindings = null,
+        string? accountId = null,
+        CancellationToken cancellationToken = default)
+    {
+        Require(scriptName, nameof(scriptName));
+        if (source is null)
+        {
+            throw new Exceptions.CloudflareConfigurationException("Worker source must not be null.");
+        }
+
+        var request = new UploadWorkerScriptRequest(
+            scriptName.Trim(),
+            source,
+            compatibilityDate ?? DateTime.UtcNow.ToString("yyyy-MM-dd", System.Globalization.CultureInfo.InvariantCulture))
+        {
+            Bindings = bindings?.ToList(),
+        };
+
+        return UploadAsync(request, accountId, cancellationToken);
+    }
+
+    /// <inheritdoc />
+    public async Task DeleteAsync(string scriptName, string? accountId = null, CancellationToken cancellationToken = default)
+    {
+        var account = ResolveAccountId(accountId);
+        var name = Require(scriptName, nameof(scriptName));
+
+        var request = CloudflareRequest.Delete($"{AccountPath(account)}/workers/scripts/{CloudflareUrl.EncodeSegment(name)}");
+        request.OperationName = "Delete Worker Script";
+
+        await SendVoidAsync(request, cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <inheritdoc />
+    public async Task<WorkerDeployment> CreateDeploymentAsync(
+        string scriptName,
+        CreateWorkerDeploymentRequest request,
+        string? accountId = null,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+
+        var account = ResolveAccountId(accountId);
+        var name = Require(scriptName, nameof(scriptName));
+
+        var total = request.Versions?.Sum(v => v.Percentage ?? 0m) ?? 0m;
+        if (request.Versions is null || request.Versions.Count == 0)
+        {
+            throw new Exceptions.CloudflareConfigurationException("A deployment needs at least one version.");
+        }
+
+        if (Math.Abs(total - 100m) > 0.0001m)
+        {
+            throw new Exceptions.CloudflareConfigurationException(
+                $"Deployment version percentages must add up to 100 (got {total}).");
+        }
+
+        request.Strategy ??= WorkerDeploymentStrategies.Percentage;
+
+        var httpRequest = CloudflareRequest.Post(
+            $"{AccountPath(account)}/workers/scripts/{CloudflareUrl.EncodeSegment(name)}/deployments",
+            request);
+        httpRequest.OperationName = "Create Worker Deployment";
+
+        var response = await Transport.SendAsync<WorkerDeployment>(httpRequest, cancellationToken).ConfigureAwait(false);
+        return response.EnsureResult();
+    }
+
+    /// <inheritdoc />
+    public async Task<WorkerSubdomain?> GetSubdomainAsync(string? accountId = null, CancellationToken cancellationToken = default)
+    {
+        var account = ResolveAccountId(accountId);
+        var request = CloudflareRequest.Get($"{AccountPath(account)}/workers/subdomain");
+        request.OperationName = "Get Workers Subdomain";
+
+        var response = await Transport.SendAsync<WorkerSubdomain>(request, cancellationToken).ConfigureAwait(false);
+        return response.Result;
+    }
+
+    /// <inheritdoc />
+    public async Task<WorkerSubdomain> UpdateSubdomainAsync(
+        UpdateWorkerSubdomainRequest request,
+        string? accountId = null,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+
+        var account = ResolveAccountId(accountId);
+        var httpRequest = CloudflareRequest.Patch($"{AccountPath(account)}/workers/subdomain", request);
+        httpRequest.OperationName = "Update Workers Subdomain";
+
+        var response = await Transport.SendAsync<WorkerSubdomain>(httpRequest, cancellationToken).ConfigureAwait(false);
+        return response.Result ?? new WorkerSubdomain
+        {
+            Subdomain = request.Subdomain,
+            Enabled = request.Enabled,
+            PreviewsEnabled = request.PreviewsEnabled,
+        };
+    }
+
+    /// <inheritdoc />
+    public async Task<WorkerScriptSubdomain?> GetScriptSubdomainAsync(
+        string scriptName,
+        string? accountId = null,
+        CancellationToken cancellationToken = default)
+    {
+        var account = ResolveAccountId(accountId);
+        var name = Require(scriptName, nameof(scriptName));
+
+        var request = CloudflareRequest
+            .Get($"{AccountPath(account)}/workers/scripts/{CloudflareUrl.EncodeSegment(name)}/subdomain")
+            .Tolerate(System.Net.HttpStatusCode.NotFound);
+        request.OperationName = "Get Worker Script Subdomain";
+
+        var response = await Transport.SendAsync<WorkerScriptSubdomain>(request, cancellationToken).ConfigureAwait(false);
+        return response.Result;
+    }
+
+    /// <inheritdoc />
+    public async Task<WorkerScriptSubdomain?> UpdateScriptSubdomainAsync(
+        string scriptName,
+        UpdateWorkerScriptSubdomainRequest request,
+        string? accountId = null,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+
+        var account = ResolveAccountId(accountId);
+        var name = Require(scriptName, nameof(scriptName));
+
+        var httpRequest = CloudflareRequest.Post(
+            $"{AccountPath(account)}/workers/scripts/{CloudflareUrl.EncodeSegment(name)}/subdomain",
+            request);
+        httpRequest.OperationName = "Update Worker Script Subdomain";
+
+        var response = await Transport.SendAsync<WorkerScriptSubdomain>(httpRequest, cancellationToken).ConfigureAwait(false);
+        return response.Result;
+    }
+
+    /// <summary>
+    /// Builds the <c>multipart/form-data</c> body both Worker upload endpoints take: a JSON
+    /// <c>metadata</c> part plus one file part per module.
+    /// </summary>
+    /// <remarks>
+    /// The request object itself is the metadata part - <see cref="UploadWorkerScriptRequest.ScriptName"/>
+    /// and <see cref="UploadWorkerScriptRequest.Modules"/> are marked <c>[JsonIgnore]</c>, so only
+    /// the fields Cloudflare expects inside <c>metadata</c> are serialised. A very common failure is
+    /// uploading an ES module with the wrong media type, which Cloudflare reports as
+    /// <c>10021: Main module name is not present in bundle</c>; <see cref="UploadWorkerScriptRequest.Validate"/>
+    /// catches the mistakes that produce that message before the body is built.
+    /// </remarks>
+    private static MultipartRequestBody BuildWorkerBundle(UploadWorkerScriptRequest request)
+    {
+        var multipart = new MultipartRequestBody().AddJson("metadata", request);
+
+        foreach (var module in request.Modules!)
+        {
+            var bytes = module.Bytes ?? DecodeBase64(module);
+            multipart.AddFile(
+                module.Name!,
+                bytes,
+                module.ContentType ?? WorkerModuleContentTypes.JavaScriptModule,
+                module.Name);
+        }
+
+        return multipart;
+    }
+
+    private static byte[] DecodeBase64(WorkerModule module)
+    {
+        if (string.IsNullOrEmpty(module.ContentBase64))
+        {
+            throw new Exceptions.CloudflareConfigurationException(
+                $"Module '{module.Name}' has neither Bytes nor ContentBase64 set.");
+        }
+
+        try
+        {
+            return Convert.FromBase64String(module.ContentBase64!);
+        }
+        catch (FormatException exception)
+        {
+            throw new Exceptions.CloudflareConfigurationException(
+                $"Module '{module.Name}' has a ContentBase64 value that is not valid base64.", exception);
+        }
+    }
+
+    /// <inheritdoc />
+    public async Task<IReadOnlyList<WorkerDomain>> ListDomainsAsync(string? accountId = null, CancellationToken cancellationToken = default)
+    {
+        var account = ResolveAccountId(accountId);
+        var request = CloudflareRequest.Get($"{AccountPath(account)}/workers/domains");
+        request.OperationName = "List Worker Domains";
+
+        var response = await Transport.SendAsync<List<WorkerDomain>>(request, cancellationToken).ConfigureAwait(false);
+        return response.Result ?? new List<WorkerDomain>();
+    }
+
+    /// <inheritdoc />
+    public async Task<IReadOnlyList<WorkerDomain>> ListDomainsForWorkerAsync(
+        string workerName,
+        string? accountId = null,
+        CancellationToken cancellationToken = default)
+    {
+        var name = Require(workerName, nameof(workerName));
+        var domains = await ListDomainsAsync(accountId, cancellationToken).ConfigureAwait(false);
+
+        return domains
+            .Where(domain => string.Equals(domain.Service, name, StringComparison.OrdinalIgnoreCase))
+            .ToList();
+    }
+
+    /// <inheritdoc />
+    public async Task<WorkerDomain?> GetDomainAsync(string domainId, string? accountId = null, CancellationToken cancellationToken = default)
+    {
+        var account = ResolveAccountId(accountId);
+        var id = Require(domainId, nameof(domainId));
+
+        var request = CloudflareRequest.Get($"{AccountPath(account)}/workers/domains/{CloudflareUrl.EncodeSegment(id)}")
+            .Tolerate(System.Net.HttpStatusCode.NotFound);
+        request.OperationName = "Get Worker Domain";
+
+        var response = await Transport.SendAsync<WorkerDomain>(request, cancellationToken).ConfigureAwait(false);
+        return response.Result;
+    }
+
+    /// <inheritdoc />
+    public Task<WorkerDomain> AttachDomainAsync(
+        string hostname,
+        string workerName,
+        string? zoneId = null,
+        string? accountId = null,
+        CancellationToken cancellationToken = default) =>
+        AttachDomainAsync(
+            AttachWorkerDomainRequest.For(hostname, workerName, zoneId ?? Options.ZoneId),
+            accountId,
+            cancellationToken);
+
+    /// <inheritdoc />
+    public async Task<WorkerDomain> AttachDomainAsync(
+        AttachWorkerDomainRequest request,
+        string? accountId = null,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        request.EnsureValid();
+
+        var account = ResolveAccountId(accountId);
+        var httpRequest = CloudflareRequest.Put($"{AccountPath(account)}/workers/domains", request);
+        httpRequest.OperationName = "Attach Worker Domain";
+
+        var response = await Transport.SendAsync<WorkerDomain>(httpRequest, cancellationToken).ConfigureAwait(false);
+        return response.EnsureResult();
+    }
+
+    /// <inheritdoc />
+    public async Task DeleteDomainAsync(string domainId, string? accountId = null, CancellationToken cancellationToken = default)
+    {
+        var account = ResolveAccountId(accountId);
+        var id = Require(domainId, nameof(domainId));
+
+        var request = CloudflareRequest.Delete($"{AccountPath(account)}/workers/domains/{CloudflareUrl.EncodeSegment(id)}");
+        request.OperationName = "Detach Worker Domain";
+
+        await SendVoidAsync(request, cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <inheritdoc />
+    public async Task<WorkerTail> CreateTailAsync(
+        string scriptName,
+        string? accountId = null,
+        CancellationToken cancellationToken = default)
+    {
+        // No body: the script in the path is the whole request.
+        var request = CloudflareRequest.Post(TailPath(ResolveAccountId(accountId), scriptName));
+        request.OperationName = "Create Worker Tail";
+
+        var response = await Transport.SendAsync<WorkerTail>(request, cancellationToken).ConfigureAwait(false);
+        return response.EnsureResult();
+    }
+
+    /// <inheritdoc />
+    public async Task<IReadOnlyList<WorkerTail>> ListTailsAsync(
+        string scriptName,
+        string? accountId = null,
+        CancellationToken cancellationToken = default)
+    {
+        var request = CloudflareRequest
+            .Get(TailPath(ResolveAccountId(accountId), scriptName))
+            .Tolerate(System.Net.HttpStatusCode.NotFound);
+        request.OperationName = "List Worker Tails";
+
+        // An array, not the single object the create on this path answers with.
+        var response = await Transport.SendAsync<List<WorkerTail>>(request, cancellationToken).ConfigureAwait(false);
+        return response.Result ?? new List<WorkerTail>();
+    }
+
+    /// <inheritdoc />
+    public async Task DeleteTailAsync(
+        string scriptName,
+        string tailId,
+        string? accountId = null,
+        CancellationToken cancellationToken = default)
+    {
+        var id = Require(tailId, nameof(tailId));
+        var path = $"{TailPath(ResolveAccountId(accountId), scriptName)}/{CloudflareUrl.EncodeSegment(id)}";
+
+        var request = CloudflareRequest.Delete(path);
+        request.OperationName = "Delete Worker Tail";
+
+        await SendVoidAsync(request, cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <inheritdoc />
+    public async Task<IReadOnlyList<WorkerSecret>> ListSecretsAsync(
+        string scriptName,
+        string? accountId = null,
+        CancellationToken cancellationToken = default)
+    {
+        var request = CloudflareRequest.Get(SecretsPath(ResolveAccountId(accountId), scriptName));
+        request.OperationName = "List Worker Secrets";
+
+        // A bare array, and no value in any of it: Cloudflare stores secrets encrypted and never answers one.
+        var response = await Transport
+            .SendAsync<List<WorkerSecret>>(request, cancellationToken)
+            .ConfigureAwait(false);
+        return response.Result ?? new List<WorkerSecret>();
+    }
+
+    /// <inheritdoc />
+    public async Task<WorkerSecret?> GetSecretAsync(
+        string scriptName,
+        string secretName,
+        bool urlEncoded = false,
+        string? accountId = null,
+        CancellationToken cancellationToken = default)
+    {
+        var request = CloudflareRequest
+            .Get(SecretPath(ResolveAccountId(accountId), scriptName, secretName))
+            .Tolerate(System.Net.HttpStatusCode.NotFound);
+        if (urlEncoded)
+        {
+            request.Query.Add("url_encoded", true);
+        }
+
+        request.OperationName = "Get Worker Secret";
+
+        var response = await Transport
+            .SendAsync<WorkerSecret>(request, cancellationToken)
+            .ConfigureAwait(false);
+        return response.Result;
+    }
+
+    /// <inheritdoc />
+    public async Task<WorkerSecret> PutSecretAsync(
+        string scriptName,
+        WorkerSecretRequest secret,
+        string? accountId = null,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(secret);
+        secret.EnsureValid();
+
+        var request = CloudflareRequest.Put(SecretsPath(ResolveAccountId(accountId), scriptName), secret);
+        request.OperationName = "Put Worker Secret";
+
+        var response = await Transport
+            .SendAsync<WorkerSecret>(request, cancellationToken)
+            .ConfigureAwait(false);
+        return response.EnsureResult();
+    }
+
+    /// <inheritdoc />
+    public Task<WorkerSecret> PutSecretAsync(
+        string scriptName,
+        string secretName,
+        string text,
+        string? accountId = null,
+        CancellationToken cancellationToken = default) =>
+        PutSecretAsync(
+            scriptName,
+            WorkerSecretRequest.OfText(Require(secretName, nameof(secretName)), text),
+            accountId,
+            cancellationToken);
+
+    /// <inheritdoc />
+    public async Task DeleteSecretAsync(
+        string scriptName,
+        string secretName,
+        bool urlEncoded = false,
+        string? accountId = null,
+        CancellationToken cancellationToken = default)
+    {
+        var request = CloudflareRequest.Delete(
+            SecretPath(ResolveAccountId(accountId), scriptName, secretName));
+        if (urlEncoded)
+        {
+            request.Query.Add("url_encoded", true);
+        }
+
+        request.OperationName = "Delete Worker Secret";
+
+        await SendVoidAsync(request, cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <inheritdoc />
+    public async Task<IReadOnlyDictionary<string, WorkerSecret>> UpdateSecretsBulkAsync(
+        string scriptName,
+        WorkerSecretBulkRequest secrets,
+        string? accountId = null,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(secrets);
+        secrets.EnsureValid();
+
+        var path = $"{ScriptPath(ResolveAccountId(accountId), scriptName)}/secrets-bulk";
+        var request = CloudflareRequest.Patch(path, secrets);
+        request.OperationName = "Update Worker Secrets In Bulk";
+
+        var response = await Transport
+            .SendAsync<Dictionary<string, WorkerSecret>>(request, cancellationToken)
+            .ConfigureAwait(false);
+        return response.Result ?? new Dictionary<string, WorkerSecret>();
+    }
+
+    /// <inheritdoc />
+    public async Task<IReadOnlyList<WorkerRoute>> ListRoutesAsync(
+        string? zoneId = null,
+        CancellationToken cancellationToken = default)
+    {
+        var request = CloudflareRequest.Get(RoutesPath(ResolveZoneId(zoneId)));
+        request.OperationName = "List Worker Routes";
+
+        // Zone-scoped, and a bare array: the published list is a single page with nothing to filter by.
+        var response = await Transport
+            .SendAsync<List<WorkerRoute>>(request, cancellationToken)
+            .ConfigureAwait(false);
+        return response.Result ?? new List<WorkerRoute>();
+    }
+
+    /// <inheritdoc />
+    public async Task<IReadOnlyList<WorkerRoute>> ListRoutesForWorkerAsync(
+        string scriptName,
+        string? zoneId = null,
+        CancellationToken cancellationToken = default)
+    {
+        var name = Require(scriptName, nameof(scriptName));
+        var routes = await ListRoutesAsync(zoneId, cancellationToken).ConfigureAwait(false);
+
+        return routes
+            .Where(route => string.Equals(route.Script, name, StringComparison.Ordinal))
+            .ToList();
+    }
+
+    /// <inheritdoc />
+    public async Task<WorkerRoute?> GetRouteAsync(
+        string routeId,
+        string? zoneId = null,
+        CancellationToken cancellationToken = default)
+    {
+        var request = CloudflareRequest
+            .Get(RoutePath(ResolveZoneId(zoneId), routeId))
+            .Tolerate(System.Net.HttpStatusCode.NotFound);
+        request.OperationName = "Get Worker Route";
+
+        var response = await Transport
+            .SendAsync<WorkerRoute>(request, cancellationToken)
+            .ConfigureAwait(false);
+        return response.Result;
+    }
+
+    /// <inheritdoc />
+    public async Task<WorkerRoute> CreateRouteAsync(
+        WorkerRouteRequest route,
+        string? zoneId = null,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(route);
+        route.EnsureValid();
+
+        var request = CloudflareRequest.Post(RoutesPath(ResolveZoneId(zoneId)), route);
+        request.OperationName = "Create Worker Route";
+
+        var response = await Transport
+            .SendAsync<WorkerRoute>(request, cancellationToken)
+            .ConfigureAwait(false);
+        return response.EnsureResult();
+    }
+
+    /// <inheritdoc />
+    public async Task<WorkerRoute> UpdateRouteAsync(
+        string routeId,
+        WorkerRouteRequest route,
+        string? zoneId = null,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(route);
+        route.EnsureValid();
+
+        var request = CloudflareRequest.Put(RoutePath(ResolveZoneId(zoneId), routeId), route);
+        request.OperationName = "Update Worker Route";
+
+        var response = await Transport
+            .SendAsync<WorkerRoute>(request, cancellationToken)
+            .ConfigureAwait(false);
+        return response.EnsureResult();
+    }
+
+    /// <inheritdoc />
+    public async Task DeleteRouteAsync(
+        string routeId,
+        string? zoneId = null,
+        CancellationToken cancellationToken = default)
+    {
+        var request = CloudflareRequest.Delete(RoutePath(ResolveZoneId(zoneId), routeId));
+        request.OperationName = "Delete Worker Route";
+
+        await SendVoidAsync(request, cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <inheritdoc />
+    public async Task<WorkersAccountSettings> GetAccountSettingsAsync(
+        string? accountId = null,
+        CancellationToken cancellationToken = default)
+    {
+        var request = CloudflareRequest.Get(AccountSettingsPath(ResolveAccountId(accountId)));
+        request.OperationName = "Get Workers Account Settings";
+
+        var response = await Transport
+            .SendAsync<WorkersAccountSettings>(request, cancellationToken)
+            .ConfigureAwait(false);
+        return response.EnsureResult();
+    }
+
+    /// <inheritdoc />
+    public async Task<WorkersAccountSettings> UpdateAccountSettingsAsync(
+        WorkersAccountSettings settings,
+        string? accountId = null,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(settings);
+
+        var request = CloudflareRequest.Put(AccountSettingsPath(ResolveAccountId(accountId)), settings);
+        request.OperationName = "Update Workers Account Settings";
+
+        var response = await Transport
+            .SendAsync<WorkersAccountSettings>(request, cancellationToken)
+            .ConfigureAwait(false);
+        return response.EnsureResult();
+    }
+
+    private static string ScriptPath(string accountId, string scriptName) =>
+        $"{AccountPath(accountId)}/workers/scripts/{CloudflareUrl.EncodeSegment(Require(scriptName, nameof(scriptName)))}";
+
+    private static string TailPath(string accountId, string scriptName) =>
+        $"{ScriptPath(accountId, scriptName)}/tails";
+
+    private static string SecretsPath(string accountId, string scriptName) =>
+        $"{ScriptPath(accountId, scriptName)}/secrets";
+
+    private static string SecretPath(string accountId, string scriptName, string secretName) =>
+        $"{SecretsPath(accountId, scriptName)}/{CloudflareUrl.EncodeSegment(Require(secretName, nameof(secretName)))}";
+
+    private static string RoutesPath(string zoneId) => $"{ZonePath(zoneId)}/workers/routes";
+
+    private static string RoutePath(string zoneId, string routeId) =>
+        $"{RoutesPath(zoneId)}/{CloudflareUrl.EncodeSegment(Require(routeId, nameof(routeId)))}";
+
+    private static string AccountSettingsPath(string accountId) =>
+        $"{AccountPath(accountId)}/workers/account-settings";
+}

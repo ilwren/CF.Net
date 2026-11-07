@@ -1,0 +1,42 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFrameworks>net8.0;net10.0</TargetFrameworks>
+    <AssemblyName>CF.Net</AssemblyName>
+    <RootNamespace>CFNet</RootNamespace>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <IsPackable>true</IsPackable>
+    <PackageId>CF.Net</PackageId>
+    <Description>
+      A strongly typed, dependency-injection friendly C# wrapper for the Cloudflare REST API (v4).
+      Phase 1 covers Zones (domains) and DNS records, Workers scripts, Pages projects,
+      D1 databases, KV namespaces/values and R2 buckets.
+    </Description>
+    <PackageTags>cloudflare;api;sdk;workers;pages;d1;kv;r2;zones;dns;http</PackageTags>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+    <IncludeSymbols>true</IncludeSymbols>
+    <SymbolPackageFormat>snupkg</SymbolPackageFormat>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!--
+      Only the "root" integration packages are referenced explicitly. Everything else
+      (Microsoft.Extensions.Options, Logging.Abstractions, DependencyInjection.Abstractions,
+      Configuration.Binder, ...) flows in transitively so we cannot accidentally pin a
+      lower version than a sibling package requires (NU1605).
+      The 8.0.x line is compatible with both net8.0 and net10.0.
+    -->
+    <PackageReference Include="Microsoft.Extensions.Http" Version="8.0.1" />
+    <PackageReference Include="Microsoft.Extensions.Options.ConfigurationExtensions" Version="8.0.0" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="CF.Net.UnitTests" />
+    <InternalsVisibleTo Include="CF.Net.IntegrationTests" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Include="..\..\README.md" Pack="true" PackagePath="\" Visible="false" />
+  </ItemGroup>
+
+</Project>

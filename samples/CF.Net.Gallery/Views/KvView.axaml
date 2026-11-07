@@ -1,0 +1,124 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:vm="using:CFNet.Gallery.ViewModels"
+             x:Class="CFNet.Gallery.Views.KvView"
+             x:DataType="vm:KvViewModel">
+
+  <DockPanel>
+
+    <StackPanel DockPanel.Dock="Top" Orientation="Vertical" Margin="16,14,16,6">
+      <TextBlock Classes="h1" Text="{Binding Title}" />
+      <TextBlock Classes="hint" Text="{Binding Description}" Margin="0,4,0,2" />
+      <TextBlock Text="{Binding Status}" FontSize="12" Opacity="0.8" Margin="0,4,0,0" TextWrapping="Wrap" />
+    </StackPanel>
+
+    <ScrollViewer VerticalScrollBarVisibility="Auto" Padding="16,4,16,16">
+      <StackPanel Orientation="Vertical" MaxWidth="900" HorizontalAlignment="Left">
+
+        <Border Classes="card">
+          <StackPanel Orientation="Vertical" Spacing="10">
+            <TextBlock Classes="h2" Text="Namespaces  -  /accounts/{account_id}/storage/kv/namespaces" />
+            <WrapPanel Orientation="Horizontal">
+              <StackPanel Orientation="Vertical" Spacing="3" Margin="0,0,16,8">
+                <TextBlock Classes="hint" Text="Per page" />
+                <TextBox Text="{Binding ListPerPage, Mode=TwoWay}" Width="100" />
+              </StackPanel>
+              <StackPanel Orientation="Vertical" Spacing="3" Margin="0,0,16,8">
+                <TextBlock Classes="hint" Text="Title search" />
+                <TextBox Text="{Binding ListSearch, Mode=TwoWay}" Width="260" />
+              </StackPanel>
+              <StackPanel Orientation="Vertical" Spacing="3" Margin="0,0,16,8">
+                <TextBlock Classes="hint" Text="New title" />
+                <TextBox Text="{Binding NamespaceTitle, Mode=TwoWay}" Width="260" PlaceholderText="my-namespace" />
+              </StackPanel>
+            </WrapPanel>
+            <WrapPanel Orientation="Horizontal">
+              <Button Classes="run" Content="List" Command="{Binding ListNamespacesCommand}" Margin="0,0,8,0" />
+              <Button Content="List every page" Command="{Binding ListAllNamespacesCommand}" Margin="0,0,8,0" />
+              <Button Content="Find by title" Command="{Binding GetNamespaceByTitleCommand}" Margin="0,0,8,0" />
+              <Button Content="Get" Command="{Binding GetNamespaceCommand}" Margin="0,0,8,0" />
+              <Button Content="Create" Command="{Binding CreateNamespaceCommand}" Margin="0,0,8,0" />
+              <Button Content="Rename" Command="{Binding RenameNamespaceCommand}" Margin="0,0,8,0" />
+              <Button Content="Delete" Command="{Binding DeleteNamespaceCommand}" />
+            </WrapPanel>
+          </StackPanel>
+        </Border>
+
+        <Border Classes="card">
+          <StackPanel Orientation="Vertical" Spacing="10">
+            <TextBlock Classes="h2" Text="Namespace used by every key call" />
+            <TextBox Text="{Binding NamespaceId, Mode=TwoWay}" MinWidth="420" HorizontalAlignment="Left" PlaceholderText="namespace uuid" />
+          </StackPanel>
+        </Border>
+
+        <Border Classes="card">
+          <StackPanel Orientation="Vertical" Spacing="10">
+            <TextBlock Classes="h2" Text="Keys  -  GET /accounts/{account_id}/storage/kv/namespaces/{namespace_id}/keys" />
+            <WrapPanel Orientation="Horizontal">
+              <StackPanel Orientation="Vertical" Spacing="3" Margin="0,0,16,8">
+                <TextBlock Classes="hint" Text="Prefix" />
+                <TextBox Text="{Binding KeyPrefix, Mode=TwoWay}" Width="240" PlaceholderText="users/" />
+              </StackPanel>
+              <StackPanel Orientation="Vertical" Spacing="3" Margin="0,0,16,8">
+                <TextBlock Classes="hint" Text="Limit (10-1000)" />
+                <TextBox Text="{Binding KeyLimit, Mode=TwoWay}" Width="130" />
+              </StackPanel>
+            </WrapPanel>
+            <WrapPanel Orientation="Horizontal">
+              <Button Classes="run" Content="List keys" Command="{Binding ListKeysCommand}" Margin="0,0,8,0" />
+              <Button Content="Walk every page" Command="{Binding ListAllKeysCommand}" />
+            </WrapPanel>
+            <TextBlock Classes="hint" Text="KV keys are paginated with cursor + limit, not page + per_page, and a key listing carries no values - read each key separately." />
+          </StackPanel>
+        </Border>
+
+        <Border Classes="card">
+          <StackPanel Orientation="Vertical" Spacing="10">
+            <TextBlock Classes="h2" Text="Values  -  /accounts/{account_id}/storage/kv/namespaces/{namespace_id}/values/{key}" />
+            <StackPanel Orientation="Horizontal" Spacing="10">
+              <TextBlock Text="Key" Width="120" VerticalAlignment="Center" />
+              <TextBox Text="{Binding Key, Mode=TwoWay}" MinWidth="420" PlaceholderText="users/1/profile - slashes are percent-encoded for you" />
+            </StackPanel>
+            <TextBlock Classes="hint" Text="Value" />
+            <TextBox Text="{Binding Value, Mode=TwoWay}" AcceptsReturn="True" Height="90"
+                     FontFamily="Cascadia Mono,Consolas,Menlo,DejaVu Sans Mono,monospace" FontSize="12" />
+            <WrapPanel Orientation="Horizontal">
+              <StackPanel Orientation="Vertical" Spacing="3" Margin="0,0,16,8">
+                <TextBlock Classes="hint" Text="Content type" />
+                <TextBox Text="{Binding ValueContentType, Mode=TwoWay}" Width="220" />
+              </StackPanel>
+              <StackPanel Orientation="Vertical" Spacing="3" Margin="0,0,16,8">
+                <TextBlock Classes="hint" Text="TTL seconds (min 60)" />
+                <TextBox Text="{Binding ValueTtl, Mode=TwoWay}" Width="150" PlaceholderText="blank = no expiry" />
+              </StackPanel>
+            </WrapPanel>
+            <WrapPanel Orientation="Horizontal">
+              <Button Classes="run" Content="Get value" Command="{Binding GetValueCommand}" Margin="0,0,8,0" />
+              <Button Content="Put value" Command="{Binding PutValueCommand}" Margin="0,0,8,0" />
+              <Button Content="Delete value" Command="{Binding DeleteValueCommand}" />
+            </WrapPanel>
+            <WrapPanel Orientation="Horizontal">
+              <Button Content="Get as text" Command="{Binding GetStringCommand}" Margin="0,0,8,0" />
+              <Button Content="Put as text" Command="{Binding PutStringCommand}" />
+            </WrapPanel>
+            <TextBlock Classes="hint" Text="The value travels as the raw HTTP body, never inside a JSON envelope, and per-key metadata comes back in the CF-KV-Metadata response header. The two text buttons hit the same endpoints as the two above and only differ in what you hand them: Get as text decodes the bytes as UTF-8 and returns null when the key is missing, Put as text sends the value box as it stands. Reach for the byte calls when the value is not text." TextWrapping="Wrap" />
+          </StackPanel>
+        </Border>
+
+        <Border Classes="card">
+          <StackPanel Orientation="Vertical" Spacing="10">
+            <TextBlock Classes="h2" Text="Bulk write  -  PUT /accounts/{account_id}/storage/kv/namespaces/{namespace_id}/bulk" />
+            <TextBox Text="{Binding BulkJson, Mode=TwoWay}" AcceptsReturn="True" Height="100"
+                     FontFamily="Cascadia Mono,Consolas,Menlo,DejaVu Sans Mono,monospace" FontSize="12"
+                     PlaceholderText='[{"key":"a","value":"1"},{"key":"b","value":"Mg==","base64":true},{"key":"c","delete":true}]' />
+            <Button Classes="run" Content="Write" Command="{Binding BulkWriteCommand}" />
+            <TextBlock Classes="hint" Text="Up to 10000 operations or 100 MB per call. Binary values go in as base64 with base64 set to true." />
+          </StackPanel>
+        </Border>
+
+      </StackPanel>
+    </ScrollViewer>
+
+  </DockPanel>
+
+</UserControl>

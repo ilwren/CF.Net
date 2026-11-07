@@ -51,8 +51,12 @@ public class WorkersAssetsServiceTests
         // The session call is an ordinary API call: it carries the configured token, not the JWT it is about
         // to be given.
         Assert.Equal("Bearer " + CloudflareHarness.TestApiToken, harness.LastRequest.Header("Authorization"));
+        // A plain raw string with placeholders rather than an interpolated one: this JSON ends in three closing
+        // braces, and in a $$ literal two of them together read as the end of a hole - which is CS9007, not
+        // content.
+        const string expected = """{"manifest":{"/index.html":{"hash":"HASH","size":SIZE}}}""";
         Assert.Equal(
-            $$"""{"manifest":{"/index.html":{"hash":"{{IndexHash}}","size":{{IndexBytes.LongLength}}}}}""",
+            expected.Replace("HASH", IndexHash).Replace("SIZE", IndexBytes.LongLength.ToString()),
             harness.LastRequest.Body);
 
         Assert.Equal(SessionJwt, session.Jwt);
@@ -76,8 +80,10 @@ public class WorkersAssetsServiceTests
             .Add("/blog/hello-world.html", "third-hash", 42);
         var session = await harness.Client.WorkersAssets.CreateUploadSessionAsync("my-worker", manifest);
 
+        const string expected =
+            """{"manifest":{"/index.html":{"hash":"INDEX","size":13},"/assets/site.css":{"hash":"STYLE","size":0},"/blog/hello-world.html":{"hash":"third-hash","size":42}}}""";
         Assert.Equal(
-            $$"""{"manifest":{"/index.html":{"hash":"{{IndexHash}}","size":13},"/assets/site.css":{"hash":"{{StyleHash}}","size":0},"/blog/hello-world.html":{"hash":"third-hash","size":42}}}""",
+            expected.Replace("INDEX", IndexHash).Replace("STYLE", StyleHash),
             harness.LastRequest.Body);
 
         // Cloudflare already holds all three, so there is nothing to send - and the session's own token is the

@@ -740,15 +740,45 @@ public class RadarServiceTests
         harness.Respond(
             """{"success":true,"errors":[],"messages":[],"result":{"dataset":{"url":"https://example.com/datasets/3.csv"}}}""");
 
-        var download = await harness.Client.Radar.RequestDatasetDownloadAsync(3L, RadarDatasetFormat.Csv);
+        var download = await harness.Client.Radar.RequestDatasetDownloadAsync(3L, RadarDatasetFormat.Json);
 
         Assert.Equal(HttpMethod.Post, harness.LastRequest.Method);
         Assert.Equal("/client/v4/radar/datasets/download", harness.LastRequest.Path);
-        Assert.Equal("format=CSV", harness.LastRequest.Query.TrimStart('?'));
+        Assert.Equal("format=JSON", harness.LastRequest.Query.TrimStart('?'));
         Assert.Equal("""{"datasetId":3}""", harness.LastRequest.Body);
         Assert.Equal("application/json; charset=utf-8", harness.LastRequest.ContentType);
         Assert.Equal("https://example.com/datasets/3.csv", download!.Url);
         Assert.Equal("https://example.com/datasets/3.csv", download.ToString());
+    }
+
+    [Fact]
+    public async Task RequestDatasetDownloadAsync_reads_the_address_out_of_the_text_cloudflare_answers()
+    {
+        using var harness = CloudflareHarness.Create();
+
+        // A live run asked for format=CSV and was answered this: one line of text, not the envelope the
+        // reference publishes and not JSON at all. It parses to nothing, so the call that worked read as one
+        // that answered no address - three datasets in a row, each listed moments before with a title and a
+        // type. The address is in the text, so it is read out of the text.
+        harness.RespondRaw(
+            "Dataset url https://storage.example.test/radar/bucket-1000000.csv?X-Amz-Signature=abc123"u8.ToArray(),
+            "text/plain");
+
+        var download = await harness.Client.Radar.RequestDatasetDownloadAsync(3033L, RadarDatasetFormat.Csv);
+
+        Assert.Equal(HttpMethod.Post, harness.LastRequest.Method);
+        Assert.Equal("/client/v4/radar/datasets/download", harness.LastRequest.Path);
+        Assert.Equal("format=CSV", harness.LastRequest.Query.TrimStart('?'));
+        Assert.Equal("""{"datasetId":3033}""", harness.LastRequest.Body);
+
+        // Whole, signature and all: that is what makes the address usable, and it is the caller's to keep for
+        // the hour Cloudflare gave it. An integration run prints less than this on purpose - its annotations
+        // are public, and a signature in one is a signature handed out.
+        Assert.Equal(
+            "https://storage.example.test/radar/bucket-1000000.csv?X-Amz-Signature=abc123",
+            download!.Url);
+        Assert.Equal(download.Url, download.ToString());
+        Assert.True(download.AdditionalData is not { Count: > 0 });
     }
 
     [Fact]

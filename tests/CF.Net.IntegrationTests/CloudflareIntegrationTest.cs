@@ -199,6 +199,25 @@ public abstract class CloudflareIntegrationTest : IDisposable
     protected void Log(string message) => Output.WriteLine(message);
 
     /// <summary>
+    /// Cuts the query string off a body this library did not expect, so it can be reported without publishing
+    /// whatever was in it. Cloudflare signs the addresses it hands out - a dataset download answers an R2 url
+    /// carrying a credential and a signature good for an hour - and a run's annotations are public, so a
+    /// diagnostic that prints an unexpected body verbatim prints those too.
+    /// </summary>
+    /// <param name="text">The body, or any text that might hold an address.</param>
+    /// <returns>The text up to its first <c>?</c>, or the text unchanged when it has none.</returns>
+    protected static string RedactAddress(string? text)
+    {
+        if (string.IsNullOrWhiteSpace(text))
+        {
+            return "(empty)";
+        }
+
+        var query = text.IndexOf('?');
+        return query < 0 ? text.Trim() : $"{text[..query].Trim()}?…";
+    }
+
+    /// <summary>
     /// True when the configured token is account-owned (<c>cfat_...</c>). Cloudflare verifies those at
     /// <c>GET /accounts/{account_id}/tokens/verify</c> and rejects them at the user-scoped endpoints -
     /// <c>GET /user</c> and <c>GET /user/tokens/verify</c> - with <c>1000 Invalid API Token</c>, so a

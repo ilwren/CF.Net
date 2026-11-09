@@ -1709,7 +1709,7 @@ BGP, bots, attacks and the AI catalogue — is still to come.
 | `ListOutagesAsync(RadarAnnotationListParameters?)` | `GET /radar/annotations/outages` | the same shape and the same parameters, narrowed to outages |
 | `ListOutageLocationsAsync(RadarOutageLocationsParameters?)` | `GET /radar/annotations/outages/locations` | `{annotations: [{clientCountryAlpha2, clientCountryName, value}]}` — a different shape under the same property name, with no `offset` to walk by |
 | `ListDatasetsAsync(RadarDatasetListParameters?)` | `GET /radar/datasets` | `{datasets: [{id, alias, description, meta, tags, title, type}]}`; `date` is published with `format: date`, so it is sent without a time part |
-| `RequestDatasetDownloadAsync(datasetId, format)` | `POST /radar/datasets/download` | `{dataset: {url}}` — the id travels in the body, the format in the query string, and the answer is an address to fetch rather than the file. A run watched it answer `success` with no dataset object at all for one the list had just described, so the integration suite asks about the first three and reports which of them prepared |
+| `RequestDatasetDownloadAsync(datasetId, format)` | `POST /radar/datasets/download` | `{dataset: {url}}` — the id travels in the body, the format in the query string, and the answer is an address to fetch rather than the file: an R2 url signed for an hour. With `format=CSV` Cloudflare does not answer that envelope at all — it answers one line of text, `Dataset url https://…` — so the method reads the address out of either and returns it whole |
 | `GetAsnAsSetAsync(asn)` | `GET /radar/entities/asns/{asn}/as_set` | `{as_sets: [{as_members_count, as_set_members_count, as_set_upstreams_count, asn_cone_size, irr_sources, name, hierarchical_asn, inferred_asn, peeringdb_asn, descr, as_members, as_set_members, mnt_by, admin_c, tech_c, org, inference_matches, is_cf_transit}], paths: [[…]]}` — the last nine are answered but unpublished |
 | `GetAsnRelationshipsAsync(asn, asn2?)` | `GET /radar/entities/asns/{asn}/rel` | `{meta: {data_time, query_time, total_peers}, rels: [{asn1, asn1_country, asn1_name, asn2, asn2_country, asn2_name, rel, aspa_validated}]}`; `rel` arrives as `peer` and `provider-customer`, and `aspa_validated` is unpublished |
 | `ListBotnetThreatFeedAsync(RadarBotnetThreatFeedParameters?)` | `GET /radar/entities/asns/botnet_threat_feed` | `{ases: [{asn, country, name, rank, rankChange}], meta: {date, total, compareDate}}`; `asn` takes `-174` to leave AS174 out |
@@ -1754,6 +1754,16 @@ so `RadarAnnotationAsn` parses the string into `AsnNumber` rather than making a 
 to trust. And `locationsDetails` is published as a list of *nullable* items: a location Cloudflare could not
 resolve keeps its slot as `null`, which is what keeps it aligned by position with the `locations` list beside
 it.
+
+**One call answers text where it publishes JSON.** `POST /radar/datasets/download` is documented as answering
+`{dataset: {url}}`. A run asked it for `format=CSV` about three datasets the list had just described — 3033
+`ranking_top_1000000`, 3032 `ranking_top_500000`, 3031 `ranking_top_200000` — and all three came back with
+nothing a JSON parse could hold. Asked again through the transport for the body itself, the endpoint answered
+`Dataset url https://…/bucket-1000000-20261102-20261109.csv?X-Amz-…`: one line of text, signed for an hour,
+and not JSON, so `HasEnvelopeRoot` is false and the transport returns an empty result rather than throwing. A
+call that had worked read as one that had answered no address. `RequestDatasetDownloadAsync` now reads the
+address out of either shape and returns it whole — the signature is what makes it usable — while the
+integration suite reports only the scheme, host and path, because a run's annotations are public.
 
 **Eleven fields arrive that Cloudflare does not publish, and they are the interesting ones.** The live run read
 `GET /radar/entities/asns/{asn}/as_set` against AS13335 and was answered, beside every field the schema lists,

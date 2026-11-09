@@ -549,6 +549,23 @@ public sealed class RadarService : CloudflareService, IRadarService
         request.OperationName = "Download Radar Dataset";
 
         var response = await Transport.SendAsync<RadarDatasetDownloadResult>(request, cancellationToken).ConfigureAwait(false);
+        if (!string.IsNullOrWhiteSpace(response.Result?.Dataset?.Url))
+        {
+            return response.Result!.Dataset;
+        }
+
+        // With format=CSV Cloudflare does not answer the envelope it publishes. It answers one line of text -
+        // "Dataset url https://…", an address signed for an hour - which is not JSON at all, so it parses to
+        // nothing and a call that worked reads as one that answered no address. The address is in the text,
+        // so it is read out of the text, whole: the signature is what makes it usable, and a caller needs
+        // all of it. Only a log line needs less than that, and cutting it is the log's business.
+        const string textAnswer = "Dataset url ";
+        var body = response.RawBody?.Trim();
+        if (body is not null && body.StartsWith(textAnswer, StringComparison.Ordinal))
+        {
+            return new RadarDatasetDownload { Url = body[textAnswer.Length..].Trim() };
+        }
+
         return response.Result?.Dataset;
     }
 

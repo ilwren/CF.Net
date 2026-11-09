@@ -2355,6 +2355,7 @@ public class ReadOnlyIntegrationTests : CloudflareIntegrationTest
             {
                 var prepared = new List<string>();
                 var silent = new List<string>();
+                RadarDataset? preparedDataset = null;
 
                 var candidates = datasets.Items.Where(item => item.Id is not null).Take(3).ToList();
                 foreach (var dataset in candidates)
@@ -2372,6 +2373,7 @@ public class ReadOnlyIntegrationTests : CloudflareIntegrationTest
                         // where it points and not the query string that would let anybody else use it.
                         Log($"radar_dataset_download[{named}]={url.Scheme}://{url.Host}{url.AbsolutePath}");
                         prepared.Add(named);
+                        preparedDataset = dataset;
                         break;
                     }
 
@@ -2400,7 +2402,31 @@ public class ReadOnlyIntegrationTests : CloudflareIntegrationTest
                     var answered = await Client.Transport.SendAsync<RadarDatasetDownloadResult>(body);
                     surprises.Add($"POST /radar/datasets/download prepared nothing: {string.Join("; ", silent)}. " +
                                   $"Asked again for dataset {diagnostic.Id}, it answered {answered.StatusCode} " +
-                                  $"with this body: {Truncate(answered.RawBody, 400)}");
+                                  $"with a body that began: {Truncate(RedactAddress(answered.RawBody), 200)}");
+                }
+                else if (preparedDataset is { } done)
+                {
+                    // format=CSV is what Cloudflare answers as a line of text rather than the envelope it
+                    // publishes, so the same dataset is asked about again with format=JSON: whether the
+                    // published shape arrives for one format and not the other is the difference between a
+                    // quirk of this call and a wrong guess about what format selects.
+                    var asJson = await Client.Radar.RequestDatasetDownloadAsync(
+                        done.Id!.Value,
+                        RadarDatasetFormat.Json);
+
+                    if (asJson?.Url is { Length: > 0 } jsonAddress &&
+                        Uri.TryCreate(jsonAddress, UriKind.Absolute, out var jsonUrl) &&
+                        jsonUrl is not null)
+                    {
+                        Log($"radar_dataset_download[format=JSON, {done.Id}]=" +
+                            $"{jsonUrl.Scheme}://{jsonUrl.Host}{jsonUrl.AbsolutePath}");
+                    }
+                    else
+                    {
+                        surprises.Add($"POST /radar/datasets/download?format=CSV prepared dataset {done.Id} " +
+                                      $"({done.Alias ?? "no alias"}) but the same id with format=JSON answered " +
+                                      $"{(asJson is null ? "no dataset object at all" : "a dataset with no url")}");
+                    }
                 }
                 else if (silent.Count > 0)
                 {

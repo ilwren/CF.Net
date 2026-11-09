@@ -668,7 +668,7 @@ public class RadarServiceTests
         });
 
         Assert.Equal("/client/v4/radar/annotations/outages", harness.LastRequest.Path);
-        Assert.Equal("outageCause=CABLE_CUT&limit=5&offset=5", harness.LastRequest.Query.TrimStart('?'));
+        Assert.Equal("limit=5&offset=5&outageCause=CABLE_CUT", harness.LastRequest.Query.TrimStart('?'));
 
         var outage = Assert.Single(page.Items);
         Assert.Equal("CABLE_CUT", outage.Outage!.OutageCause);
@@ -703,7 +703,7 @@ public class RadarServiceTests
     {
         using var harness = CloudflareHarness.Create();
         harness.Respond(
-            """{"success":true,"errors":[],"messages":[],"result":{"datasets":[{"id":3,"description":"The top 20000 domains globally","meta":{"rows":20000},"tags":["global"],"title":"Top bucket 20000 domains","type":"RANKING_BUCKET"}]}}""");
+            """{"success":true,"errors":[],"messages":[],"result":{"datasets":[{"id":3,"description":"The top 20000 domains globally","meta":{"rows":20000},"tags":["global"],"title":"Top bucket 20000 domains","type":"RANKING_BUCKET","alias":"ranking_top_20000"}]}}""");
 
         var page = await harness.Client.Radar.ListDatasetsAsync(new RadarDatasetListParameters
         {
@@ -722,6 +722,10 @@ public class RadarServiceTests
         Assert.Equal("RANKING_BUCKET", dataset.Type);
         Assert.Equal(new[] { "global" }, dataset.Tags!);
         Assert.Equal("3 Top bucket 20000 domains (RANKING_BUCKET)", dataset.ToString());
+
+        // Unpublished, like the geoId a geolocation carries: the name that identifies this dataset across
+        // dates, which the numeric id does not.
+        Assert.Equal("ranking_top_20000", dataset.Alias);
 
         // Cloudflare publishes meta as unknown and answers a different object per dataset, so it is read as the
         // JSON it arrives as rather than guessed at.
@@ -764,7 +768,7 @@ public class RadarServiceTests
     {
         using var harness = CloudflareHarness.Create();
         harness.Respond(
-            """{"success":true,"errors":[],"messages":[],"result":{"as_sets":[{"as_members_count":12,"as_set_members_count":3,"as_set_upstreams_count":4,"asn_cone_size":3400,"irr_sources":["RADB","RIPE"],"name":"AS-CLOUDFLARE","hierarchical_asn":13335,"inferred_asn":13335,"peeringdb_asn":13335}],"paths":[["13335","15169"],["13335","174"]]}}""");
+            """{"success":true,"errors":[],"messages":[],"result":{"as_sets":[{"as_members_count":12,"as_set_members_count":3,"as_set_upstreams_count":4,"asn_cone_size":3400,"irr_sources":["RADB","RIPE"],"name":"AS-CLOUDFLARE","hierarchical_asn":13335,"inferred_asn":13335,"peeringdb_asn":13335,"descr":"Cloudflare AS-SET","as_members":[],"as_set_members":[],"mnt_by":[{"mntner":"MAINT-AS13335","irr":"radb","source":"RADB","descr":"Cloudflare Inc","admin_c":["CFNL-AP"],"tech_c":["CFNL-AP"],"mnt_by":["MAINT-AS13335"],"created":"2019-01-01T00:00:00Z","last_modified":null}],"admin_c":["CFNL-AP"],"tech_c":[],"org":null,"inference_matches":[{"asn":13335,"method":"peeringdb","detail":null}],"is_cf_transit":true}],"paths":[["13335","15169"],["13335","174"]]}}""");
 
         var asSet = await harness.Client.Radar.GetAsnAsSetAsync(13335L);
 
@@ -784,6 +788,34 @@ public class RadarServiceTests
         Assert.Equal(13335L, set.HierarchicalAsn);
         Assert.Equal(13335L, set.PeeringdbAsn);
         Assert.Equal("AS-CLOUDFLARE: 12 member(s), cone 3400", set.ToString());
+
+        // Nine fields Cloudflare answers here that its published schema for this endpoint does not list: the
+        // IRR record behind the set, and how Cloudflare worked out which ASN it belongs to. They are modelled
+        // rather than left in AdditionalData, because they are the interesting half of the answer.
+        Assert.Equal("Cloudflare AS-SET", set.Description);
+        Assert.Empty(set.AsMembers!);
+        Assert.Empty(set.AsSetMembers!);
+        Assert.Equal(new[] { "CFNL-AP" }, set.AdminContacts!);
+        Assert.Empty(set.TechnicalContacts!);
+        Assert.Null(set.Organisation);
+        Assert.True(set.IsCloudflareTransit);
+        Assert.True(set.AdditionalData is not { Count: > 0 });
+
+        var maintainer = Assert.Single(set.MaintainedBy!);
+        Assert.Equal("MAINT-AS13335", maintainer.Maintainer);
+        Assert.Equal("radb", maintainer.Irr);
+        Assert.Equal("RADB", maintainer.Source);
+        Assert.Equal("Cloudflare Inc", maintainer.Description);
+        Assert.Equal(new[] { "CFNL-AP" }, maintainer.TechnicalContacts!);
+        Assert.Equal("2019-01-01T00:00:00Z", maintainer.Created);
+        Assert.Null(maintainer.LastModified);
+        Assert.Equal("MAINT-AS13335 (RADB)", maintainer.ToString());
+
+        var inference = Assert.Single(set.InferenceMatches!);
+        Assert.Equal(13335L, inference.Asn);
+        Assert.Equal("peeringdb", inference.Method);
+        Assert.Null(inference.Detail);
+        Assert.Equal("AS13335 by peeringdb", inference.ToString());
 
         // The paths stay nested, because which ASN sits beside which is the information.
         Assert.Equal(2, asSet.Paths!.Count);

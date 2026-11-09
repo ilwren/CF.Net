@@ -47,6 +47,19 @@ public enum RadarSortOrder
 /// Every field here is snake_case - <c>as_members_count</c>, <c>irr_sources</c>, <c>asn_cone_size</c> - while
 /// the annotation and dataset models beside it are camelCase. Radar publishes both spellings in the same
 /// resource, so each property is pinned to the one its endpoint uses rather than inferred from a convention.
+/// <para>
+/// Nine of these fields are in no published schema at all. Cloudflare's reference for this endpoint lists the
+/// three counts, the cone size, the IRR sources, the name and the three optional ASNs; a live answer also
+/// carried <c>as_members</c>, <c>as_set_members</c>, <c>descr</c>, <c>mnt_by</c>, <c>admin_c</c>,
+/// <c>tech_c</c>, <c>org</c>, <c>inference_matches</c> and <c>is_cf_transit</c> - the IRR record behind the
+/// set, and how Cloudflare worked out which ASN it belongs to. They are modelled because they are the
+/// interesting half of the answer.
+/// </para>
+/// <para>
+/// A field this library has seen filled in is typed as it arrived. One it has only ever seen empty or null is
+/// read as the JSON it arrives as, because a guessed type that turns out wrong does not cost one field - it
+/// fails the whole read.
+/// </para>
 /// </remarks>
 public sealed class RadarAsSet
 {
@@ -86,6 +99,50 @@ public sealed class RadarAsSet
     [JsonPropertyName("peeringdb_asn")]
     public long? PeeringdbAsn { get; set; }
 
+    /// <summary>The set's description in the routing registry.</summary>
+    [JsonPropertyName("descr")]
+    public string? Description { get; set; }
+
+    /// <summary>
+    /// The ASNs the set lists as members. Every answer this library has seen carried it empty, so the item
+    /// type is neither published nor observed and is read as the JSON it arrives as.
+    /// </summary>
+    [JsonPropertyName("as_members")]
+    public List<JsonElement>? AsMembers { get; set; }
+
+    /// <summary>
+    /// The AS-SETs the set lists as members. Empty in every answer seen, like <see cref="AsMembers"/>.
+    /// </summary>
+    [JsonPropertyName("as_set_members")]
+    public List<JsonElement>? AsSetMembers { get; set; }
+
+    /// <summary>The maintainers the registry record names.</summary>
+    [JsonPropertyName("mnt_by")]
+    public List<RadarAsSetMaintainer>? MaintainedBy { get; set; }
+
+    /// <summary>The administrative contact handles, such as <c>DUMY-RIPE</c>.</summary>
+    [JsonPropertyName("admin_c")]
+    public List<string>? AdminContacts { get; set; }
+
+    /// <summary>The technical contact handles.</summary>
+    [JsonPropertyName("tech_c")]
+    public List<string>? TechnicalContacts { get; set; }
+
+    /// <summary>
+    /// The organisation behind the set. Null in every answer this library has seen, and its type is not
+    /// published, so it is read as the JSON it arrives as rather than guessed at.
+    /// </summary>
+    [JsonPropertyName("org")]
+    public JsonElement? Organisation { get; set; }
+
+    /// <summary>How Cloudflare worked out which ASN this set belongs to.</summary>
+    [JsonPropertyName("inference_matches")]
+    public List<RadarAsSetInference>? InferenceMatches { get; set; }
+
+    /// <summary>Whether Cloudflare provides transit for this set.</summary>
+    [JsonPropertyName("is_cf_transit")]
+    public bool? IsCloudflareTransit { get; set; }
+
     /// <summary>Captures any field Cloudflare adds in the future.</summary>
     [JsonExtensionData]
     public IDictionary<string, JsonElement>? AdditionalData { get; set; }
@@ -95,6 +152,81 @@ public sealed class RadarAsSet
         $"{Name ?? "?"}: " +
         $"{AsMembersCount?.ToString(CultureInfo.InvariantCulture) ?? "?"} member(s), " +
         $"cone {AsnConeSize?.ToString(CultureInfo.InvariantCulture) ?? "?"}";
+}
+
+/// <summary>One maintainer of an AS-SET, as the Internet Routing Registry records it.</summary>
+public sealed class RadarAsSetMaintainer
+{
+    /// <summary>The maintainer's handle, such as <c>AS6830-MNT</c>.</summary>
+    [JsonPropertyName("mntner")]
+    public string? Maintainer { get; set; }
+
+    /// <summary>The registry this record came from, in the spelling Cloudflare normalised it to.</summary>
+    [JsonPropertyName("irr")]
+    public string? Irr { get; set; }
+
+    /// <summary>The registry's own name for itself, such as <c>RIPE</c>.</summary>
+    [JsonPropertyName("source")]
+    public string? Source { get; set; }
+
+    /// <summary>The record's description, when it has one.</summary>
+    [JsonPropertyName("descr")]
+    public string? Description { get; set; }
+
+    /// <summary>The administrative contact handles.</summary>
+    [JsonPropertyName("admin_c")]
+    public List<string>? AdminContacts { get; set; }
+
+    /// <summary>The technical contact handles.</summary>
+    [JsonPropertyName("tech_c")]
+    public List<string>? TechnicalContacts { get; set; }
+
+    /// <summary>The maintainer handles this record names.</summary>
+    [JsonPropertyName("mnt_by")]
+    public List<string>? MaintainedBy { get; set; }
+
+    /// <summary>When the record was created, as Cloudflare sends it.</summary>
+    [JsonPropertyName("created")]
+    public string? Created { get; set; }
+
+    /// <summary>When the record was last modified, as Cloudflare sends it.</summary>
+    [JsonPropertyName("last_modified")]
+    public string? LastModified { get; set; }
+
+    /// <summary>Captures any field Cloudflare adds in the future.</summary>
+    [JsonExtensionData]
+    public IDictionary<string, JsonElement>? AdditionalData { get; set; }
+
+    /// <inheritdoc />
+    public override string ToString() =>
+        $"{Maintainer ?? "?"}" + (Source is { Length: > 0 } source ? $" ({source})" : string.Empty);
+}
+
+/// <summary>One route by which Cloudflare inferred the ASN an AS-SET belongs to.</summary>
+public sealed class RadarAsSetInference
+{
+    /// <summary>The ASN the inference landed on.</summary>
+    [JsonPropertyName("asn")]
+    public long? Asn { get; set; }
+
+    /// <summary>How it was inferred - <c>peeringdb</c>, <c>hierarchical</c>.</summary>
+    [JsonPropertyName("method")]
+    public string? Method { get; set; }
+
+    /// <summary>
+    /// Whatever Cloudflare adds by way of detail. Null in every answer this library has seen, and its type is
+    /// not published, so it is read as the JSON it arrives as.
+    /// </summary>
+    [JsonPropertyName("detail")]
+    public JsonElement? Detail { get; set; }
+
+    /// <summary>Captures any field Cloudflare adds in the future.</summary>
+    [JsonExtensionData]
+    public IDictionary<string, JsonElement>? AdditionalData { get; set; }
+
+    /// <inheritdoc />
+    public override string ToString() =>
+        $"AS{Asn?.ToString(CultureInfo.InvariantCulture) ?? "?"} by {Method ?? "?"}";
 }
 
 /// <summary>

@@ -47,6 +47,13 @@ public enum RadarDatasetFormat
 }
 
 /// <summary>One of the datasets Cloudflare publishes behind radar.</summary>
+/// <remarks>
+/// <see cref="Alias"/> is not in Cloudflare's published schema for this endpoint, but every answer carries it,
+/// and it is the name <c>GET /radar/datasets/{alias}</c> takes - the one radar dataset call this library does
+/// not wrap, because it answers a CSV body rather than the JSON envelope. The alias is modelled anyway: it
+/// identifies a dataset across dates the way <see cref="Id"/> does not, and a caller reading it out of
+/// <see cref="AdditionalData"/> would have to know to look for a field the schema does not mention.
+/// </remarks>
 public sealed class RadarDataset
 {
     /// <summary>The dataset's id, which is what a download asks for.</summary>
@@ -75,6 +82,13 @@ public sealed class RadarDataset
     /// <summary>What kind of dataset this is, as Cloudflare spells it.</summary>
     [JsonPropertyName("type")]
     public string? Type { get; set; }
+
+    /// <summary>
+    /// The dataset's alias, such as <c>ranking_top_200000</c> - the name that identifies it across dates,
+    /// which its numeric id does not. Unpublished, but answered.
+    /// </summary>
+    [JsonPropertyName("alias")]
+    public string? Alias { get; set; }
 
     /// <summary>Captures any field Cloudflare adds in the future.</summary>
     [JsonExtensionData]

@@ -2339,12 +2339,29 @@ public class ReadOnlyIntegrationTests : CloudflareIntegrationTest
                 asSet?.AsSets ?? new List<RadarAsSet>(),
                 item => item.AdditionalData);
 
-            if (asSet is not null && asSet.AsSets is { Count: > 0 } sets &&
-                sets.All(set => set.AsMembersCount is null))
+            if (asSet is not null && asSet.AsSets is { Count: > 0 } sets)
             {
-                surprises.Add("GET /radar/entities/asns/13335/as_set answered AS-SETs with no " +
-                              "as_members_count on any of them, which is the field the snake_case half of " +
-                              "this endpoint is named for");
+                if (sets.All(set => set.AsMembersCount is null))
+                {
+                    surprises.Add("GET /radar/entities/asns/13335/as_set answered AS-SETs with no " +
+                                  "as_members_count on any of them, which is the field the snake_case half " +
+                                  "of this endpoint is named for");
+                }
+
+                // Nine fields this endpoint answers are in no published schema, so the shapes modelled for
+                // them came out of one run. If a later run is answered none of them, that is worth saying:
+                // the models would be resting on an answer Cloudflare no longer gives.
+                if (sets.All(set => set.Description is null && set.MaintainedBy is null &&
+                                    set.AdminContacts is null && set.TechnicalContacts is null &&
+                                    set.Organisation is null && set.AsMembers is null &&
+                                    set.AsSetMembers is null && set.InferenceMatches is null &&
+                                    set.IsCloudflareTransit is null))
+                {
+                    surprises.Add("GET /radar/entities/asns/13335/as_set answered none of the nine fields " +
+                                  "its published schema omits - descr, mnt_by, admin_c, tech_c, org, " +
+                                  "as_members, as_set_members, inference_matches, is_cf_transit - so this " +
+                                  "run could not confirm the shapes modelled from an earlier one");
+                }
             }
 
             var relationships = await Client.Radar.GetAsnRelationshipsAsync(13335L);

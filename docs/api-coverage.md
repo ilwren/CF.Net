@@ -1708,9 +1708,9 @@ BGP, bots, attacks and the AI catalogue — is still to come.
 | `ListAnnotationsAsync(RadarAnnotationListParameters?)` | `GET /radar/annotations` | `{annotations: [{id, asns, asnsDetails, dataSource, description, endDate, entities, eventType, geoIds, linkedUrl, locations, locationsDetails, origins, originsDetails, outage, scope, startDate, tags}]}`; nineteen filters, and the four whose values Cloudflare publishes as a closed list are enums |
 | `ListOutagesAsync(RadarAnnotationListParameters?)` | `GET /radar/annotations/outages` | the same shape and the same parameters, narrowed to outages |
 | `ListOutageLocationsAsync(RadarOutageLocationsParameters?)` | `GET /radar/annotations/outages/locations` | `{annotations: [{clientCountryAlpha2, clientCountryName, value}]}` — a different shape under the same property name, with no `offset` to walk by |
-| `ListDatasetsAsync(RadarDatasetListParameters?)` | `GET /radar/datasets` | `{datasets: [{id, description, meta, tags, title, type}]}`; `date` is published with `format: date`, so it is sent without a time part |
+| `ListDatasetsAsync(RadarDatasetListParameters?)` | `GET /radar/datasets` | `{datasets: [{id, alias, description, meta, tags, title, type}]}`; `date` is published with `format: date`, so it is sent without a time part |
 | `RequestDatasetDownloadAsync(datasetId, format)` | `POST /radar/datasets/download` | `{dataset: {url}}` — the id travels in the body, the format in the query string, and the answer is an address to fetch rather than the file |
-| `GetAsnAsSetAsync(asn)` | `GET /radar/entities/asns/{asn}/as_set` | `{as_sets: [{as_members_count, as_set_members_count, as_set_upstreams_count, asn_cone_size, irr_sources, name, hierarchical_asn, inferred_asn, peeringdb_asn}], paths: [[…]]}` |
+| `GetAsnAsSetAsync(asn)` | `GET /radar/entities/asns/{asn}/as_set` | `{as_sets: [{as_members_count, as_set_members_count, as_set_upstreams_count, asn_cone_size, irr_sources, name, hierarchical_asn, inferred_asn, peeringdb_asn, descr, as_members, as_set_members, mnt_by, admin_c, tech_c, org, inference_matches, is_cf_transit}], paths: [[…]]}` — the last nine are answered but unpublished |
 | `GetAsnRelationshipsAsync(asn, asn2?)` | `GET /radar/entities/asns/{asn}/rel` | `{meta: {data_time, query_time, total_peers}, rels: [{asn1, asn1_country, asn1_name, asn2, asn2_country, asn2_name, rel}]}` |
 | `ListBotnetThreatFeedAsync(RadarBotnetThreatFeedParameters?)` | `GET /radar/entities/asns/botnet_threat_feed` | `{ases: [{asn, country, name, rank, rankChange}], meta: {date, total, compareDate}}`; `asn` takes `-174` to leave AS174 out |
 
@@ -1755,6 +1755,21 @@ to trust. And `locationsDetails` is published as a list of *nullable* items: a l
 resolve keeps its slot as `null`, which is what keeps it aligned by position with the `locations` list beside
 it.
 
+**Ten fields arrive that Cloudflare does not publish, and they are the interesting ones.** The live run read
+`GET /radar/entities/asns/{asn}/as_set` against AS13335 and was answered, beside every field the schema lists,
+the IRR record behind each set — `descr`, `mnt_by` with its maintainers' handles, sources, contacts and
+timestamps, `admin_c`, `tech_c`, `org` — plus `as_members`, `as_set_members`, `inference_matches` (how
+Cloudflare worked out which ASN the set belongs to: `{"asn":134654,"method":"peeringdb","detail":null}`) and
+`is_cf_transit`. `GET /radar/datasets` answers an `alias` beside its `id`, such as `ranking_top_200000`, which
+is the name that identifies a dataset across dates and the one `GET /radar/datasets/{alias}` would take. All
+ten are modelled, because a field a caller has to fish out of `AdditionalData` is a field they will not know to
+look for — the same call the geolocation `geoId` forced.
+
+They are typed by what was seen, not by what the name suggests. `mnt_by`, `admin_c`, `tech_c`, `descr` and
+`inference_matches` arrived filled in, so they are typed as they arrived. `as_members`, `as_set_members` and
+`org` arrived empty or null in every answer, so they are read as the JSON they arrive as: a guessed item type
+that turns out wrong does not cost one field, it fails the whole read.
+
 **Two of these page but are not returned as pages.** `GetAsnRelationshipsAsync` and
 `ListBotnetThreatFeedAsync` answer a `meta` object beside their list, and the botnet feed's `meta.total` is the
 only total any radar endpoint offers — radar answers no `result_info`, so there is nothing else to page by.
@@ -1767,7 +1782,9 @@ silence is worse than not offering the choice. `GET /radar/datasets/{alias}` is 
 a stronger one: it has no JSON answer at all, and Cloudflare's own SDK asks it with `Accept: text/csv` and reads
 a string. `POST /radar/datasets/download` is where a bulk CSV belongs and *is* wrapped, because its answer stays
 the JSON envelope and the format only names what the file behind the returned URL holds — which is why
-`RadarDatasetFormat` is the one place in radar where a `format` is typed.
+`RadarDatasetFormat` is the one place in radar where a `format` is typed. The `alias` that endpoint would take
+is still modelled on `RadarDataset`, because it identifies a dataset across dates the way its
+numeric id does not.
 
 **Radar's reference data needs no permission at all — and Cloudflare's reference names the wrong one.** The
 published permission list for these endpoints asks for **User Details Read**, a group that appears nowhere in

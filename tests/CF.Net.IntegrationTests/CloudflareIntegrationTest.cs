@@ -418,6 +418,59 @@ public abstract class CloudflareIntegrationTest : IDisposable
             attempts,
             delay).ConfigureAwait(false);
 
+    /// <summary>
+    /// Runs a call again while Cloudflare answers 404 for a resource this run created moments earlier.
+    /// </summary>
+    /// <remarks>
+    /// Two halves of one product can catch up at different speeds. KV does: one run created a namespace,
+    /// waited until <c>GET …/namespaces/{id}</c> answered it, and was still refused <b>404 [10013] get
+    /// namespace: 'namespace not found'</b> on the first <c>PUT …/values/{key}</c> - the metadata was there
+    /// and the storage behind it was not. A 404 naming something the run just created is Cloudflare catching
+    /// up rather than an answer about the request, so it is worth waiting for. Anything else is rethrown at
+    /// once, and a 404 that outlasts the waits is thrown too, because by then it is an answer.
+    /// </remarks>
+    /// <typeparam name="T">What the call answers with.</typeparam>
+    /// <param name="call">The call to make.</param>
+    /// <param name="attempts">How many times to make it in total.</param>
+    /// <param name="delay">How long to wait between attempts.</param>
+    /// <returns>What the call answered.</returns>
+    protected static async Task<T> RetryingUntilFoundAsync<T>(
+        Func<Task<T>> call,
+        int attempts = 5,
+        TimeSpan? delay = null)
+    {
+        var wait = delay ?? TimeSpan.FromSeconds(3);
+        for (var attempt = 1; ; attempt++)
+        {
+            try
+            {
+                return await call().ConfigureAwait(false);
+            }
+            catch (CloudflareApiException exception) when (exception.IsNotFound && attempt < attempts)
+            {
+                await Task.Delay(wait).ConfigureAwait(false);
+            }
+        }
+    }
+
+    /// <summary>
+    /// <see cref="RetryingUntilFoundAsync{T}(Func{Task{T}}, int, TimeSpan?)"/> for a call that answers with
+    /// nothing.
+    /// </summary>
+    /// <param name="call">The call to make.</param>
+    /// <param name="attempts">How many times to make it in total.</param>
+    /// <param name="delay">How long to wait between attempts.</param>
+    /// <returns>A task that completes when the call has been answered with anything but a 404.</returns>
+    protected static async Task RetryingUntilFoundAsync(Func<Task> call, int attempts = 5, TimeSpan? delay = null) =>
+        await RetryingUntilFoundAsync(
+            async () =>
+            {
+                await call().ConfigureAwait(false);
+                return 0;
+            },
+            attempts,
+            delay).ConfigureAwait(false);
+
     protected static string ModelMismatchReason(CloudflareApiException exception) =>
         "CF.Net could not read Cloudflare's response as the shape it models, which is a bug in this library " +
         "rather than a problem with the credentials: " + exception.Message;

@@ -2587,21 +2587,35 @@ public class WriteIntegrationTests : CloudflareIntegrationTest
                 delay: TimeSpan.FromSeconds(3));
             Log($"namespace readable as {readable?.Title ?? "(still not readable)"}");
 
-            await Client.Kv.PutStringAsync(namespaceId, "greeting/hello", "hi there", expirationTtl: 300);
-            var value = await Client.Kv.GetValueAsync(namespaceId, "greeting/hello");
+            // Reading the namespace back is not the same as being able to write to it. A later run was
+            // answered 404 [10013] on this PUT after the wait above had already succeeded, so the first
+            // write waits for the storage behind the namespace rather than trusting the metadata read - and
+            // the read that follows waits for the value, because the two lag independently.
+            await RetryingUntilFoundAsync(
+                () => Client.Kv.PutStringAsync(namespaceId, "greeting/hello", "hi there", expirationTtl: 300));
+
+            var value = await ReadUntilAsync(
+                () => Client.Kv.GetValueAsync(namespaceId, "greeting/hello"),
+                read => read.Found,
+                attempts: 4,
+                delay: TimeSpan.FromSeconds(2));
 
             Assert.True(value.Found);
             Assert.Equal("hi there", value.Text);
 
-            var keys = await Client.Kv.ListKeysAsync(namespaceId, new KvKeyListParameters { Prefix = "greeting/", Limit = 10 });
+            var keys = await ReadUntilAsync(
+                () => Client.Kv.ListKeysAsync(namespaceId, new KvKeyListParameters { Prefix = "greeting/", Limit = 10 }),
+                listed => listed.Items.Any(key => key.Name == "greeting/hello"),
+                attempts: 4,
+                delay: TimeSpan.FromSeconds(2));
             Log($"keys: {string.Join(", ", keys.Items.Select(key => key.Name))}");
             Assert.Contains(keys.Items, key => key.Name == "greeting/hello");
 
-            await Client.Kv.BulkWriteAsync(namespaceId, new[]
+            await RetryingUntilFoundAsync(() => Client.Kv.BulkWriteAsync(namespaceId, new[]
             {
                 KvBulkWriteOperation.Put("bulk/a", "1"),
                 KvBulkWriteOperation.Put("bulk/b", "2"),
-            });
+            }));
 
             var renamed = await Client.Kv.RenameNamespaceAsync(namespaceId, $"{title}-renamed");
             Assert.Equal($"{title}-renamed", renamed.Title);
@@ -2615,7 +2629,14 @@ public class WriteIntegrationTests : CloudflareIntegrationTest
             }
         }
 
-        Assert.Null(await Client.Kv.GetNamespaceAsync(namespaceId));
+        // Deletion lags the same way creation does, so the last read waits for the namespace to go rather
+        // than asserting on the first answer after the delete.
+        var deleted = await ReadUntilAsync(
+            () => Client.Kv.GetNamespaceAsync(namespaceId),
+            found => found is null,
+            attempts: 4,
+            delay: TimeSpan.FromSeconds(2));
+        Assert.Null(deleted);
     }
 
     [Fact]

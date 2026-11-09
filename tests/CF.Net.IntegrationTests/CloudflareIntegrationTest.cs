@@ -523,20 +523,23 @@ public abstract class CloudflareIntegrationTest : IDisposable
     /// Describes a refusal for a report line, with the body Cloudflare sent.
     /// </summary>
     /// <remarks>
-    /// The status and the error code are not always enough. Cloudflare answers some radar endpoints with HTTP
-    /// 200 and <c>{"success":false,"errors":[]}</c>, which this library throws for - correctly, because the
-    /// envelope says the call failed - and which a report line would otherwise print as <c>OK []</c>: a line
-    /// that reads like a defect in the report rather than an answer from Cloudflare. The body is what says
-    /// which it was, so it travels with the status.
+    /// The status and the error code are not always enough, and <c>OK []</c> is the case that proves it: this
+    /// library throws that for an answer it could not read, where the HTTP call succeeded and the envelope said
+    /// <c>success</c>. Which property would not read, and what type it wanted, is in the message; what
+    /// Cloudflare actually sent is in the body. A line with neither reads like a defect in the report rather
+    /// than an answer from Cloudflare, so both travel with the status.
     /// </remarks>
     /// <param name="what">What was being called, in words a reader can place.</param>
     /// <param name="exception">The refusal.</param>
     /// <returns>One line describing it.</returns>
     protected static string Refusal(string what, CloudflareApiException exception) =>
         $"{what}: {exception.StatusCode} [{exception.ErrorCode}]" +
+        (string.IsNullOrEmpty(exception.Message)
+            ? string.Empty
+            : $" {Truncate(exception.Message, 240)}") +
         (string.IsNullOrEmpty(exception.ResponseBody)
             ? string.Empty
-            : $" body={Truncate(exception.ResponseBody, 200)}");
+            : $" body={Truncate(exception.ResponseBody, 300)}");
 
     protected static string Truncate(string? text, int longest) =>
         string.IsNullOrEmpty(text) || text.Length <= longest

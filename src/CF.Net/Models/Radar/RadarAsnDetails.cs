@@ -139,9 +139,43 @@ public sealed class RadarAsSet
     [JsonPropertyName("inference_matches")]
     public List<RadarAsSetInference>? InferenceMatches { get; set; }
 
-    /// <summary>Whether Cloudflare provides transit for this set.</summary>
+    /// <summary>
+    /// Whether Cloudflare provides transit for this set, as the JSON it arrived in.
+    /// </summary>
+    /// <remarks>
+    /// Cloudflare answers this field but does not publish it, and no answer this library has seen showed its
+    /// value - only its name. Typing it as a <see langword="bool"/> is a guess whose failure is not local: a
+    /// value that will not read as one fails the whole answer, every AS-SET in it included. So it is read as
+    /// JSON and offered as <see cref="IsCloudflareTransit"/> beside it, which answers
+    /// <see langword="null"/> for anything that is not a boolean in some spelling.
+    /// </remarks>
     [JsonPropertyName("is_cf_transit")]
-    public bool? IsCloudflareTransit { get; set; }
+    public JsonElement? IsCloudflareTransitRaw { get; set; }
+
+    /// <summary>
+    /// Whether Cloudflare provides transit for this set, read out of <see cref="IsCloudflareTransitRaw"/> -
+    /// <see langword="null"/> when the field is absent or arrived as something that is not a boolean.
+    /// </summary>
+    [JsonIgnore]
+    public bool? IsCloudflareTransit
+    {
+        get
+        {
+            if (IsCloudflareTransitRaw is not { } raw)
+            {
+                return null;
+            }
+
+            return raw.ValueKind switch
+            {
+                JsonValueKind.True => true,
+                JsonValueKind.False => false,
+                JsonValueKind.Number => raw.TryGetInt64(out var value) ? value != 0 : null,
+                JsonValueKind.String => bool.TryParse(raw.GetString(), out var parsed) ? parsed : null,
+                _ => null,
+            };
+        }
+    }
 
     /// <summary>Captures any field Cloudflare adds in the future.</summary>
     [JsonExtensionData]

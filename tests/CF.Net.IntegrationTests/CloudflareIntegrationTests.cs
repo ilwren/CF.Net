@@ -2337,6 +2337,9 @@ public class ReadOnlyIntegrationTests : CloudflareIntegrationTest
             refused.Add(Refusal("datasets", exception));
         }
 
+        // The two ASN reads get their own catches. They answer different shapes and one of them has failed to
+        // read while the other was fine, which a shared catch would have reported as one refusal and hidden
+        // the half that worked.
         try
         {
             var asSet = await Client.Radar.GetAsnAsSetAsync(13335L);
@@ -2363,7 +2366,7 @@ public class ReadOnlyIntegrationTests : CloudflareIntegrationTest
                                     set.AdminContacts is null && set.TechnicalContacts is null &&
                                     set.Organisation is null && set.AsMembers is null &&
                                     set.AsSetMembers is null && set.InferenceMatches is null &&
-                                    set.IsCloudflareTransit is null))
+                                    set.IsCloudflareTransitRaw is null))
                 {
                     surprises.Add("GET /radar/entities/asns/13335/as_set answered none of the nine fields " +
                                   "its published schema omits - descr, mnt_by, admin_c, tech_c, org, " +
@@ -2371,7 +2374,14 @@ public class ReadOnlyIntegrationTests : CloudflareIntegrationTest
                                   "run could not confirm the shapes modelled from an earlier one");
                 }
             }
+        }
+        catch (CloudflareApiException exception)
+        {
+            refused.Add(Refusal("AS-SETs for AS13335", exception));
+        }
 
+        try
+        {
             var relationships = await Client.Radar.GetAsnRelationshipsAsync(13335L);
             Log($"radar_asn_rel[13335]={relationships?.ToString() ?? "(no result)"} " +
                 $"rels=[{string.Join(", ", (relationships?.Rels ?? new List<RadarAsnRelationship>()).Take(3))}]");
@@ -2382,7 +2392,7 @@ public class ReadOnlyIntegrationTests : CloudflareIntegrationTest
         }
         catch (CloudflareApiException exception)
         {
-            refused.Add(Refusal("ASN details", exception));
+            refused.Add(Refusal("relationships for AS13335", exception));
         }
 
         try

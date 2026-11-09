@@ -942,6 +942,26 @@ public class RadarServiceTests
     public void Every_search_category_is_sent_as_the_spelling_radar_publishes(RadarSearchCategory category, string expected) =>
         Assert.Equal(expected, CloudflareEnumConverter<RadarSearchCategory>.ToWire(category));
     [Fact]
+    public void An_as_set_reads_whatever_json_is_cf_transit_arrives_as()
+    {
+        // Cloudflare answers the field and does not publish it, and no answer has shown its value - so it is
+        // read as JSON and offered as a bool that answers null for anything it cannot read. A typed bool would
+        // fail the whole as_set answer over one field nobody has seen.
+        Assert.True(Read("true").IsCloudflareTransit);
+        Assert.False(Read("false").IsCloudflareTransit);
+        Assert.True(Read("1").IsCloudflareTransit);
+        Assert.False(Read("0").IsCloudflareTransit);
+        Assert.True(Read("\"true\"").IsCloudflareTransit);
+        Assert.Null(Read("\"perhaps\"").IsCloudflareTransit);
+        Assert.Null(Read("null").IsCloudflareTransit);
+        Assert.Null(Read("""{"some":"object"}""").IsCloudflareTransit);
+
+        static RadarAsSet Read(string json) => JsonSerializer.Deserialize<RadarAsSet>(
+            $"{{\"name\":\"AS-TEST\",\"is_cf_transit\":{json}}}",
+            CloudflareJson.Default)!;
+    }
+
+    [Fact]
     public void Every_annotation_filter_is_spelled_as_radar_publishes_it()
     {
         Assert.Equal(

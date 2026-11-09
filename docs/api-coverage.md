@@ -1770,6 +1770,14 @@ They are typed by what was seen, not by what the name suggests. `mnt_by`, `admin
 `org` arrived empty or null in every answer, so they are read as the JSON they arrive as: a guessed item type
 that turns out wrong does not cost one field, it fails the whole read.
 
+`is_cf_transit` is the case that proved the rule. Its name was in an answer and its value was not, so it was
+typed as a `bool` — and from that run on, `GET /radar/entities/asns/{asn}/as_set` could not be read at all:
+the HTTP call answered 200 with `success: true` and the whole response failed to parse, every AS-SET in it
+lost. It is now read as the JSON that arrives (`IsCloudflareTransitRaw`) with a `bool?` beside it
+(`IsCloudflareTransit`) that reads `true`/`false`, `1`/`0` and `"true"`/`"false"`, and answers `null` for
+anything else. An integration run reports a refusal with the exception message and the body Cloudflare sent,
+because a parse failure prints as `OK []` and reads like a defect in the report otherwise.
+
 **Two of these page but are not returned as pages.** `GetAsnRelationshipsAsync` and
 `ListBotnetThreatFeedAsync` answer a `meta` object beside their list, and the botnet feed's `meta.total` is the
 only total any radar endpoint offers — radar answers no `result_info`, so there is nothing else to page by.

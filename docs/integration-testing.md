@@ -280,9 +280,19 @@ groups the next modules need, because none of them has a short key at all:
 | Waiting Rooms Read / Write | zone | `cab5202d07ef47beae788e6bc95cb6fe` / `24fc124dc8254e0db468e60bf410c800` |
 | Account Waiting Rooms Read | account | `3e4e20ee40b9475dae22201c468fdb70` |
 | Load Balancing: Monitors and Pools Read / Write | account | `9d24387c6e8544e2bc4024a03991339f` / `d2a1802cc9a34e30852f8b33869b2f3c` |
+| Radar Read | neither — radar's data belongs to no zone and no account | `dfe525ec7b07472c827d8d009178b2ac` |
 
-The whole list — 51 groups, everything this suite touches today plus all of the above — is `WANTED_GROUPS`
-in `.github/workflows/integration.yml`. Every run builds both URLs from it and prints them in the step
+Radar's is the one id here that no published list names. Cloudflare's reference for the radar endpoints asks
+for **User Details Read**, a group that appears nowhere in its catalogue, and says nothing about **Radar
+Read**, which the live catalogue carries under that exact name. The reference data — locations, ASNs, the
+geolocation tree, search — reads fine with neither, so nothing wrapped today needs it; the id is in
+`WANTED_GROUPS` because the timeseries, summary and ranked endpoints behind that reference data are the next
+work, and it is a group only a live read of `GET /accounts/{account_id}/tokens/permission_groups` would ever
+have found.
+
+The whole list — everything this suite touches today plus all of the above — is `WANTED_GROUPS` in
+`.github/workflows/integration.yml`, and every run prints how many ids it carries after checking each one
+against the account's live catalogue. Every run builds both URLs from it and prints them in the step
 summary under *Create the token without ticking boxes*: one with every group, one with the read-only half
 (which still carries Cache Purge, because the reachability probe reads that permission with a body
 Cloudflare refuses, so nothing is purged by having it). Wrapping a new module means adding a line to that

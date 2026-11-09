@@ -1741,14 +1741,19 @@ envelope, and a CSV body would come back as an empty result rather than as an er
 not offering the choice. `POST /radar/datasets/download` is where a bulk CSV belongs, and it is not wrapped
 yet either.
 
-**Radar needs no permission this library's other calls do not.** Cloudflare's reference names **User Details
-Read** for these endpoints — a group nothing else it publishes for public data asks for, and one that appears
-nowhere in its permission catalogue. A live run settled it: a token holding no such group read all four
-radar endpoints, `200` on each. This is the same overstatement the reference makes for URL normalization, and
-the integration suite still probes them and still keeps the name in its reach matrix, so that a future refusal
-says which group Cloudflare now thinks is missing rather than reporting an unexplained `403`. The same run also
-prints any live permission group whose name mentions radar or user details, with the id a token URL would have
-to carry, which is how the question gets re-answered if the catalogue ever gains one.
+**Radar's reference data needs no permission at all — and Cloudflare's reference names the wrong one.** The
+published permission list for these endpoints asks for **User Details Read**, a group that appears nowhere in
+Cloudflare's catalogue. The catalogue does carry **Radar Read**
+(`dfe525ec7b07472c827d8d009178b2ac`), which the published list does not mention. A live run read all four
+radar endpoints with a token holding neither, `200` on each, so the reference data is public in practice and
+this is the same overstatement the reference makes for URL normalization.
+
+The reach matrix keeps **Radar - Read** as these rows' group anyway, with the id from the live catalogue, so
+that a refusal in future names a group that exists and a token URL can carry. `Radar Read` is also in
+`WANTED_GROUPS` ahead of need, because the timeseries, summary and ranked endpoints that query *by* this
+reference data are the next work and are the ones that will ask for it. Only a live read of
+`GET /accounts/{account_id}/tokens/permission_groups` finds that id — it is in no published list, which is why
+every integration run prints the groups its catalogue has that the ones already wrapped do not.
 
 ---
 

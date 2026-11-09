@@ -503,21 +503,23 @@ jobs:
               ('ips', 'GET /ips', 'none - this endpoint is public', 'none', 'read',
                'no account and no zone in the path and no permission group published for it, so a 200 says '
                'the credentials are being sent the way Cloudflare expects and nothing more'),
-              ('radar_locations', 'GET /radar/entities/locations', 'User Details - Read', 'user_details',
-               'read',
-               "Cloudflare's reference names 'User Details Read' for the radar endpoints, which nothing else "
-               'this suite calls asks for and no group in its catalogue is named for. A token with no such '
-               'group reads all four of these fine, so the reference overstates what radar needs - the same '
-               'overstatement it makes for URL normalization, and this row keeps the name so a future refusal '
-               'says which group Cloudflare thinks is missing'),
-              ('radar_asns', 'GET /radar/entities/asns', 'User Details - Read', 'user_details', 'read',
+              ('radar_locations', 'GET /radar/entities/locations', 'Radar - Read',
+               'dfe525ec7b07472c827d8d009178b2ac', 'read',
+               "Cloudflare's reference names 'User Details Read' for the radar endpoints - a group that "
+               'appears nowhere in its catalogue - while the catalogue itself carries Radar Read, which the '
+               'reference does not mention. A token holding neither reads all four of these fine, so the '
+               'reference data needs no permission at all; the id is here because the timeseries endpoints '
+               'behind it are the ones that will, and so a refusal says which group is missing'),
+              ('radar_asns', 'GET /radar/entities/asns', 'Radar - Read',
+               'dfe525ec7b07472c827d8d009178b2ac', 'read',
                'radar pages with offset and limit and answers no result_info, so an empty list is not a '
                'refusal and there is no total to read'),
-              ('radar_geolocations', 'GET /radar/geolocations', 'User Details - Read', 'user_details',
-               'read',
+              ('radar_geolocations', 'GET /radar/geolocations', 'Radar - Read',
+               'dfe525ec7b07472c827d8d009178b2ac', 'read',
                'the geolocation tree - continents, countries and their divisions, each carrying the place '
                'above it'),
-              ('radar_search', 'GET /radar/search/global', 'User Details - Read', 'user_details', 'read',
+              ('radar_search', 'GET /radar/search/global', 'Radar - Read',
+               'dfe525ec7b07472c827d8d009178b2ac', 'read',
                'probed with query=cloudflare, the one parameter Cloudflare requires; no hits would still be '
                'a 200. The single-geolocation read is not probed: it wants the geoId an answer carries, and '
                'asking by code answers 400 [2001] whatever the token holds'),
@@ -829,6 +831,11 @@ jobs:
               ('9d24387c6e8544e2bc4024a03991339f', 'Load Balancing: Monitors and Pools Read', 'account', 'read'),
               ('d2a1802cc9a34e30852f8b33869b2f3c', 'Load Balancing: Monitors and Pools Write', 'account', 'edit'),
               ('b89a480218d04ceb98b4fe57ca29dc1f', 'Account Analytics Read', 'account', 'read'),
+              # Radar's reference data reads without this - a live run proved it - but the timeseries,
+              # summary and ranked endpoints behind it are the next several rounds of work, and this id came
+              # out of the account's live catalogue rather than out of Cloudflare's published permission
+              # list, which names a 'User Details Read' group that does not exist.
+              ('dfe525ec7b07472c827d8d009178b2ac', 'Radar Read', 'user', 'read'),
           ]
 
           wanted_full = [(gid, ptype) for gid, _, _, ptype in WANTED_GROUPS]
@@ -894,8 +901,9 @@ jobs:
               'The two account URLs carry **' + str(len(WANTED_GROUPS)) + ' permission groups by id**: '
               'every group this suite touches now, plus the ones the next modules need - Rulesets, Rule '
               'Lists and Mass/Dynamic URL Redirects for Bulk Redirects, Workers Tail, Workers '
-              'Observability, Workers AI, Turnstile, Waiting Rooms, Load Balancing monitors and pools, and '
-              'Account Settings Write for the Workers account-settings write. '
+              'Observability, Workers AI, Turnstile, Waiting Rooms, Load Balancing monitors and pools, '
+              'Account Settings Write for the Workers account-settings write, and Radar Read for the '
+              'timeseries endpoints behind the reference data this suite already reads. '
               'Creating a token from one of them and replacing the secret is the whole job: there is no box '
               'to tick, and if Cloudflare ever stops resolving an id the form says so by name.',
               '',

@@ -506,9 +506,10 @@ jobs:
               ('radar_locations', 'GET /radar/entities/locations', 'User Details - Read', 'user_details',
                'read',
                "Cloudflare's reference names 'User Details Read' for the radar endpoints, which nothing else "
-               'this suite calls asks for, and no group in its catalogue is named for radar - so a 200 here '
-               'means the reference overstates what radar needs, and a 403 beside a readable GET /ips means '
-               'it does not'),
+               'this suite calls asks for and no group in its catalogue is named for. A token with no such '
+               'group reads all four of these fine, so the reference overstates what radar needs - the same '
+               'overstatement it makes for URL normalization, and this row keeps the name so a future refusal '
+               'says which group Cloudflare thinks is missing'),
               ('radar_asns', 'GET /radar/entities/asns', 'User Details - Read', 'user_details', 'read',
                'radar pages with offset and limit and answers no result_info, so an empty list is not a '
                'refusal and there is no total to read'),
@@ -518,7 +519,8 @@ jobs:
                'above it'),
               ('radar_search', 'GET /radar/search/global', 'User Details - Read', 'user_details', 'read',
                'probed with query=cloudflare, the one parameter Cloudflare requires; no hits would still be '
-               'a 200'),
+               'a 200. The single-geolocation read is not probed: it wants the geoId an answer carries, and '
+               'asking by code answers 400 [2001] whatever the token holds'),
               ('workers_routes', 'GET /zones/{zone_id}/workers/routes', 'Workers Routes - Read',
                '2072033d694d415a936eaeb94e6405b8', 'read',
                'a zone with no routes answers 200 and an empty list; this one is zone-scoped, so it needs '

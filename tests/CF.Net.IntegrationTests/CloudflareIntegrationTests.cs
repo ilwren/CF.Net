@@ -2155,12 +2155,41 @@ public class ReadOnlyIntegrationTests : CloudflareIntegrationTest
             Log($"radar_geolocations={geolocations.Count} first=[{string.Join(", ", geolocations.Items.Take(3))}]");
             ReportUnmodelled("GET /radar/geolocations", geolocations.Items, item => item.AdditionalData);
 
-            var place = geolocations.Items.FirstOrDefault(item => !string.IsNullOrEmpty(item.Code));
-            if (place is not null)
+            // The single-geolocation read wants geoId, not code: asking by code answers 400 [2001], which
+            // reads like a credentials or path problem and is neither. The live answer carries geoId on every
+            // place, although Cloudflare's published schema does not list the field.
+            var place = geolocations.Items.FirstOrDefault(item => !string.IsNullOrEmpty(item.GeoId));
+            if (place is null)
             {
-                var one = await Client.Radar.GetGeolocationAsync(place.Code!);
-                Log($"radar_geolocation[{place.Code}]={(one is null ? "(no result)" : one.ToString())} " +
+                surprises.Add("GET /radar/geolocations answered no geoId on any place, so the single " +
+                              "geolocation read had no id to ask by; Cloudflare's schema does not publish that " +
+                              "field but every answer this run read carried one");
+            }
+            else
+            {
+                var one = await Client.Radar.GetGeolocationAsync(place.GeoId!);
+                Log($"radar_geolocation[geoId={place.GeoId} code={place.Code}]={(one is null ? "(no result)" : one.ToString())} " +
                     $"ancestors=[{string.Join(", ", (one?.Ancestors ?? Enumerable.Empty<RadarGeolocation>()).Select(ancestor => ancestor.Name))}]");
+
+                // Ask by the place's code too, so the run keeps checking the difference instead of merely
+                // avoiding it. The refusal is the expected answer and gets logged; an answer that reads is a
+                // surprise worth saying out loud, because it would mean Cloudflare took codes after all.
+                if (!string.IsNullOrEmpty(place.Code))
+                {
+                    try
+                    {
+                        var byCode = await Client.Radar.GetGeolocationAsync(place.Code!);
+                        surprises.Add($"GET /radar/geolocations/{place.Code} answered " +
+                                      $"{(byCode is null ? "nothing" : byCode.ToString())} where a code has " +
+                                      "been refused 400 [2001]; either Cloudflare now reads places by code as " +
+                                      "well, or that answer is about some other place");
+                    }
+                    catch (CloudflareApiException codeException)
+                    {
+                        Log($"radar_geolocation_by_code[{place.Code}]={codeException.StatusCode} " +
+                            $"[{codeException.ErrorCode}] as expected: the single read wants geoId");
+                    }
+                }
             }
         }
         catch (CloudflareApiException exception)

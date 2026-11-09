@@ -1699,8 +1699,8 @@ and the AI catalogue — is still to come.
 | `GetAsnAsync(asn)` | `GET /radar/entities/asns/{asn}` | adds `confidenceLevel`, `source`, `related[]` and the per-location breakdown of `estimatedUsers` |
 | `GetAsnForIpAsync(ip)` | `GET /radar/entities/asns/ip?ip=` | the same detail, for the ASN behind an address |
 | `GetEntityForIpAsync(ip)` | `GET /radar/entities/ip?ip=` | `{ip: {asn, asnLocation, asnName, asnOrgName, ip, ipVersion, location, locationName}}` — **every field a string**, the ASN included |
-| `ListGeolocationsAsync(RadarGeolocationListParameters?)` | `GET /radar/geolocations` | `{geolocations: [{code, latitude, locale, longitude, name, parent, type}]}`, with `parent` the same shape again |
-| `GetGeolocationAsync(geoId)` | `GET /radar/geolocations/{geo_id}` | one place, with the tree above it |
+| `ListGeolocationsAsync(RadarGeolocationListParameters?)` | `GET /radar/geolocations` | `{geolocations: [{code, geoId, latitude, locale, longitude, name, parent, type}]}`, with `parent` the same shape again |
+| `GetGeolocationAsync(geoId)` | `GET /radar/geolocations/{geo_id}` | one place, with the tree above it; the id is the answer's `geoId`, **not** its `code` |
 | `SearchAsync(RadarSearchParameters)` | `GET /radar/search/global` | `{search: [{code, name, type}]}`; `include` and `exclude` are repeated parameters over twelve categories |
 | `SearchAsync(query, limit)` | the same | the convenience overload for a plain search |
 
@@ -1722,6 +1722,14 @@ and `ListAllAsnsAsync` stop when a page comes back with any number of items othe
 for — fewer when the list ran out, more when Cloudflare ignored the limit and sent everything at once, which
 would otherwise be walked into a second time.
 
+**The geolocation tree carries an id its own schema does not publish.** Cloudflare's reference lists `code` and
+`locale` on a geolocation and nothing else beyond latitude, longitude, name, parent and type — yet every place
+in a live answer, and every one of its parents, also carries `geoId` (`3175395` for Italy, `6269131` for
+England). `geoId` matters because `GET /radar/geolocations/{geo_id}` reads a single place **by it**: asking by
+`code` is answered `400 [2001]`, a refusal that looks like a bad credential or a wrong path and is neither. It
+is modelled rather than left to `AdditionalData`, because the one field a caller needs to make the next call is
+exactly the field nobody would think to look for there.
+
 **The fields are camelCase too, and inconsistently.** One answer carries `countryName`, `estimatedUsers` and
 `confidenceLevel` beside `as_members_count` in a neighbouring one, and `GET /radar/entities/ip` answers the
 ASN as a *string* where its neighbour answers it as a number. Every property is pinned to the wire spelling
@@ -1733,11 +1741,14 @@ envelope, and a CSV body would come back as an empty result rather than as an er
 not offering the choice. `POST /radar/datasets/download` is where a bulk CSV belongs, and it is not wrapped
 yet either.
 
-**Permissions are unresolved.** Cloudflare's reference names **User Details Read** for these endpoints, which
-nothing else it publishes for public data asks for, and no group in its catalogue is named for radar. The live
-suite probes four of them and reports what happened: a `200` says the reference overstates what radar needs,
-and a `403` beside a readable `GET /ips` says it does not, in which case the same run prints any live
-permission group whose name mentions radar or user details, with the id a token URL would have to carry.
+**Radar needs no permission this library's other calls do not.** Cloudflare's reference names **User Details
+Read** for these endpoints — a group nothing else it publishes for public data asks for, and one that appears
+nowhere in its permission catalogue. A live run settled it: a token holding no such group read all four
+radar endpoints, `200` on each. This is the same overstatement the reference makes for URL normalization, and
+the integration suite still probes them and still keeps the name in its reach matrix, so that a future refusal
+says which group Cloudflare now thinks is missing rather than reporting an unexplained `403`. The same run also
+prints any live permission group whose name mentions radar or user details, with the id a token URL would have
+to carry, which is how the question gets re-answered if the catalogue ever gains one.
 
 ---
 

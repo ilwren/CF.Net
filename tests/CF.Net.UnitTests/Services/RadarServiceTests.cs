@@ -1,4 +1,5 @@
 using System.Net;
+using System.Text.Json;
 using CFNet.Exceptions;
 using CFNet.Models.Radar;
 using CFNet.Serialization;
@@ -302,7 +303,7 @@ public class RadarServiceTests
     {
         using var harness = CloudflareHarness.Create();
         harness.Respond(
-            """{"success":true,"errors":[],"messages":[],"result":{"geolocations":[{"code":"GB-ENG","latitude":"52.0","locale":"en","longitude":"-1.0","name":"England","parent":{"code":"GB","latitude":"54.0","longitude":"-2.0","name":"United Kingdom","parent":{"code":"EU","latitude":"51.0","longitude":"10.0","name":"Europe","parent":null,"type":"CONTINENT"},"type":"COUNTRY"},"type":"ADM1"}]}}""");
+            """{"success":true,"errors":[],"messages":[],"result":{"geolocations":[{"code":"GB-ENG","geoId":"6269131","latitude":"52.0","locale":"en","longitude":"-1.0","name":"England","parent":{"code":"GB","geoId":"2635167","latitude":"54.0","longitude":"-2.0","name":"United Kingdom","parent":{"code":"EU","geoId":"6255148","latitude":"51.0","longitude":"10.0","name":"Europe","parent":null,"type":"CONTINENT"},"type":"COUNTRY"},"type":"ADM1"}]}}""");
 
         var page = await harness.Client.Radar.ListGeolocationsAsync(new RadarGeolocationListParameters { Limit = 1 });
 
@@ -323,6 +324,12 @@ public class RadarServiceTests
         Assert.Null(division.Parent.Parent.Parent);
 
         Assert.Equal(new[] { "United Kingdom", "Europe" }, division.Ancestors.Select(place => place.Name));
+
+        // Every level carries the id the single-geolocation read wants, so a caller can read a division and
+        // then its country by id without listing again.
+        Assert.Equal("6269131", division.GeoId);
+        Assert.Equal("2635167", division.Parent.GeoId);
+        Assert.Equal("6255148", division.Parent.Parent.GeoId);
     }
 
     [Fact]
@@ -330,20 +337,42 @@ public class RadarServiceTests
     {
         using var harness = CloudflareHarness.Create();
         harness.Respond(
-            """{"success":true,"errors":[],"messages":[],"result":{"geolocation":{"code":"GB","latitude":"54.0","longitude":"-2.0","name":"United Kingdom","parent":{"code":"EU","latitude":"51.0","longitude":"10.0","name":"Europe","parent":null,"type":"CONTINENT"},"type":"COUNTRY"}}}""");
+            """{"success":true,"errors":[],"messages":[],"result":{"geolocation":{"code":"GB","geoId":"2635167","latitude":"54.0","longitude":"-2.0","name":"United Kingdom","parent":{"code":"EU","geoId":"6255148","latitude":"51.0","longitude":"10.0","name":"Europe","parent":null,"type":"CONTINENT"},"type":"COUNTRY"}}}""");
         harness.Respond(
             """{"success":false,"errors":[{"code":12004,"message":"Geolocation not found"}],"messages":[],"result":null}""",
             HttpStatusCode.NotFound);
 
-        var found = await harness.Client.Radar.GetGeolocationAsync("GB");
-        var missing = await harness.Client.Radar.GetGeolocationAsync("QQ");
+        // By geoId, not by code: a live run proved that GET /radar/geolocations/GB is answered 400 [2001],
+        // while the same path with the place's geoId reads it back.
+        var found = await harness.Client.Radar.GetGeolocationAsync("2635167");
+        var missing = await harness.Client.Radar.GetGeolocationAsync("0");
 
-        Assert.Equal("/client/v4/radar/geolocations/GB", harness.Requests[0].Path);
+        Assert.Equal("/client/v4/radar/geolocations/2635167", harness.Requests[0].Path);
         Assert.NotNull(found);
         Assert.Equal(RadarGeolocationType.Country, found!.Type);
+        Assert.Equal("2635167", found.GeoId);
+        Assert.Equal("6255148", found.Parent!.GeoId);
         Assert.Single(found.Ancestors);
         Assert.Null(missing);
         Assert.Equal(2, harness.RequestCount);
+    }
+
+    [Fact]
+    public void A_geolocation_reads_the_id_its_own_schema_does_not_list()
+    {
+        var place = JsonSerializer.Deserialize<RadarGeolocation>(
+            """{"code":"IT","geoId":"3175395","latitude":"42.83333","longitude":"12.83333","name":"Italy","parent":null,"type":"COUNTRY"}""",
+            CloudflareJson.Default)!;
+
+        // Cloudflare's published schema for the geolocation tree mentions code and locale but not geoId, while
+        // every answer carries geoId - and it is the only id GET /radar/geolocations/{geo_id} accepts. Leaving
+        // it unmodelled would drop the one field a caller needs into AdditionalData, where nobody looks.
+        Assert.Equal("3175395", place.GeoId);
+        Assert.Equal("IT", place.Code);
+        Assert.Null(place.Locale);
+        Assert.Null(place.Parent);
+        Assert.Equal("IT Italy (COUNTRY)", place.ToString());
+        Assert.True(place.AdditionalData is not { Count: > 0 });
     }
 
     [Fact]

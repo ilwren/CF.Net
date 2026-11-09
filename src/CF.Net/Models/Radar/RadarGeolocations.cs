@@ -35,13 +35,29 @@ public enum RadarGeolocationType
 /// rather than a second call, and the nesting ends where <see cref="Parent"/> is <see langword="null"/>.
 /// Cloudflare requires <c>latitude</c>, <c>longitude</c>, <c>name</c>, <c>parent</c> and <c>type</c> and
 /// publishes <c>code</c> and <c>locale</c> as optional; every property here stays nullable anyway, because a
-/// read that throws over one absent field is worse than one that reports it as missing.
+/// read that throws over one absent field is worse than one that reports it as missing. One field arrives that
+/// the published schema does not mention at all - <see cref="GeoId"/> - and it is modelled because it is the id
+/// Cloudflare reads a single place by.
 /// </remarks>
 public sealed class RadarGeolocation
 {
     /// <summary>The place's code - an alpha-2 country code, or the identifier of a division.</summary>
     [JsonPropertyName("code")]
     public string? Code { get; set; }
+
+    /// <summary>
+    /// The geolocation id - <c>geoId</c>, for example <c>3175395</c> for Italy, or <c>3183560</c> for Abruzzo.
+    /// Pass this one to <c>IRadarService.GetGeolocationAsync</c>.
+    /// </summary>
+    /// <remarks>
+    /// Cloudflare's published schema for the geolocation tree does not list this field, yet every place in a
+    /// live answer carries it, and so does each of its parents. It is the only way to read one place by id:
+    /// asking by <see cref="Code"/> is answered <c>400 [2001]</c>, a refusal that reads like a bad credential
+    /// or a wrong path but is neither. A field the schema omits that answers are full of is worth modelling, so
+    /// it does not end up in <see cref="AdditionalData"/> where a caller has to know to look.
+    /// </remarks>
+    [JsonPropertyName("geoId")]
+    public string? GeoId { get; set; }
 
     /// <summary>Latitude, as the string Cloudflare publishes it.</summary>
     [JsonPropertyName("latitude")]

@@ -114,9 +114,14 @@ public interface IRadarService
         CancellationToken cancellationToken = default);
 
     /// <summary>
-    /// Reads one geolocation by its identifier.
+    /// Reads one geolocation by its <c>geoId</c>.
     /// </summary>
-    /// <param name="geoId">The geolocation's id, such as an alpha-2 country code.</param>
+    /// <remarks>
+    /// The id this call wants is <see cref="RadarGeolocation.GeoId"/> - a number such as <c>3175395</c>, which
+    /// a live answer carries on every place and every parent even though Cloudflare's published schema does not
+    /// list the field. Asking by <see cref="RadarGeolocation.Code"/> instead is answered <c>400 [2001]</c>.
+    /// </remarks>
+    /// <param name="geoId">The geolocation's <c>geoId</c>, such as <c>3175395</c>.</param>
     /// <param name="cancellationToken">Cancellation token.</param>
     /// <returns>The geolocation, or <see langword="null"/> when Cloudflare has no such place.</returns>
     Task<RadarGeolocation?> GetGeolocationAsync(string geoId, CancellationToken cancellationToken = default);

@@ -1679,6 +1679,68 @@ suite ran against the value moved. The fact reports either outcome: a value that
 
 ---
 
+## Radar reference data
+
+`IRadarService` — `client.Radar`
+
+The reference data the rest of Cloudflare Radar is queried by: locations, autonomous systems, the geolocation
+tree, the entity behind an IP address, and the global search across all of them. Radar has 269 published
+endpoints; this is the slice every other one needs first, because a timeseries query is made *by* location code
+and ASN. The rest of radar — the timeseries, summaries and top-N endpoints for HTTP, DNS, BGP, bots, attacks
+and the AI catalogue — is still to come.
+
+| Method | Endpoint | Notes |
+| --- | --- | --- |
+| `ListLocationsAsync(RadarLocationListParameters?)` | `GET /radar/entities/locations` | `{locations: [{alpha2, continent, latitude, longitude, name, region, subregion}]}`; filters by `continent`, `region`, `subregion`, `location` |
+| `ListAllLocationsAsync(pageSize)` | the same, walked | moves along by `offset`; stops on a page whose length is not the one asked for |
+| `GetLocationAsync(location)` | `GET /radar/entities/locations/{location}` | adds `confidenceLevel`, which the list does not answer |
+| `ListAsnsAsync(RadarAsnListParameters?)` | `GET /radar/entities/asns` | `{asns: [{asn, country, countryName, estimatedUsers, name, aka, orgName, website}]}`; filters by `asn` (comma-separated), `location`, and orders by `orderBy=ASN`\|`POPULATION` |
+| `ListAllAsnsAsync(pageSize)` | the same, walked | a long list — tens of thousands of ASNs — so it takes a page size and a cancellation token |
+| `GetAsnAsync(asn)` | `GET /radar/entities/asns/{asn}` | adds `confidenceLevel`, `source`, `related[]` and the per-location breakdown of `estimatedUsers` |
+| `GetAsnForIpAsync(ip)` | `GET /radar/entities/asns/ip?ip=` | the same detail, for the ASN behind an address |
+| `GetEntityForIpAsync(ip)` | `GET /radar/entities/ip?ip=` | `{ip: {asn, asnLocation, asnName, asnOrgName, ip, ipVersion, location, locationName}}` — **every field a string**, the ASN included |
+| `ListGeolocationsAsync(RadarGeolocationListParameters?)` | `GET /radar/geolocations` | `{geolocations: [{code, latitude, locale, longitude, name, parent, type}]}`, with `parent` the same shape again |
+| `GetGeolocationAsync(geoId)` | `GET /radar/geolocations/{geo_id}` | one place, with the tree above it |
+| `SearchAsync(RadarSearchParameters)` | `GET /radar/search/global` | `{search: [{code, name, type}]}`; `include` and `exclude` are repeated parameters over twelve categories |
+| `SearchAsync(query, limit)` | the same | the convenience overload for a plain search |
+
+Four things about these endpoints are unlike the rest of the API this library wraps, and each one is the
+reason a caller would otherwise get nothing back and call it a bug:
+
+**The result is wrapped in a property named for it.** `result` is `{locations: […]}`, `{asn: {…}}`,
+`{search: […]}` — never the array or object itself. Each call here unwraps one level, following the same
+`…ListResult` idiom R2's `{buckets: […]}` uses, so a caller gets `CloudflarePage<RadarLocation>` rather than a
+wrapper to dig through.
+
+**The query parameters are camelCase.** `orderBy`, `limitPerGroup` — not `order_by` and `limit_per_group`.
+The rest of the v4 API is snake_case on the wire, and a caller who assumed that here would send a parameter
+Cloudflare ignores.
+
+**The lists page with `offset` and `limit`, and answer no `result_info`.** There is no total to read and no
+cursor to follow, so the only signal that a walk has ended is the page's own length: `ListAllLocationsAsync`
+and `ListAllAsnsAsync` stop when a page comes back with any number of items other than the limit they asked
+for — fewer when the list ran out, more when Cloudflare ignored the limit and sent everything at once, which
+would otherwise be walked into a second time.
+
+**The fields are camelCase too, and inconsistently.** One answer carries `countryName`, `estimatedUsers` and
+`confidenceLevel` beside `as_members_count` in a neighbouring one, and `GET /radar/entities/ip` answers the
+ASN as a *string* where its neighbour answers it as a number. Every property is pinned to the wire spelling
+with `[JsonPropertyName]`, `RadarIpEntity.AsnNumber` parses the string when it is one, and a four-byte ASN is a
+`long` all the way down because the private range starts past `int.MaxValue`.
+
+⛔ **Not wrapped:** the `format` parameter, which can ask for `CSV`. This library's transport reads the JSON
+envelope, and a CSV body would come back as an empty result rather than as an error — silence is worse than
+not offering the choice. `POST /radar/datasets/download` is where a bulk CSV belongs, and it is not wrapped
+yet either.
+
+**Permissions are unresolved.** Cloudflare's reference names **User Details Read** for these endpoints, which
+nothing else it publishes for public data asks for, and no group in its catalogue is named for radar. The live
+suite probes four of them and reports what happened: a `200` says the reference overstates what radar needs,
+and a `403` beside a readable `GET /ips` says it does not, in which case the same run prints any live
+permission group whose name mentions radar or user details, with the id a token URL would have to carry.
+
+---
+
 ## Cross-cutting behaviour
 
 | Concern | Where |

@@ -74,6 +74,7 @@ public sealed class CloudflareClient : ICloudflareClient, IDisposable
         DurableObjects = new DurableObjectsService(transport);
         UrlNormalization = new UrlNormalizationService(transport);
         OriginPostQuantumEncryption = new OriginPostQuantumEncryptionService(transport);
+        Radar = new RadarService(transport);
     }
 
     /// <inheritdoc />
@@ -162,6 +163,9 @@ public sealed class CloudflareClient : ICloudflareClient, IDisposable
 
     /// <inheritdoc />
     public IOriginPostQuantumEncryptionService OriginPostQuantumEncryption { get; }
+
+    /// <inheritdoc />
+    public IRadarService Radar { get; }
 
     /// <inheritdoc />
     public Task<CloudflareConnectionCheck> CheckConnectionAsync(CancellationToken cancellationToken = default) =>

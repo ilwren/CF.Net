@@ -350,6 +350,7 @@ public class CloudflareClientTests
         Assert.IsAssignableFrom<IDurableObjectsService>(client.DurableObjects);
         Assert.IsAssignableFrom<IUrlNormalizationService>(client.UrlNormalization);
         Assert.IsAssignableFrom<IOriginPostQuantumEncryptionService>(client.OriginPostQuantumEncryption);
+        Assert.IsAssignableFrom<IRadarService>(client.Radar);
     }
 
     [Fact]
@@ -563,6 +564,7 @@ public class ServiceCollectionExtensionsTests
         Assert.Same(client.DurableObjects, provider.GetRequiredService<IDurableObjectsService>());
         Assert.Same(client.UrlNormalization, provider.GetRequiredService<IUrlNormalizationService>());
         Assert.Same(client.OriginPostQuantumEncryption, provider.GetRequiredService<IOriginPostQuantumEncryptionService>());
+        Assert.Same(client.Radar, provider.GetRequiredService<IRadarService>());
         Assert.Same(client.Transport, provider.GetRequiredService<ICloudflareTransport>());
         Assert.Same(client, provider.GetRequiredService<CloudflareClient>());
         Assert.NotNull(provider.GetRequiredService<ICloudflareClientFactory>());

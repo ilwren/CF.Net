@@ -288,6 +288,15 @@ jobs:
           # the one probe that says whether the credentials are being sent the way Cloudflare expects without
           # depending on any resource being in scope.
           probe ips "$base/ips"
+          # Radar's reference data: no account and no zone in the path either, but unlike /ips Cloudflare's
+          # reference names a permission for these - 'User Details Read', a group nothing else this suite
+          # calls asks for. These four probes are what settles whether a token needs it, and the notice this
+          # step prints lists every live group whose name mentions radar or user details, with the id a token
+          # URL would have to carry.
+          probe radar_locations "$base/radar/entities/locations?limit=1"
+          probe radar_asns "$base/radar/entities/asns?limit=1"
+          probe radar_geolocations "$base/radar/geolocations?limit=1"
+          probe radar_search "$base/radar/search/global?query=cloudflare&limit=1"
 
           if [ -n "${CLOUDFLARE_ZONE_ID:-}" ]; then
             zone="$base/zones/${CLOUDFLARE_ZONE_ID}"
@@ -494,6 +503,22 @@ jobs:
               ('ips', 'GET /ips', 'none - this endpoint is public', 'none', 'read',
                'no account and no zone in the path and no permission group published for it, so a 200 says '
                'the credentials are being sent the way Cloudflare expects and nothing more'),
+              ('radar_locations', 'GET /radar/entities/locations', 'User Details - Read', 'user_details',
+               'read',
+               "Cloudflare's reference names 'User Details Read' for the radar endpoints, which nothing else "
+               'this suite calls asks for, and no group in its catalogue is named for radar - so a 200 here '
+               'means the reference overstates what radar needs, and a 403 beside a readable GET /ips means '
+               'it does not'),
+              ('radar_asns', 'GET /radar/entities/asns', 'User Details - Read', 'user_details', 'read',
+               'radar pages with offset and limit and answers no result_info, so an empty list is not a '
+               'refusal and there is no total to read'),
+              ('radar_geolocations', 'GET /radar/geolocations', 'User Details - Read', 'user_details',
+               'read',
+               'the geolocation tree - continents, countries and their divisions, each carrying the place '
+               'above it'),
+              ('radar_search', 'GET /radar/search/global', 'User Details - Read', 'user_details', 'read',
+               'probed with query=cloudflare, the one parameter Cloudflare requires; no hits would still be '
+               'a 200'),
               ('workers_routes', 'GET /zones/{zone_id}/workers/routes', 'Workers Routes - Read',
                '2072033d694d415a936eaeb94e6405b8', 'read',
                'a zone with no routes answers 200 and an empty list; this one is zone-scoped, so it needs '
@@ -684,7 +709,8 @@ jobs:
               groups = pg_payload['result']
 
           if groups:
-              wanted = ('ruleset', 'redirect', 'list', 'filter', 'firewall', 'waf', 'rate limit')
+              wanted = ('ruleset', 'redirect', 'list', 'filter', 'firewall', 'waf', 'rate limit',
+                        'radar', 'user details')
               interesting = [g for g in groups
                              if any(word in json.dumps(g).lower() for word in wanted)]
               lines += ['#### Permission groups this account can grant', '',

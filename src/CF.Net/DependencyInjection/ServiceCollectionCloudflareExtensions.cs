@@ -286,6 +286,7 @@ public static class ServiceCollectionCloudflareExtensions
         services.TryAddSingleton<IDurableObjectsService>(provider => provider.GetRequiredService<ICloudflareClient>().DurableObjects);
         services.TryAddSingleton<IUrlNormalizationService>(provider => provider.GetRequiredService<ICloudflareClient>().UrlNormalization);
         services.TryAddSingleton<IOriginPostQuantumEncryptionService>(provider => provider.GetRequiredService<ICloudflareClient>().OriginPostQuantumEncryption);
+        services.TryAddSingleton<IRadarService>(provider => provider.GetRequiredService<ICloudflareClient>().Radar);
     }
 
     /// <summary>

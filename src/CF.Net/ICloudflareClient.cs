@@ -165,6 +165,13 @@ public interface ICloudflareClient : IDisposable
     IOriginPostQuantumEncryptionService OriginPostQuantumEncryption { get; }
 
     /// <summary>
+    /// Cloudflare Radar's reference data: the locations, autonomous systems and geolocations the rest of the
+    /// radar API is queried by, the entity behind an IP address, and the global search across all of them.
+    /// None of these paths carries an account or a zone.
+    /// </summary>
+    IRadarService Radar { get; }
+
+    /// <summary>
     /// Cheap connectivity check that never throws: verifies the credentials using whichever scheme is
     /// configured and reports the outcome.
     /// </summary>

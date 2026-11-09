@@ -324,7 +324,7 @@ permissions but no zone resource returns `10007 Route not found` for a zone you 
 in the dashboard, which reads like a bug in the client and is not.
 
 This is common enough that the workflow checks for it before running anything. The step named *Check what
-the credentials can actually reach* makes one `curl` call per product area — forty of them, covering
+the credentials can actually reach* makes one `curl` call per product area — forty-four of them, covering
 zones, DNS records, DNSSEC and its ZSK, zone settings, certificate packs, custom hostnames, origin TLS
 client auth, origin CA certificates, cache purge, the account, Workers scripts, domains, routes and static
 assets, Pages, D1, KV, R2, rulesets, filter lists, page rules, firewall filters, IP Access rules, mTLS

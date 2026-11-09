@@ -16,6 +16,7 @@ using CFNet.Models.OriginCa;
 using CFNet.Models.PageRules;
 using CFNet.Models.Pages;
 using CFNet.Models.R2;
+using CFNet.Models.Radar;
 using CFNet.Models.Rules;
 using CFNet.Models.Ssl;
 using CFNet.Models.Turnstile;
@@ -1972,6 +1973,227 @@ public class ReadOnlyIntegrationTests : CloudflareIntegrationTest
             $"GET /accounts/{{account_id}}/workers/durable_objects/namespaces/{target.Id}/objects",
             objects,
             item => item.AdditionalData);
+    }
+
+    [Fact]
+    public async Task Radar_reference_data_can_be_read_paged_and_searched()
+    {
+        if (!SkipWithoutCredentials())
+        {
+            return;
+        }
+
+        // Radar's paths carry no account and no zone, so this fact needs nothing but credentials. What it
+        // does need is a permission Cloudflare's reference names only here - 'User Details Read' - so the
+        // first call is the one that turns a refusal into a skip saying what to add.
+        var surprises = new List<string>();
+        var refused = new List<string>();
+
+        CloudflarePage<RadarLocation> firstPage;
+        try
+        {
+            firstPage = await Client.Radar.ListLocationsAsync(new RadarLocationListParameters { Limit = 5 });
+        }
+        catch (CloudflareApiException exception) when (exception.IsAuthenticationFailure)
+        {
+            SkipUnless(false, $"GET /radar/entities/locations was refused with {exception.StatusCode} " +
+                $"[{exception.ErrorCode}]. Cloudflare's reference names 'User Details Read' for the radar " +
+                $"endpoints, and nothing else this suite calls asks for that group. " +
+                $"{Truncate(exception.Message, 200)}");
+            return;
+        }
+
+        Log($"radar_locations={firstPage.Count} first=[{string.Join(", ", firstPage.Items.Take(3))}]");
+        ReportUnmodelled("GET /radar/entities/locations", firstPage.Items, item => item.AdditionalData);
+        if (firstPage.Count > 0 && firstPage.Items.All(item => item.ConfidenceLevel is not null))
+        {
+            surprises.Add("the location list reported confidenceLevel, which Cloudflare publishes only on " +
+                          "the single-location read");
+        }
+
+        // Radar answers no result_info, so offset is the only way along the list - and the only way to find
+        // out whether Cloudflare honours it is to ask for the next page and compare.
+        try
+        {
+            var secondPage = await Client.Radar.ListLocationsAsync(
+                new RadarLocationListParameters { Limit = 5, Offset = 5 });
+            Log($"radar_locations_offset_5={secondPage.Count} first=[{string.Join(", ", secondPage.Items.Take(3))}]");
+
+            var firstCodes = firstPage.Items.Select(item => item.Alpha2).ToList();
+            var secondCodes = secondPage.Items.Select(item => item.Alpha2).ToList();
+            if (secondCodes.Count > 0 && secondCodes.SequenceEqual(firstCodes))
+            {
+                surprises.Add("GET /radar/entities/locations?offset=5 answered the same locations as " +
+                              "offset=0, so the offset this library walks by was ignored");
+            }
+        }
+        catch (CloudflareApiException exception)
+        {
+            refused.Add($"locations with an offset: {exception.StatusCode} [{exception.ErrorCode}]");
+        }
+
+        var known = firstPage.Items.FirstOrDefault(item => !string.IsNullOrEmpty(item.Alpha2));
+        if (known is not null)
+        {
+            try
+            {
+                var one = await Client.Radar.GetLocationAsync(known.Alpha2!);
+                Log($"radar_location[{known.Alpha2}]={(one is null ? "(no result)" : one.ToString())} " +
+                    $"confidence={one?.ConfidenceLevel?.ToString() ?? "(none)"}");
+                if (one is null)
+                {
+                    surprises.Add($"GET /radar/entities/locations/{known.Alpha2} answered nothing for a code " +
+                                  "the list had just returned");
+                }
+                else if (one.AdditionalData is { Count: > 0 } extras)
+                {
+                    surprises.Add($"GET /radar/entities/locations/{{location}} answered fields this library " +
+                                  $"does not model: {string.Join(", ", extras.Keys)}");
+                }
+            }
+            catch (CloudflareApiException exception)
+            {
+                refused.Add($"one location: {exception.StatusCode} [{exception.ErrorCode}]");
+            }
+        }
+
+        RadarAsn? listed = null;
+        try
+        {
+            var asns = await Client.Radar.ListAsnsAsync(new RadarAsnListParameters
+            {
+                Limit = 5,
+                OrderBy = RadarAsnOrderBy.Population,
+            });
+            listed = asns.Items.FirstOrDefault();
+            Log($"radar_asns={asns.Count} first=[{string.Join(", ", asns.Items.Take(3))}]");
+            ReportUnmodelled("GET /radar/entities/asns", asns.Items, item => item.AdditionalData);
+        }
+        catch (CloudflareApiException exception)
+        {
+            refused.Add($"asns: {exception.StatusCode} [{exception.ErrorCode}]");
+        }
+
+        if (listed?.Asn is { } number)
+        {
+            try
+            {
+                var one = await Client.Radar.GetAsnAsync(number);
+                Log($"radar_asn[{number}]={(one is null ? "(no result)" : one.ToString())} " +
+                    $"related={one?.Related?.Count.ToString() ?? "(none)"} source={one?.Source ?? "(none)"} " +
+                    $"users={one?.EstimatedUsers?.ToString() ?? "(none)"}");
+                if (one is null)
+                {
+                    surprises.Add($"GET /radar/entities/asns/{number} answered nothing for an ASN the list " +
+                                  "had just returned");
+                }
+                else
+                {
+                    if (one.Related is not { Count: > 0 })
+                    {
+                        surprises.Add($"AS{number} reported no related ASNs, which the single-ASN read is " +
+                                      "the only place Cloudflare publishes them");
+                    }
+
+                    if (one.AdditionalData is { Count: > 0 } extras)
+                    {
+                        surprises.Add($"GET /radar/entities/asns/{{asn}} answered fields this library does " +
+                                      $"not model: {string.Join(", ", extras.Keys)}");
+                    }
+                }
+            }
+            catch (CloudflareApiException exception)
+            {
+                refused.Add($"one ASN: {exception.StatusCode} [{exception.ErrorCode}]");
+            }
+        }
+
+        // 1.1.1.1 is Cloudflare's own resolver, so both lookups have something to answer about.
+        try
+        {
+            var byIp = await Client.Radar.GetAsnForIpAsync("1.1.1.1");
+            Log($"radar_asn_by_ip[1.1.1.1]={(byIp is null ? "(no result)" : byIp.ToString())}");
+            if (byIp is null)
+            {
+                surprises.Add("GET /radar/entities/asns/ip?ip=1.1.1.1 answered nothing for Cloudflare's own " +
+                              "resolver address");
+            }
+        }
+        catch (CloudflareApiException exception)
+        {
+            refused.Add($"ASN by IP: {exception.StatusCode} [{exception.ErrorCode}]");
+        }
+
+        try
+        {
+            var entity = await Client.Radar.GetEntityForIpAsync("1.1.1.1");
+            Log($"radar_entity_by_ip[1.1.1.1]={(entity is null ? "(no result)" : entity.ToString())}");
+            if (entity is not null)
+            {
+                if (entity.AsnNumber is null)
+                {
+                    surprises.Add($"GET /radar/entities/ip answered an asn this library could not read as a " +
+                                  $"number: '{entity.Asn}'");
+                }
+
+                if (entity.AdditionalData is { Count: > 0 } extras)
+                {
+                    surprises.Add($"GET /radar/entities/ip answered fields this library does not model: " +
+                                  $"{string.Join(", ", extras.Keys)}");
+                }
+            }
+        }
+        catch (CloudflareApiException exception)
+        {
+            refused.Add($"entity by IP: {exception.StatusCode} [{exception.ErrorCode}]");
+        }
+
+        try
+        {
+            var geolocations = await Client.Radar.ListGeolocationsAsync(
+                new RadarGeolocationListParameters { Limit = 5 });
+            Log($"radar_geolocations={geolocations.Count} first=[{string.Join(", ", geolocations.Items.Take(3))}]");
+            ReportUnmodelled("GET /radar/geolocations", geolocations.Items, item => item.AdditionalData);
+
+            var place = geolocations.Items.FirstOrDefault(item => !string.IsNullOrEmpty(item.Code));
+            if (place is not null)
+            {
+                var one = await Client.Radar.GetGeolocationAsync(place.Code!);
+                Log($"radar_geolocation[{place.Code}]={(one is null ? "(no result)" : one.ToString())} " +
+                    $"ancestors=[{string.Join(", ", (one?.Ancestors ?? Enumerable.Empty<RadarGeolocation>()).Select(ancestor => ancestor.Name))}]");
+            }
+        }
+        catch (CloudflareApiException exception)
+        {
+            refused.Add($"geolocations: {exception.StatusCode} [{exception.ErrorCode}]");
+        }
+
+        try
+        {
+            var hits = await Client.Radar.SearchAsync("cloudflare", limit: 5);
+            Log($"radar_search[cloudflare]={hits.Count} hits=[{string.Join(", ", hits.Take(3))}]");
+            ReportUnmodelled("GET /radar/search/global", hits, item => item.AdditionalData);
+            if (hits.Count == 0)
+            {
+                surprises.Add("GET /radar/search/global?query=cloudflare answered no hits at all");
+            }
+        }
+        catch (CloudflareApiException exception)
+        {
+            refused.Add($"search: {exception.StatusCode} [{exception.ErrorCode}]");
+        }
+
+        foreach (var refusal in refused)
+        {
+            Warn($"A radar endpoint was refused while GET /radar/entities/locations read fine: {refusal}. " +
+                 "That is about the endpoint rather than the credentials.");
+        }
+
+        if (surprises.Count > 0)
+        {
+            Warn($"Radar answered something other than what the reference publishes: " +
+                 $"{string.Join("; ", surprises)}.");
+        }
     }
 }
 /// <summary>

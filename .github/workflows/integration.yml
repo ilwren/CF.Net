@@ -660,6 +660,21 @@ jobs:
                   verdict = f'HTTP {status} ' + (detail(payload) or form)
               rows.append((endpoint, group, status, verdict, note))
 
+          # A notice that is cut short loses exactly the newest rows - the ones a run was pushed to see -
+          # so the dense lists below go out in whole-token chunks rather than as one line sliced at a
+          # character limit. Annotations are also the only part of a run readable through the API without
+          # downloading the job log, which is why these lists are printed at all.
+          def chunk(tokens, limit=1400):
+              parts, current = [], ''
+              for token in tokens:
+                  if current and len(current) + len(token) + 1 > limit:
+                      parts.append(current)
+                      current = ''
+                  current = f'{current} {token}'.strip()
+              if current:
+                  parts.append(current)
+              return parts
+
           lines = ['### What these credentials can reach', '',
                    '| Endpoint | Permission it needs | HTTP | Verdict |', '| --- | --- | ---: | --- |']
           for endpoint, group, status, verdict, note in rows:
@@ -723,8 +738,13 @@ jobs:
                         '```json', json.dumps(interesting, indent=1)[:7000], '```', '',
                         '<details><summary>All ' + str(len(groups)) + ' groups</summary>', '',
                         '```json', json.dumps(groups)[:60000], '```', '', '</details>', '']
-              print('::notice::Permission groups for the next batch: ' +
-                    json.dumps(interesting, separators=(',', ':'))[:1500])
+              # Ids and names only: the full objects carry descriptions and categories that fill a notice
+              # before the group this run is actually looking for ever reaches it.
+              brief = [f'{g.get("name")}: {g.get("id")}' for g in interesting]
+              pieces = chunk(brief)
+              for index, piece in enumerate(pieces, start=1):
+                  suffix = f' ({index}/{len(pieces)})' if len(pieces) > 1 else ''
+                  print(f'::notice::Permission groups for the next batch{suffix}: {piece}')
 
           def encode(permissions):
               return urllib.parse.quote(
@@ -897,10 +917,10 @@ jobs:
                   handle.write(body + '\n')
           print(body)
 
-          # Annotations are the only part of a run that is readable through the API without downloading
-          # the job log, and GitHub keeps at most ten per level per step - so the whole matrix goes out as
-          # one dense notice and the verdicts stay in the summary above.
-          print('::notice::Reach matrix: ' + ' '.join(compact)[:1500])
+          pieces = chunk(compact)
+          for index, piece in enumerate(pieces, start=1):
+              suffix = f' ({index}/{len(pieces)})' if len(pieces) > 1 else ''
+              print(f'::notice::Reach matrix{suffix}: {piece}')
           if missing:
               names = ', '.join(sorted({group for group, _, _ in missing}))
               groups = len({group for group, _, _ in missing})

@@ -782,6 +782,39 @@ public class RadarServiceTests
     }
 
     [Fact]
+    public async Task RequestDatasetDownloadAsync_finds_the_address_whatever_separates_it_from_the_words()
+    {
+        // The run that found the text answer printed it as "Dataset url https://…" and an exact match on that
+        // spelling still missed it, so the separator was not the space it looked like - a tab reads as one in a
+        // log, and so does a byte-order mark read as nothing. These are the spellings a log cannot tell apart.
+        const string expected = "https://storage.example.test/radar/bucket-1000000.csv?X-Amz-Signature=abc123";
+
+        Assert.Equal(expected, await Read($"Dataset url\t{expected}"));
+        Assert.Equal(expected, await Read($"dataset URL {expected}"));
+        Assert.Equal(expected, await Read($"\uFEFFDataset url {expected}"));
+        Assert.Equal(expected, await Read($"Dataset url {expected}\r\n"));
+        Assert.Equal(expected, await Read($"Prepared.\nDataset url: {expected}\nExpires in 3600s."));
+
+        // A body that is JSON and answers no url stays no url: the address is read out of text, not invented
+        // out of an envelope that did not offer one.
+        Assert.Null(await Read("""{"success":true,"errors":[],"result":{"dataset":{}}}"""));
+        Assert.Null(await Read("(no dataset)"));
+
+        static async Task<string?> Read(string body)
+        {
+            using var harness = CloudflareHarness.Create();
+            harness.RespondRaw(
+                System.Text.Encoding.UTF8.GetBytes(body),
+                "text/plain");
+
+            var download = await harness.Client.Radar.RequestDatasetDownloadAsync(
+                3033L,
+                RadarDatasetFormat.Csv);
+            return download?.Url;
+        }
+    }
+
+    [Fact]
     public async Task RequestDatasetDownloadAsync_refuses_a_format_it_cannot_spell()
     {
         using var harness = CloudflareHarness.Create();

@@ -1761,9 +1761,16 @@ it.
 nothing a JSON parse could hold. Asked again through the transport for the body itself, the endpoint answered
 `Dataset url https://…/bucket-1000000-20261102-20261109.csv?X-Amz-…`: one line of text, signed for an hour,
 and not JSON, so `HasEnvelopeRoot` is false and the transport returns an empty result rather than throwing. A
-call that had worked read as one that had answered no address. `RequestDatasetDownloadAsync` now reads the
-address out of either shape and returns it whole — the signature is what makes it usable — while the
-integration suite reports only the scheme, host and path, because a run's annotations are public.
+call that had worked read as one that had answered no address. `RequestDatasetDownloadAsync` reads the address out
+of either shape and returns it whole — the signature is what makes it usable — while the integration suite
+reports only the scheme, host and path, because a run's annotations are public.
+
+Reading it took two runs. The first matched the prefix `Dataset url ` exactly, and the next run still answered
+nothing, which is what a separator a log cannot show looks like: a tab prints as a space and a byte-order mark
+prints as nothing. So the method takes the first token in a text answer that parses as an absolute http(s)
+address, and leaves a body that looks like JSON alone — inventing an address out of an envelope that offered
+none would be worse than reporting that there was not one. The unit tests pin the spellings a log cannot tell
+apart: tab, lower case, byte-order mark, trailing newline, and words around the address.
 
 **Eleven fields arrive that Cloudflare does not publish, and they are the interesting ones.** The live run read
 `GET /radar/entities/asns/{asn}/as_set` against AS13335 and was answered, beside every field the schema lists,

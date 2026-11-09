@@ -557,13 +557,25 @@ public sealed class RadarService : CloudflareService, IRadarService
         // With format=CSV Cloudflare does not answer the envelope it publishes. It answers one line of text -
         // "Dataset url https://…", an address signed for an hour - which is not JSON at all, so it parses to
         // nothing and a call that worked reads as one that answered no address. The address is in the text,
-        // so it is read out of the text, whole: the signature is what makes it usable, and a caller needs
-        // all of it. Only a log line needs less than that, and cutting it is the log's business.
-        const string textAnswer = "Dataset url ";
+        // so it is read out of the text, whole: the signature is what makes it usable, and a caller needs all
+        // of it. Only a log line needs less than that, and cutting it is the log's business.
+        // The line is "Dataset url <address>", but the run that found it did not match that spelling exactly -
+        // it printed as though the separator were a space, and an exact match on one still missed, which is what
+        // a tab or a byte-order mark looks like in a log. So the address is the first token that is one, rather
+        // than a prefix to compare against, and a body that looks like JSON is left alone: hunting for an
+        // address inside an envelope that answered none would invent a download Cloudflare did not offer.
         var body = response.RawBody?.Trim();
-        if (body is not null && body.StartsWith(textAnswer, StringComparison.Ordinal))
+        if (!string.IsNullOrEmpty(body) && !body.StartsWith("{", StringComparison.Ordinal))
         {
-            return new RadarDatasetDownload { Url = body[textAnswer.Length..].Trim() };
+            foreach (var token in body.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries))
+            {
+                if (Uri.TryCreate(token, UriKind.Absolute, out var address) &&
+                    address is not null &&
+                    (address.Scheme == Uri.UriSchemeHttp || address.Scheme == Uri.UriSchemeHttps))
+                {
+                    return new RadarDatasetDownload { Url = token };
+                }
+            }
         }
 
         return response.Result?.Dataset;

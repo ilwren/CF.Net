@@ -1983,9 +1983,10 @@ public class ReadOnlyIntegrationTests : CloudflareIntegrationTest
             return;
         }
 
-        // Radar's paths carry no account and no zone, so this fact needs nothing but credentials. What it
-        // does need is a permission Cloudflare's reference names only here - 'User Details Read' - so the
-        // first call is the one that turns a refusal into a skip saying what to add.
+        // Radar's paths carry no account and no zone, so this fact needs nothing but credentials - a run has
+        // read all of them with a token that holds no radar permission at all. The first call still turns an
+        // authentication refusal into a skip, because if Cloudflare ever starts enforcing the group its own
+        // catalogue carries, the skip is where a reader would look for its id.
         var surprises = new List<string>();
         var refused = new List<string>();
 
@@ -1998,8 +1999,9 @@ public class ReadOnlyIntegrationTests : CloudflareIntegrationTest
         {
             SkipUnless(false, $"GET /radar/entities/locations was refused with {exception.StatusCode} " +
                 $"[{exception.ErrorCode}]. Cloudflare's reference names 'User Details Read' for the radar " +
-                $"endpoints, and nothing else this suite calls asks for that group. " +
-                $"{Truncate(exception.Message, 200)}");
+                $"endpoints, a group its catalogue does not carry; the one it does carry is Radar Read, " +
+                $"dfe525ec7b07472c827d8d009178b2ac, which the reference never mentions and which this suite " +
+                $"has not needed until now. {Truncate(exception.Message, 200)}");
             return;
         }
 
@@ -2221,6 +2223,182 @@ public class ReadOnlyIntegrationTests : CloudflareIntegrationTest
         if (surprises.Count > 0)
         {
             Warn($"Radar answered something other than what the reference publishes: " +
+                 $"{string.Join("; ", surprises)}.");
+        }
+    }
+
+    [Fact]
+    public async Task Radar_annotations_datasets_and_the_asn_details_can_be_read()
+    {
+        if (!SkipWithoutCredentials())
+        {
+            return;
+        }
+
+        // The rest of radar's reference data: what Cloudflare noticed in its own traffic, what it publishes
+        // for download, and what it knows about one ASN's place in the routing table. None of these paths
+        // carries an account or a zone either. AS13335 is Cloudflare's own, so both ASN reads have something
+        // to answer about.
+        var surprises = new List<string>();
+        var refused = new List<string>();
+
+        try
+        {
+            var annotations = await Client.Radar.ListAnnotationsAsync(
+                new RadarAnnotationListParameters { Limit = 5 });
+            Log($"radar_annotations={annotations.Count} first=[{string.Join(", ", annotations.Items.Take(2))}]");
+            ReportUnmodelled("GET /radar/annotations", annotations.Items, item => item.AdditionalData);
+
+            // An annotation carries the same ASN twice - once as a number, once as a string in the details -
+            // and a location list whose items Cloudflare publishes as nullable, so both are worth a look.
+            foreach (var annotation in annotations.Items.Take(3))
+            {
+                foreach (var detail in annotation.AsnsDetails ?? new List<RadarAnnotationAsn>())
+                {
+                    if (detail.AsnNumber is null)
+                    {
+                        surprises.Add($"GET /radar/annotations answered an asnsDetails entry whose asn this " +
+                                      $"library could not read as a number: '{detail.Asn}'");
+                    }
+                }
+            }
+
+            var outages = await Client.Radar.ListOutagesAsync(new RadarAnnotationListParameters { Limit = 5 });
+            Log($"radar_outages={outages.Count} first=[{string.Join(", ", outages.Items.Take(2))}]");
+            ReportUnmodelled("GET /radar/annotations/outages", outages.Items, item => item.AdditionalData);
+
+            var locations = await Client.Radar.ListOutageLocationsAsync(
+                new RadarOutageLocationsParameters { DateRange = "7d", Limit = 5 });
+            Log($"radar_outage_locations={locations.Count} first=[{string.Join(", ", locations.Items.Take(3))}]");
+            ReportUnmodelled(
+                "GET /radar/annotations/outages/locations",
+                locations.Items,
+                item => item.AdditionalData);
+        }
+        catch (CloudflareApiException exception) when (exception.IsAuthenticationFailure)
+        {
+            SkipUnless(false, $"A radar annotation endpoint was refused with {exception.StatusCode} " +
+                $"[{exception.ErrorCode}]. The group Cloudflare's catalogue carries for radar is Radar Read, " +
+                $"dfe525ec7b07472c827d8d009178b2ac. {Truncate(exception.Message, 200)}");
+            return;
+        }
+        catch (CloudflareApiException exception)
+        {
+            refused.Add($"annotations: {exception.StatusCode} [{exception.ErrorCode}]");
+        }
+
+        try
+        {
+            var datasets = await Client.Radar.ListDatasetsAsync(new RadarDatasetListParameters { Limit = 5 });
+            Log($"radar_datasets={datasets.Count} first=[{string.Join(", ", datasets.Items.Take(3))}]");
+            ReportUnmodelled("GET /radar/datasets", datasets.Items, item => item.AdditionalData);
+
+            var dataset = datasets.Items.FirstOrDefault(item => item.Id is not null);
+            if (dataset is null)
+            {
+                surprises.Add("GET /radar/datasets answered no dataset with an id, so the download call had " +
+                              "nothing to ask for");
+            }
+            else
+            {
+                var download = await Client.Radar.RequestDatasetDownloadAsync(
+                    dataset.Id!.Value,
+                    RadarDatasetFormat.Csv);
+
+                if (download is null)
+                {
+                    surprises.Add($"POST /radar/datasets/download answered no url for dataset {dataset.Id}");
+                }
+                else if (download.Url is { Length: > 0 } address &&
+                         Uri.TryCreate(address, UriKind.Absolute, out var url) &&
+                         url is not null)
+                {
+                    // The url is Cloudflare's and carries whatever signature it put on it, so this prints
+                    // where it points and not the query string that would let anybody else use it.
+                    Log($"radar_dataset_download[{dataset.Id}]={url.Scheme}://{url.Host}{url.AbsolutePath}");
+                }
+                else
+                {
+                    surprises.Add("POST /radar/datasets/download answered something this library could not " +
+                                  "read as an absolute URI");
+                }
+            }
+        }
+        catch (CloudflareApiException exception)
+        {
+            refused.Add($"datasets: {exception.StatusCode} [{exception.ErrorCode}]");
+        }
+
+        try
+        {
+            var asSet = await Client.Radar.GetAsnAsSetAsync(13335L);
+            Log($"radar_as_set[13335]={asSet?.ToString() ?? "(no result)"} " +
+                $"sets=[{string.Join(", ", (asSet?.AsSets ?? new List<RadarAsSet>()).Take(2))}]");
+            ReportUnmodelled(
+                "GET /radar/entities/asns/{asn}/as_set",
+                asSet?.AsSets ?? new List<RadarAsSet>(),
+                item => item.AdditionalData);
+
+            if (asSet is not null && asSet.AsSets is { Count: > 0 } sets &&
+                sets.All(set => set.AsMembersCount is null))
+            {
+                surprises.Add("GET /radar/entities/asns/13335/as_set answered AS-SETs with no " +
+                              "as_members_count on any of them, which is the field the snake_case half of " +
+                              "this endpoint is named for");
+            }
+
+            var relationships = await Client.Radar.GetAsnRelationshipsAsync(13335L);
+            Log($"radar_asn_rel[13335]={relationships?.ToString() ?? "(no result)"} " +
+                $"rels=[{string.Join(", ", (relationships?.Rels ?? new List<RadarAsnRelationship>()).Take(3))}]");
+            ReportUnmodelled(
+                "GET /radar/entities/asns/{asn}/rel",
+                relationships?.Rels ?? new List<RadarAsnRelationship>(),
+                item => item.AdditionalData);
+        }
+        catch (CloudflareApiException exception)
+        {
+            refused.Add($"ASN details: {exception.StatusCode} [{exception.ErrorCode}]");
+        }
+
+        try
+        {
+            var feed = await Client.Radar.ListBotnetThreatFeedAsync(new RadarBotnetThreatFeedParameters
+            {
+                Limit = 5,
+                CompareDateRange = "7d",
+                Metric = RadarBotnetMetric.OffenseCount,
+                SortOrder = RadarSortOrder.Descending,
+            });
+
+            var entries = feed?.Ases ?? new List<RadarBotnetThreatFeedEntry>();
+            Log($"radar_botnet={entries.Count} meta=[{feed?.Meta?.ToString() ?? "(none)"}] " +
+                $"first=[{string.Join(", ", entries.Take(3))}]");
+            ReportUnmodelled(
+                "GET /radar/entities/asns/botnet_threat_feed",
+                entries,
+                item => item.AdditionalData);
+
+            if (feed is not null && entries.Count > 0 && entries.All(entry => entry.RankChange is null))
+            {
+                surprises.Add("GET /radar/entities/asns/botnet_threat_feed answered no rankChange on any " +
+                              "entry although compareDateRange=7d was sent: either the comparison needs a " +
+                              "date Cloudflare has data for, or the field is published rather than answered");
+            }
+        }
+        catch (CloudflareApiException exception)
+        {
+            refused.Add($"botnet feed: {exception.StatusCode} [{exception.ErrorCode}]");
+        }
+
+        foreach (var refusal in refused)
+        {
+            Warn($"A radar endpoint was refused while the ones beside it read fine: {refusal}. That is about " +
+                 "the endpoint rather than the credentials.");
+        }
+
+        if (surprises.Count > 0)
+        {
+            Warn($"Radar's second half answered something other than what the reference publishes: " +
                  $"{string.Join("; ", surprises)}.");
         }
     }

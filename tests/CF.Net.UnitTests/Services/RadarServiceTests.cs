@@ -541,15 +541,347 @@ public class RadarServiceTests
         harness.Respond("""{"success":true,"errors":[],"messages":[],"result":{"asns":[]}}""");
         harness.Respond("""{"success":true,"errors":[],"messages":[],"result":{"geolocations":[]}}""");
         harness.Respond("""{"success":true,"errors":[],"messages":[],"result":{"search":[]}}""");
+        harness.Respond("""{"success":true,"errors":[],"messages":[],"result":{"annotations":[]}}""");
+        harness.Respond("""{"success":true,"errors":[],"messages":[],"result":{"annotations":[]}}""");
+        harness.Respond("""{"success":true,"errors":[],"messages":[],"result":{"datasets":[]}}""");
+        harness.Respond("""{"success":true,"errors":[],"messages":[],"result":{"ases":[],"meta":{}}}""");
 
         await harness.Client.Radar.ListLocationsAsync();
         await harness.Client.Radar.ListAsnsAsync();
         await harness.Client.Radar.ListGeolocationsAsync();
         await harness.Client.Radar.SearchAsync("cloudflare");
+        await harness.Client.Radar.ListAnnotationsAsync();
+        await harness.Client.Radar.ListOutagesAsync();
+        await harness.Client.Radar.ListDatasetsAsync();
+        await harness.Client.Radar.ListBotnetThreatFeedAsync();
+
+        Assert.Equal(8, harness.RequestCount);
 
         // Radar is public data at the API root, beside GET /ips: no id to resolve, so no id to get wrong.
         Assert.All(harness.Requests, request => Assert.StartsWith("/client/v4/radar/", request.Path, StringComparison.Ordinal));
         Assert.All(harness.Requests, request => Assert.Contains("Authorization", request.Headers.Keys));
+    }
+
+    [Fact]
+    public async Task ListAnnotationsAsync_unwraps_the_annotations_and_sends_every_filter_radar_publishes()
+    {
+        using var harness = CloudflareHarness.Create();
+        harness.Respond(
+            """{"success":true,"errors":[],"messages":[],"result":{"annotations":[{"id":"2024-000913","asns":[13335],"asnsDetails":[{"asn":"13335","location":{"code":"US","name":"United States"},"name":"Cloudflare"}],"dataSource":"BGP","description":"A regional outage","endDate":"2024-05-24T14:00:00Z","entities":[{"entityLocation":"US","entityName":"Cloudflare","entityType":"AS","entityValue":"13335"}],"eventType":"OUTAGE","geoIds":["6252001"],"linkedUrl":"https://example.com/report","locations":["US"],"locationsDetails":[{"code":"US","name":"United States"},null],"origins":["example.com"],"originsDetails":[{"name":"Example","origin":"example.com"}],"outage":{"outageCause":"POWER_OUTAGE","outageType":"REGIONAL"},"scope":"regional","startDate":"2024-05-24T12:00:00Z","tags":["LOCATION","ASN"]}]}}""");
+
+        var page = await harness.Client.Radar.ListAnnotationsAsync(new RadarAnnotationListParameters
+        {
+            Asn = 13335L,
+            Bot = "GPTBot",
+            Ca = "LetsEncrypt",
+            DataSource = RadarAnnotationDataSource.Bgp,
+            DateEnd = new DateTimeOffset(2024, 5, 24, 14, 0, 0, TimeSpan.Zero),
+            DateRange = "7d",
+            DateStart = new DateTimeOffset(2024, 5, 17, 12, 30, 0, TimeSpan.Zero),
+            EventType = RadarAnnotationEventType.Outage,
+            GeoId = "6252001",
+            Limit = 5,
+            Location = "US",
+            Log = "Nimbus",
+            Offset = 10,
+            Origin = "example.com",
+            OutageCause = RadarAnnotationOutageCause.PowerOutage,
+            OutageType = RadarAnnotationOutageType.Regional,
+            Query = "power",
+            Tags = new List<string> { "LOCATION", "ASN" },
+            Tld = "com",
+        });
+
+        Assert.Equal("/client/v4/radar/annotations", harness.LastRequest.Path);
+
+        // camelCase names, the tags repeated, and the two dates as the timestamps Cloudflare wants - which is
+        // the same shape the search categories are sent in, and unlike the rest of the v4 API.
+        Assert.Equal(
+            "asn=13335&bot=GPTBot&ca=LetsEncrypt&dataSource=BGP&dateEnd=2024-05-24T14%3A00%3A00Z&dateRange=7d" +
+            "&dateStart=2024-05-17T12%3A30%3A00Z&eventType=OUTAGE&geoId=6252001&limit=5&location=US&log=Nimbus" +
+            "&offset=10&origin=example.com&outageCause=POWER_OUTAGE&outageType=REGIONAL&query=power" +
+            "&tags=LOCATION&tags=ASN&tld=com",
+            harness.LastRequest.Query.TrimStart('?'));
+
+        var annotation = Assert.Single(page.Items);
+        Assert.Equal("2024-000913", annotation.Id);
+        Assert.Equal("OUTAGE", annotation.EventType);
+        Assert.Equal("BGP", annotation.DataSource);
+        Assert.Equal("regional", annotation.Scope);
+        Assert.Equal("2024-05-24T12:00:00Z", annotation.StartDate);
+        Assert.Equal("2024-05-24T14:00:00Z", annotation.EndDate);
+        Assert.Equal("https://example.com/report", annotation.LinkedUrl);
+        Assert.Equal(new[] { 13335L }, annotation.Asns!);
+        Assert.Equal(new[] { "6252001" }, annotation.GeoIds!);
+        Assert.Equal(new[] { "LOCATION", "ASN" }, annotation.Tags!);
+        Assert.Equal("2024-000913 OUTAGE from 2024-05-24T12:00:00Z (POWER_OUTAGE REGIONAL)", annotation.ToString());
+
+        // The same ASN arrives twice in one annotation: once as a number and once, in the details, as a string.
+        var detail = Assert.Single(annotation.AsnsDetails!);
+        Assert.Equal("13335", detail.Asn);
+        Assert.Equal(13335L, detail.AsnNumber);
+        Assert.Equal("Cloudflare", detail.Name);
+        Assert.Equal("US United States", detail.Location!.ToString());
+
+        var entity = Assert.Single(annotation.Entities!);
+        Assert.Equal("AS: 13335", entity.ToString());
+        Assert.Equal("US", entity.EntityLocation);
+
+        // Cloudflare publishes the location details as nullable items, so an unresolved place keeps its slot.
+        Assert.Equal(2, annotation.LocationsDetails!.Count);
+        Assert.Equal("US United States", annotation.LocationsDetails[0]!.ToString());
+        Assert.Null(annotation.LocationsDetails[1]);
+
+        Assert.Equal("example.com", Assert.Single(annotation.OriginsDetails!).Origin);
+        Assert.Equal("POWER_OUTAGE", annotation.Outage!.OutageCause);
+        Assert.Equal("REGIONAL", annotation.Outage.OutageType);
+        Assert.True(annotation.AdditionalData is not { Count: > 0 });
+    }
+
+    [Fact]
+    public async Task ListAnnotationsAsync_refuses_a_filter_this_library_cannot_spell()
+    {
+        using var harness = CloudflareHarness.Create();
+
+        var error = await Assert.ThrowsAsync<CloudflareConfigurationException>(() =>
+            harness.Client.Radar.ListAnnotationsAsync(new RadarAnnotationListParameters
+            {
+                EventType = RadarAnnotationEventType.Unknown,
+            }));
+
+        Assert.Contains("not a radar event type", error.Message, StringComparison.Ordinal);
+        Assert.Equal(0, harness.RequestCount);
+    }
+
+    [Fact]
+    public async Task ListOutagesAsync_reads_the_same_shape_from_the_outage_path()
+    {
+        using var harness = CloudflareHarness.Create();
+        harness.Respond(
+            """{"success":true,"errors":[],"messages":[],"result":{"annotations":[{"id":"2024-000913","eventType":"OUTAGE","startDate":"2024-05-24T12:00:00Z","outage":{"outageCause":"CABLE_CUT","outageType":"NATIONWIDE"}}]}}""");
+
+        var page = await harness.Client.Radar.ListOutagesAsync(new RadarAnnotationListParameters
+        {
+            OutageCause = RadarAnnotationOutageCause.CableCut,
+            Limit = 5,
+            Offset = 5,
+        });
+
+        Assert.Equal("/client/v4/radar/annotations/outages", harness.LastRequest.Path);
+        Assert.Equal("outageCause=CABLE_CUT&limit=5&offset=5", harness.LastRequest.Query.TrimStart('?'));
+
+        var outage = Assert.Single(page.Items);
+        Assert.Equal("CABLE_CUT", outage.Outage!.OutageCause);
+        Assert.Equal("2024-000913 OUTAGE from 2024-05-24T12:00:00Z (CABLE_CUT NATIONWIDE)", outage.ToString());
+    }
+
+    [Fact]
+    public async Task ListOutageLocationsAsync_reads_the_countries_an_outage_reached()
+    {
+        using var harness = CloudflareHarness.Create();
+        harness.Respond(
+            """{"success":true,"errors":[],"messages":[],"result":{"annotations":[{"clientCountryAlpha2":"US","clientCountryName":"United States","value":"0.35"},{"clientCountryAlpha2":"GB","clientCountryName":"United Kingdom","value":"0.12"}]}}""");
+
+        var page = await harness.Client.Radar.ListOutageLocationsAsync(new RadarOutageLocationsParameters
+        {
+            DateRange = "7d",
+            Limit = 10,
+        });
+
+        Assert.Equal("/client/v4/radar/annotations/outages/locations", harness.LastRequest.Path);
+
+        // This endpoint publishes no offset, so a walk has nothing to move along by and the parameters do not
+        // offer one.
+        Assert.Equal("dateRange=7d&limit=10", harness.LastRequest.Query.TrimStart('?'));
+        Assert.Equal(2, page.Items.Count);
+        Assert.Equal("US United States: 0.35", page.Items[0].ToString());
+        Assert.Equal("0.12", page.Items[1].Value);
+    }
+
+    [Fact]
+    public async Task ListDatasetsAsync_sends_a_date_without_a_time_and_reads_the_meta_it_is_given()
+    {
+        using var harness = CloudflareHarness.Create();
+        harness.Respond(
+            """{"success":true,"errors":[],"messages":[],"result":{"datasets":[{"id":3,"description":"The top 20000 domains globally","meta":{"rows":20000},"tags":["global"],"title":"Top bucket 20000 domains","type":"RANKING_BUCKET"}]}}""");
+
+        var page = await harness.Client.Radar.ListDatasetsAsync(new RadarDatasetListParameters
+        {
+            DatasetType = RadarDatasetType.RankingBucket,
+            Date = new DateTimeOffset(2026, 2, 23, 9, 30, 0, TimeSpan.Zero),
+            Limit = 5,
+        });
+
+        Assert.Equal("/client/v4/radar/datasets", harness.LastRequest.Path);
+
+        // Published with format: date, unlike the annotation filters beside it, so no time part is sent.
+        Assert.Equal("datasetType=RANKING_BUCKET&date=2026-02-23&limit=5", harness.LastRequest.Query.TrimStart('?'));
+
+        var dataset = Assert.Single(page.Items);
+        Assert.Equal(3L, dataset.Id);
+        Assert.Equal("RANKING_BUCKET", dataset.Type);
+        Assert.Equal(new[] { "global" }, dataset.Tags!);
+        Assert.Equal("3 Top bucket 20000 domains (RANKING_BUCKET)", dataset.ToString());
+
+        // Cloudflare publishes meta as unknown and answers a different object per dataset, so it is read as the
+        // JSON it arrives as rather than guessed at.
+        Assert.Equal(JsonValueKind.Object, dataset.Meta!.Value.ValueKind);
+        Assert.Equal(20000, dataset.Meta.Value.GetProperty("rows").GetInt32());
+    }
+
+    [Fact]
+    public async Task RequestDatasetDownloadAsync_puts_the_id_in_the_body_and_the_format_in_the_query()
+    {
+        using var harness = CloudflareHarness.Create();
+        harness.Respond(
+            """{"success":true,"errors":[],"messages":[],"result":{"dataset":{"url":"https://example.com/datasets/3.csv"}}}""");
+
+        var download = await harness.Client.Radar.RequestDatasetDownloadAsync(3L, RadarDatasetFormat.Csv);
+
+        Assert.Equal(HttpMethod.Post, harness.LastRequest.Method);
+        Assert.Equal("/client/v4/radar/datasets/download", harness.LastRequest.Path);
+        Assert.Equal("format=CSV", harness.LastRequest.Query.TrimStart('?'));
+        Assert.Equal("""{"datasetId":3}""", harness.LastRequest.Body);
+        Assert.Equal("application/json; charset=utf-8", harness.LastRequest.ContentType);
+        Assert.Equal("https://example.com/datasets/3.csv", download!.Url);
+        Assert.Equal("https://example.com/datasets/3.csv", download.ToString());
+    }
+
+    [Fact]
+    public async Task RequestDatasetDownloadAsync_refuses_a_format_it_cannot_spell()
+    {
+        using var harness = CloudflareHarness.Create();
+
+        var error = await Assert.ThrowsAsync<CloudflareConfigurationException>(() =>
+            harness.Client.Radar.RequestDatasetDownloadAsync(3L, RadarDatasetFormat.Unknown));
+
+        Assert.Contains("not a dataset format", error.Message, StringComparison.Ordinal);
+        Assert.Equal(0, harness.RequestCount);
+    }
+
+    [Fact]
+    public async Task GetAsnAsSetAsync_reads_the_sets_and_the_paths_beside_them()
+    {
+        using var harness = CloudflareHarness.Create();
+        harness.Respond(
+            """{"success":true,"errors":[],"messages":[],"result":{"as_sets":[{"as_members_count":12,"as_set_members_count":3,"as_set_upstreams_count":4,"asn_cone_size":3400,"irr_sources":["RADB","RIPE"],"name":"AS-CLOUDFLARE","hierarchical_asn":13335,"inferred_asn":13335,"peeringdb_asn":13335}],"paths":[["13335","15169"],["13335","174"]]}}""");
+
+        var asSet = await harness.Client.Radar.GetAsnAsSetAsync(13335L);
+
+        Assert.Equal("/client/v4/radar/entities/asns/13335/as_set", harness.LastRequest.Path);
+        Assert.Equal("", harness.LastRequest.Query);
+        Assert.NotNull(asSet);
+
+        var set = Assert.Single(asSet!.AsSets!);
+
+        // snake_case here, camelCase on the annotation beside it: radar publishes both, so each name is pinned.
+        Assert.Equal("AS-CLOUDFLARE", set.Name);
+        Assert.Equal(12L, set.AsMembersCount);
+        Assert.Equal(3L, set.AsSetMembersCount);
+        Assert.Equal(4L, set.AsSetUpstreamsCount);
+        Assert.Equal(3400L, set.AsnConeSize);
+        Assert.Equal(new[] { "RADB", "RIPE" }, set.IrrSources!);
+        Assert.Equal(13335L, set.HierarchicalAsn);
+        Assert.Equal(13335L, set.PeeringdbAsn);
+        Assert.Equal("AS-CLOUDFLARE: 12 member(s), cone 3400", set.ToString());
+
+        // The paths stay nested, because which ASN sits beside which is the information.
+        Assert.Equal(2, asSet.Paths!.Count);
+        Assert.Equal(new[] { "13335", "15169" }, asSet.Paths[0]);
+        Assert.Equal("1 AS-SET(s), 2 path(s)", asSet.ToString());
+    }
+
+    [Fact]
+    public async Task GetAsnRelationshipsAsync_sends_the_second_asn_and_reads_when_it_was_measured()
+    {
+        using var harness = CloudflareHarness.Create();
+        harness.Respond(
+            """{"success":true,"errors":[],"messages":[],"result":{"meta":{"data_time":"2026-02-22T00:00:00Z","query_time":"2026-02-23T09:00:00Z","total_peers":3},"rels":[{"asn1":13335,"asn1_country":"US","asn1_name":"Cloudflare","asn2":15169,"asn2_country":"US","asn2_name":"Google","rel":"peers"}]}}""");
+
+        var relationships = await harness.Client.Radar.GetAsnRelationshipsAsync(13335L, 15169L);
+
+        Assert.Equal("/client/v4/radar/entities/asns/13335/rel", harness.LastRequest.Path);
+        Assert.Equal("asn2=15169", harness.LastRequest.Query.TrimStart('?'));
+        Assert.NotNull(relationships);
+
+        var relation = Assert.Single(relationships!.Rels!);
+        Assert.Equal(13335L, relation.Asn1);
+        Assert.Equal("Cloudflare", relation.Asn1Name);
+        Assert.Equal(15169L, relation.Asn2);
+        Assert.Equal("US", relation.Asn2Country);
+
+        // Cloudflare publishes rel as a string with no list of values, so it stays one.
+        Assert.Equal("peers", relation.Rel);
+        Assert.Equal("AS13335 - AS15169 (peers)", relation.ToString());
+        Assert.Equal(3L, relationships.Meta!.TotalPeers);
+        Assert.Equal("2026-02-22T00:00:00Z", relationships.Meta.DataTime);
+        Assert.Equal("3 peer(s) as of 2026-02-22T00:00:00Z", relationships.Meta.ToString());
+        Assert.Equal("1 relationship(s), 3 peer(s) as of 2026-02-22T00:00:00Z", relationships.ToString());
+    }
+
+    [Fact]
+    public async Task The_asn_endpoints_answer_null_when_cloudflare_has_no_such_asn()
+    {
+        using var harness = CloudflareHarness.Create();
+        harness.Respond(
+            """{"success":false,"errors":[{"code":10007,"message":"ASN not found"}],"messages":[],"result":null}""",
+            HttpStatusCode.NotFound);
+        harness.Respond(
+            """{"success":false,"errors":[{"code":10007,"message":"ASN not found"}],"messages":[],"result":null}""",
+            HttpStatusCode.NotFound);
+
+        Assert.Null(await harness.Client.Radar.GetAsnAsSetAsync(64500L));
+        Assert.Null(await harness.Client.Radar.GetAsnRelationshipsAsync(64500L));
+        Assert.Equal("/client/v4/radar/entities/asns/64500/as_set", harness.Requests[0].Path);
+        Assert.Equal("/client/v4/radar/entities/asns/64500/rel", harness.Requests[1].Path);
+    }
+
+    [Fact]
+    public async Task ListBotnetThreatFeedAsync_sends_the_negated_asns_and_keeps_the_meta_beside_the_ranking()
+    {
+        using var harness = CloudflareHarness.Create();
+        harness.Respond(
+            """{"success":true,"errors":[],"messages":[],"result":{"ases":[{"asn":3356,"country":"US","name":"Level 3","rank":1,"rankChange":2}],"meta":{"date":"2026-02-23","total":500,"compareDate":"2026-02-16"}}}""");
+
+        var feed = await harness.Client.Radar.ListBotnetThreatFeedAsync(new RadarBotnetThreatFeedParameters
+        {
+            Asns = new List<string> { "-174", "3356" },
+            CompareDateRange = "7d",
+            Date = new DateTimeOffset(2026, 2, 23, 0, 0, 0, TimeSpan.Zero),
+            Limit = 5,
+            Location = "US",
+            Metric = RadarBotnetMetric.NumberOfOffendingIps,
+            Offset = 10,
+            SortOrder = RadarSortOrder.Descending,
+        });
+
+        Assert.Equal("/client/v4/radar/entities/asns/botnet_threat_feed", harness.LastRequest.Path);
+
+        // One comma-separated asn parameter, where a leading - excludes rather than includes: that grammar is
+        // why the entries are strings.
+        Assert.Equal(
+            "asn=-174%2C3356&compareDateRange=7d&date=2026-02-23&limit=5&location=US" +
+            "&metric=NUMBER_OF_OFFENDING_IPS&offset=10&sortOrder=DESC",
+            harness.LastRequest.Query.TrimStart('?'));
+
+        Assert.NotNull(feed);
+        var entry = Assert.Single(feed!.Ases!);
+        Assert.Equal(3356L, entry.Asn);
+        Assert.Equal(1L, entry.Rank);
+        Assert.Equal(2L, entry.RankChange);
+        Assert.Equal("#1 AS3356 Level 3 (+2)", entry.ToString());
+        Assert.Equal("2026-02-23: 500 AS(s) against 2026-02-16", feed.Meta!.ToString());
+
+        // Not a page: the total beside the list is the only total this endpoint offers.
+        Assert.Equal("1 ranked AS(s), 2026-02-23: 500 AS(s) against 2026-02-16", feed.ToString());
+    }
+
+    [Fact]
+    public void The_botnet_filter_of_asns_negates_the_ones_that_are_negative()
+    {
+        var parameters = RadarBotnetThreatFeedParameters.OfAsns(-174L, 3356L);
+
+        Assert.Equal(new[] { "-174", "3356" }, parameters.Asns!);
     }
 
     [Theory]
@@ -577,4 +909,55 @@ public class RadarServiceTests
     [InlineData(RadarSearchCategory.Verticals, "VERTICALS")]
     public void Every_search_category_is_sent_as_the_spelling_radar_publishes(RadarSearchCategory category, string expected) =>
         Assert.Equal(expected, CloudflareEnumConverter<RadarSearchCategory>.ToWire(category));
+    [Fact]
+    public void Every_annotation_filter_is_spelled_as_radar_publishes_it()
+    {
+        Assert.Equal(
+            new[]
+            {
+                "ALL", "AI_BOTS", "AI_GATEWAY", "BGP", "BOTS", "CONNECTION_ANOMALY", "CT", "DNS",
+                "DNS_MAGNITUDE", "DNS_AS112", "DOS", "EMAIL_ROUTING", "EMAIL_SECURITY", "FW", "FW_PG", "HTTP",
+                "HTTP_CONTROL", "HTTP_CRAWLER_REFERER", "HTTP_ORIGINS", "IQI", "LEAKED_CREDENTIALS", "NET",
+                "ROBOTS_TXT", "SPEED", "WORKERS_AI",
+            },
+            CloudflareEnumConverter<RadarAnnotationDataSource>.KnownValues);
+
+        Assert.Equal(
+            new[] { "EVENT", "GENERAL", "OUTAGE", "PARTIAL_PROJECTION", "PIPELINE", "TRAFFIC_ANOMALY" },
+            CloudflareEnumConverter<RadarAnnotationEventType>.KnownValues);
+
+        Assert.Equal(
+            new[]
+            {
+                "BLOCKING", "CABLE_CUT", "CYBERATTACK", "DNS", "FIRE", "GOVERNMENT_DIRECTED", "MAINTENANCE",
+                "MECHANICAL", "MILITARY_ACTION", "MISCONFIGURATION", "NATURAL_DISASTER", "NETWORK_PROBLEM",
+                "POWER_OUTAGE", "SOFTWARE", "TECHNICAL_PROBLEM", "UNKNOWN", "WEATHER",
+            },
+            CloudflareEnumConverter<RadarAnnotationOutageCause>.KnownValues);
+
+        Assert.Equal(
+            new[] { "NATIONWIDE", "REGIONAL", "NETWORK", "PLATFORM" },
+            CloudflareEnumConverter<RadarAnnotationOutageType>.KnownValues);
+    }
+
+    [Fact]
+    public void Every_dataset_and_ranking_filter_is_spelled_as_radar_publishes_it()
+    {
+        Assert.Equal(
+            new[] { "RANKING_BUCKET", "REPORT" },
+            CloudflareEnumConverter<RadarDatasetType>.KnownValues);
+
+        // The one format radar models, because the answer stays a JSON envelope carrying a URL.
+        Assert.Equal(
+            new[] { "JSON", "CSV" },
+            CloudflareEnumConverter<RadarDatasetFormat>.KnownValues);
+
+        Assert.Equal(
+            new[] { "OFFENSE_COUNT", "NUMBER_OF_OFFENDING_IPS" },
+            CloudflareEnumConverter<RadarBotnetMetric>.KnownValues);
+
+        Assert.Equal(
+            new[] { "ASC", "DESC" },
+            CloudflareEnumConverter<RadarSortOrder>.KnownValues);
+    }
 }

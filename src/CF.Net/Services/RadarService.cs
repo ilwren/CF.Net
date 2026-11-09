@@ -1,12 +1,16 @@
 using System.Runtime.CompilerServices;
+using CFNet.Exceptions;
 using CFNet.Http;
 using CFNet.Models.Radar;
+using CFNet.Serialization;
 
 namespace CFNet.Services;
 
 /// <summary>
 /// Cloudflare Radar's reference data: the locations, autonomous systems and geolocations the rest of the radar
-/// API is queried by, the entity behind an IP address, and the global search that finds any of them.
+/// API is queried by, the entity behind an IP address, the global search that finds any of them, the annotations
+/// Cloudflare attaches to its own data, the datasets it publishes, and what it knows about how autonomous
+/// systems relate to one another.
 /// </summary>
 /// <remarks>
 /// Scope. None of these paths carries an account or a zone - they sit at the API root beside <c>/ips</c>, and
@@ -22,9 +26,11 @@ namespace CFNet.Services;
 /// <c>{asn: {…}}</c>, <c>{search: […]}</c> - rather than putting the array or object straight in <c>result</c>,
 /// so each call here unwraps one level before handing anything back.
 ///
-/// Permissions. Cloudflare's reference names <b>User Details Read</b> for these endpoints, which is unlike
-/// anything else it publishes for public data; a live run is what settles whether a token needs it, and the
-/// integration suite reports the answer either way.
+/// Permissions. Cloudflare's reference names <b>User Details Read</b> for every radar endpoint - a group that
+/// appears nowhere in its permission catalogue - and says nothing about <b>Radar Read</b>, which the live
+/// catalogue does carry. A run read all of these with a token holding neither, so the reference data needs no
+/// permission at all; the integration suite keeps <c>Radar Read</c> named against these rows anyway, so that a
+/// refusal in future names a group that exists and can be put in a token URL.
 /// </remarks>
 public interface IRadarService
 {
@@ -149,6 +155,115 @@ public interface IRadarService
         string query,
         int? limit = null,
         CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Lists one page of radar's annotations: the outages, traffic anomalies and pipeline events Cloudflare
+    /// notices in its own data, with the ASNs, locations and origins each one is about.
+    /// </summary>
+    /// <param name="parameters">Filters and paging, or <see langword="null"/> for the latest annotations.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>The annotations on that page.</returns>
+    Task<CloudflarePage<RadarAnnotation>> ListAnnotationsAsync(
+        RadarAnnotationListParameters? parameters = null,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Lists one page of the outage annotations only.
+    /// </summary>
+    /// <remarks>
+    /// This is the annotation list narrowed to outages and it answers the same shape, so it takes the same
+    /// parameters - of which Cloudflare publishes neither <c>eventType</c> (the endpoint is already the outage
+    /// one) nor <c>tld</c> for this path, and both are ignored here rather than silently sent.
+    /// </remarks>
+    /// <param name="parameters">Filters and paging, or <see langword="null"/> for the latest outages.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>The outage annotations on that page.</returns>
+    Task<CloudflarePage<RadarAnnotation>> ListOutagesAsync(
+        RadarAnnotationListParameters? parameters = null,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Lists the client countries the outages in a period reached.
+    /// </summary>
+    /// <remarks>
+    /// A different shape from the annotations themselves, answered under the same <c>annotations</c> property:
+    /// each item is a country and a measured value rather than a described event.
+    /// </remarks>
+    /// <param name="parameters">The date range and a limit - this endpoint publishes no offset.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>The locations.</returns>
+    Task<CloudflarePage<RadarOutageLocation>> ListOutageLocationsAsync(
+        RadarOutageLocationsParameters? parameters = null,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Lists one page of the datasets Cloudflare publishes behind radar.
+    /// </summary>
+    /// <param name="parameters">Filters and paging, or <see langword="null"/> for every dataset.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>The datasets on that page.</returns>
+    Task<CloudflarePage<RadarDataset>> ListDatasetsAsync(
+        RadarDatasetListParameters? parameters = null,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Asks Cloudflare to prepare one dataset, and reads back where to fetch it.
+    /// </summary>
+    /// <remarks>
+    /// The answer is a URL rather than the file, and nothing in this library fetches it - which is also why
+    /// asking for CSV is safe here and would not be on a read endpoint: the format names what the file behind
+    /// the URL holds, while the answer itself stays the JSON envelope. The dataset id travels in the body and
+    /// the format in the query string, because that is how Cloudflare publishes this one call.
+    /// </remarks>
+    /// <param name="datasetId">The id of the dataset, as <see cref="ListDatasetsAsync"/> answers it.</param>
+    /// <param name="format">What the prepared file should hold; JSON unless a caller asks otherwise.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>The download, or <see langword="null"/> when Cloudflare answered no result.</returns>
+    /// <exception cref="CloudflareConfigurationException">Thrown when the format is one this library has not
+    /// met.</exception>
+    Task<RadarDatasetDownload?> RequestDatasetDownloadAsync(
+        long datasetId,
+        RadarDatasetFormat format = RadarDatasetFormat.Json,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Reads the AS-SETs one ASN belongs to, and the paths from each of them up to its upstreams.
+    /// </summary>
+    /// <param name="asn">The ASN to ask about.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>The AS-SETs and paths, or <see langword="null"/> when Cloudflare has none for that ASN.</returns>
+    Task<RadarAsnAsSet?> GetAsnAsSetAsync(long asn, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Reads how one ASN relates to the others Cloudflare sees it exchanging traffic with.
+    /// </summary>
+    /// <param name="asn">The ASN to ask about.</param>
+    /// <param name="asn2">Narrows the answer to one relationship, or <see langword="null"/> for all of them.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>The relationships, with when Cloudflare measured them, or <see langword="null"/> when it has
+    /// none.</returns>
+    Task<RadarAsnRelationships?> GetAsnRelationshipsAsync(
+        long asn,
+        long? asn2 = null,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Reads one page of the ranking of autonomous systems by their presence in Cloudflare's botnet threat
+    /// feed.
+    /// </summary>
+    /// <remarks>
+    /// Not a <see cref="CloudflarePage{T}"/> although it pages with <c>offset</c> and <c>limit</c>: Cloudflare
+    /// answers a <c>meta</c> object beside the list whose <c>total</c> is the only total this endpoint offers,
+    /// and wrapping the list alone would drop it.
+    /// </remarks>
+    /// <param name="parameters">Filters, ranking and paging, or <see langword="null"/> for the most recent
+    /// ranking.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>The ranking and its metadata, or <see langword="null"/> when Cloudflare answered no
+    /// result.</returns>
+    Task<RadarBotnetThreatFeed?> ListBotnetThreatFeedAsync(
+        RadarBotnetThreatFeedParameters? parameters = null,
+        CancellationToken cancellationToken = default);
 }
 
 /// <inheritdoc cref="IRadarService" />
@@ -156,6 +271,8 @@ public sealed class RadarService : CloudflareService, IRadarService
 {
     private const string Entities = "radar/entities";
     private const string Geolocations = "radar/geolocations";
+    private const string Annotations = "radar/annotations";
+    private const string Datasets = "radar/datasets";
     private const int DefaultPageSize = 100;
     private const int MaxPages = 10_000;
 
@@ -348,4 +465,128 @@ public sealed class RadarService : CloudflareService, IRadarService
         int? limit = null,
         CancellationToken cancellationToken = default) =>
         SearchAsync(new RadarSearchParameters { Query = query, Limit = limit }, cancellationToken);
+
+    /// <inheritdoc />
+    public async Task<CloudflarePage<RadarAnnotation>> ListAnnotationsAsync(
+        RadarAnnotationListParameters? parameters = null,
+        CancellationToken cancellationToken = default)
+    {
+        var request = Apply(CloudflareRequest.Get(Annotations), parameters);
+        request.OperationName = "List Radar Annotations";
+
+        var response = await Transport.SendAsync<RadarAnnotationListResult>(request, cancellationToken).ConfigureAwait(false);
+
+        return new CloudflarePage<RadarAnnotation>(
+            response.Result?.Annotations ?? new List<RadarAnnotation>(),
+            response.ResultInfo);
+    }
+
+    /// <inheritdoc />
+    public async Task<CloudflarePage<RadarAnnotation>> ListOutagesAsync(
+        RadarAnnotationListParameters? parameters = null,
+        CancellationToken cancellationToken = default)
+    {
+        var request = Apply(CloudflareRequest.Get($"{Annotations}/outages"), parameters);
+        request.OperationName = "List Radar Outages";
+
+        var response = await Transport.SendAsync<RadarAnnotationListResult>(request, cancellationToken).ConfigureAwait(false);
+
+        return new CloudflarePage<RadarAnnotation>(
+            response.Result?.Annotations ?? new List<RadarAnnotation>(),
+            response.ResultInfo);
+    }
+
+    /// <inheritdoc />
+    public async Task<CloudflarePage<RadarOutageLocation>> ListOutageLocationsAsync(
+        RadarOutageLocationsParameters? parameters = null,
+        CancellationToken cancellationToken = default)
+    {
+        var request = Apply(CloudflareRequest.Get($"{Annotations}/outages/locations"), parameters);
+        request.OperationName = "List Radar Outage Locations";
+
+        var response = await Transport.SendAsync<RadarOutageLocationsResult>(request, cancellationToken).ConfigureAwait(false);
+
+        return new CloudflarePage<RadarOutageLocation>(
+            response.Result?.Annotations ?? new List<RadarOutageLocation>(),
+            response.ResultInfo);
+    }
+
+    /// <inheritdoc />
+    public async Task<CloudflarePage<RadarDataset>> ListDatasetsAsync(
+        RadarDatasetListParameters? parameters = null,
+        CancellationToken cancellationToken = default)
+    {
+        var request = Apply(CloudflareRequest.Get(Datasets), parameters);
+        request.OperationName = "List Radar Datasets";
+
+        var response = await Transport.SendAsync<RadarDatasetListResult>(request, cancellationToken).ConfigureAwait(false);
+
+        return new CloudflarePage<RadarDataset>(
+            response.Result?.Datasets ?? new List<RadarDataset>(),
+            response.ResultInfo);
+    }
+
+    /// <inheritdoc />
+    public async Task<RadarDatasetDownload?> RequestDatasetDownloadAsync(
+        long datasetId,
+        RadarDatasetFormat format = RadarDatasetFormat.Json,
+        CancellationToken cancellationToken = default)
+    {
+        if (!CloudflareEnumConverter<RadarDatasetFormat>.TryToWire(format, out var wire))
+        {
+            throw new CloudflareConfigurationException(
+                $"'{format}' is not a dataset format this version of the library knows about, so it cannot be " +
+                "asked for.");
+        }
+
+        var request = CloudflareRequest.Post(
+            $"{Datasets}/download",
+            new RadarDatasetDownloadRequest { DatasetId = datasetId });
+
+        // The id travels in the body and the format in the query string, which is how Cloudflare publishes
+        // this one call.
+        request.Query.Add("format", wire);
+        request.OperationName = "Download Radar Dataset";
+
+        var response = await Transport.SendAsync<RadarDatasetDownloadResult>(request, cancellationToken).ConfigureAwait(false);
+        return response.Result?.Dataset;
+    }
+
+    /// <inheritdoc />
+    public async Task<RadarAsnAsSet?> GetAsnAsSetAsync(long asn, CancellationToken cancellationToken = default)
+    {
+        var request = CloudflareRequest.Get($"{Entities}/asns/{CloudflareUrl.Format(asn)}/as_set")
+            .Tolerate(System.Net.HttpStatusCode.NotFound);
+        request.OperationName = "Get Radar ASN AS-SET";
+
+        var response = await Transport.SendAsync<RadarAsnAsSet>(request, cancellationToken).ConfigureAwait(false);
+        return response.Result;
+    }
+
+    /// <inheritdoc />
+    public async Task<RadarAsnRelationships?> GetAsnRelationshipsAsync(
+        long asn,
+        long? asn2 = null,
+        CancellationToken cancellationToken = default)
+    {
+        var request = CloudflareRequest.Get($"{Entities}/asns/{CloudflareUrl.Format(asn)}/rel")
+            .Tolerate(System.Net.HttpStatusCode.NotFound);
+        request.Query.Add("asn2", asn2);
+        request.OperationName = "Get Radar ASN Relationships";
+
+        var response = await Transport.SendAsync<RadarAsnRelationships>(request, cancellationToken).ConfigureAwait(false);
+        return response.Result;
+    }
+
+    /// <inheritdoc />
+    public async Task<RadarBotnetThreatFeed?> ListBotnetThreatFeedAsync(
+        RadarBotnetThreatFeedParameters? parameters = null,
+        CancellationToken cancellationToken = default)
+    {
+        var request = Apply(CloudflareRequest.Get($"{Entities}/asns/botnet_threat_feed"), parameters);
+        request.OperationName = "List Radar Botnet Threat Feed";
+
+        var response = await Transport.SendAsync<RadarBotnetThreatFeed>(request, cancellationToken).ConfigureAwait(false);
+        return response.Result;
+    }
 }

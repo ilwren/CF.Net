@@ -297,6 +297,13 @@ jobs:
           probe radar_asns "$base/radar/entities/asns?limit=1"
           probe radar_geolocations "$base/radar/geolocations?limit=1"
           probe radar_search "$base/radar/search/global?query=cloudflare&limit=1"
+          probe radar_annotations "$base/radar/annotations?limit=1"
+          probe radar_outages "$base/radar/annotations/outages?limit=1"
+          probe radar_datasets "$base/radar/datasets?limit=1"
+          # Two of radar's endpoints hang off one ASN rather than off the API root, and AS13335 is
+          # Cloudflare's own, so both have something to answer about whatever account this runs against.
+          probe radar_as_set "$base/radar/entities/asns/13335/as_set"
+          probe radar_botnet "$base/radar/entities/asns/botnet_threat_feed?limit=1"
 
           if [ -n "${CLOUDFLARE_ZONE_ID:-}" ]; then
             zone="$base/zones/${CLOUDFLARE_ZONE_ID}"
@@ -523,6 +530,25 @@ jobs:
                'probed with query=cloudflare, the one parameter Cloudflare requires; no hits would still be '
                'a 200. The single-geolocation read is not probed: it wants the geoId an answer carries, and '
                'asking by code answers 400 [2001] whatever the token holds'),
+              ('radar_annotations', 'GET /radar/annotations', 'Radar - Read',
+               'dfe525ec7b07472c827d8d009178b2ac', 'read',
+               'the outages and anomalies Cloudflare notices in its own data; an empty week would still be a '
+               '200, so what this row settles is the permission and not the payload'),
+              ('radar_outages', 'GET /radar/annotations/outages', 'Radar - Read',
+               'dfe525ec7b07472c827d8d009178b2ac', 'read',
+               'the annotation list narrowed to outages, answering the same shape under a different path'),
+              ('radar_datasets', 'GET /radar/datasets', 'Radar - Read',
+               'dfe525ec7b07472c827d8d009178b2ac', 'read',
+               'the published datasets; the download call beside it is not probed, because it is a POST whose '
+               'permission cannot differ from the read that names the id it takes'),
+              ('radar_as_set', 'GET /radar/entities/asns/13335/as_set', 'Radar - Read',
+               'dfe525ec7b07472c827d8d009178b2ac', 'read',
+               "probed against Cloudflare's own ASN, which is the one number that answers the same everywhere; "
+               'this endpoint publishes its fields in snake_case while its neighbours use camelCase'),
+              ('radar_botnet', 'GET /radar/entities/asns/botnet_threat_feed', 'Radar - Read',
+               'dfe525ec7b07472c827d8d009178b2ac', 'read',
+               'the ranking of ASNs by botnet activity; it answers a meta object beside the list, so the '
+               'total it carries is the only total radar offers anywhere'),
               ('workers_routes', 'GET /zones/{zone_id}/workers/routes', 'Workers Routes - Read',
                '2072033d694d415a936eaeb94e6405b8', 'read',
                'a zone with no routes answers 200 and an empty list; this one is zone-scoped, so it needs '

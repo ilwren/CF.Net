@@ -1683,11 +1683,13 @@ suite ran against the value moved. The fact reports either outcome: a value that
 
 `IRadarService` — `client.Radar`
 
-The reference data the rest of Cloudflare Radar is queried by: locations, autonomous systems, the geolocation
-tree, the entity behind an IP address, and the global search across all of them. Radar has 269 published
-endpoints; this is the slice every other one needs first, because a timeseries query is made *by* location code
-and ASN. The rest of radar — the timeseries, summaries and top-N endpoints for HTTP, DNS, BGP, bots, attacks
-and the AI catalogue — is still to come.
+The reference data the rest of Cloudflare Radar is queried by: locations, autonomous systems and what
+Cloudflare knows about how they relate to one another, the geolocation tree, the entity behind an IP address,
+the global search across all of them, the annotations Cloudflare attaches to its own data, and the datasets it
+publishes for download. Radar has 269 published endpoints; these are the ones that answer *reference data*
+rather than measurements, and they are what every other one needs first, because a timeseries query is made
+*by* location code and ASN. The rest of radar — the timeseries, summaries and top-N endpoints for HTTP, DNS,
+BGP, bots, attacks and the AI catalogue — is still to come.
 
 | Method | Endpoint | Notes |
 | --- | --- | --- |
@@ -1703,6 +1705,14 @@ and the AI catalogue — is still to come.
 | `GetGeolocationAsync(geoId)` | `GET /radar/geolocations/{geo_id}` | one place, with the tree above it; the id is the answer's `geoId`, **not** its `code` |
 | `SearchAsync(RadarSearchParameters)` | `GET /radar/search/global` | `{search: [{code, name, type}]}`; `include` and `exclude` are repeated parameters over twelve categories |
 | `SearchAsync(query, limit)` | the same | the convenience overload for a plain search |
+| `ListAnnotationsAsync(RadarAnnotationListParameters?)` | `GET /radar/annotations` | `{annotations: [{id, asns, asnsDetails, dataSource, description, endDate, entities, eventType, geoIds, linkedUrl, locations, locationsDetails, origins, originsDetails, outage, scope, startDate, tags}]}`; nineteen filters, and the four whose values Cloudflare publishes as a closed list are enums |
+| `ListOutagesAsync(RadarAnnotationListParameters?)` | `GET /radar/annotations/outages` | the same shape and the same parameters, narrowed to outages |
+| `ListOutageLocationsAsync(RadarOutageLocationsParameters?)` | `GET /radar/annotations/outages/locations` | `{annotations: [{clientCountryAlpha2, clientCountryName, value}]}` — a different shape under the same property name, with no `offset` to walk by |
+| `ListDatasetsAsync(RadarDatasetListParameters?)` | `GET /radar/datasets` | `{datasets: [{id, description, meta, tags, title, type}]}`; `date` is published with `format: date`, so it is sent without a time part |
+| `RequestDatasetDownloadAsync(datasetId, format)` | `POST /radar/datasets/download` | `{dataset: {url}}` — the id travels in the body, the format in the query string, and the answer is an address to fetch rather than the file |
+| `GetAsnAsSetAsync(asn)` | `GET /radar/entities/asns/{asn}/as_set` | `{as_sets: [{as_members_count, as_set_members_count, as_set_upstreams_count, asn_cone_size, irr_sources, name, hierarchical_asn, inferred_asn, peeringdb_asn}], paths: [[…]]}` |
+| `GetAsnRelationshipsAsync(asn, asn2?)` | `GET /radar/entities/asns/{asn}/rel` | `{meta: {data_time, query_time, total_peers}, rels: [{asn1, asn1_country, asn1_name, asn2, asn2_country, asn2_name, rel}]}` |
+| `ListBotnetThreatFeedAsync(RadarBotnetThreatFeedParameters?)` | `GET /radar/entities/asns/botnet_threat_feed` | `{ases: [{asn, country, name, rank, rankChange}], meta: {date, total, compareDate}}`; `asn` takes `-174` to leave AS174 out |
 
 Four things about these endpoints are unlike the rest of the API this library wraps, and each one is the
 reason a caller would otherwise get nothing back and call it a bug:
@@ -1736,10 +1746,28 @@ ASN as a *string* where its neighbour answers it as a number. Every property is 
 with `[JsonPropertyName]`, `RadarIpEntity.AsnNumber` parses the string when it is one, and a four-byte ASN is a
 `long` all the way down because the private range starts past `int.MaxValue`.
 
-⛔ **Not wrapped:** the `format` parameter, which can ask for `CSV`. This library's transport reads the JSON
-envelope, and a CSV body would come back as an empty result rather than as an error — silence is worse than
-not offering the choice. `POST /radar/datasets/download` is where a bulk CSV belongs, and it is not wrapped
-yet either.
+**The second half of radar answers two spellings at once, and one list with holes in it.** An AS-SET is
+published in snake_case — `as_members_count`, `irr_sources`, `asn_cone_size` — while the annotations beside it
+are camelCase, and the botnet ranking mixes both inside a single item (`rank` beside `rankChange`). An
+annotation carries the same ASN twice, once as a number in `asns` and once as a string in `asnsDetails[].asn`,
+so `RadarAnnotationAsn` parses the string into `AsnNumber` rather than making a caller choose which of the two
+to trust. And `locationsDetails` is published as a list of *nullable* items: a location Cloudflare could not
+resolve keeps its slot as `null`, which is what keeps it aligned by position with the `locations` list beside
+it.
+
+**Two of these page but are not returned as pages.** `GetAsnRelationshipsAsync` and
+`ListBotnetThreatFeedAsync` answer a `meta` object beside their list, and the botnet feed's `meta.total` is the
+only total any radar endpoint offers — radar answers no `result_info`, so there is nothing else to page by.
+Wrapping the list alone in a `CloudflarePage<T>` would throw that away, so both are handed back as the objects
+Cloudflare sends.
+
+⛔ **Not wrapped:** the `format` parameter on the read endpoints, which can ask for `CSV`. This library's
+transport reads the JSON envelope, and a CSV body would come back as an empty result rather than as an error —
+silence is worse than not offering the choice. `GET /radar/datasets/{alias}` is left out for the same reason and
+a stronger one: it has no JSON answer at all, and Cloudflare's own SDK asks it with `Accept: text/csv` and reads
+a string. `POST /radar/datasets/download` is where a bulk CSV belongs and *is* wrapped, because its answer stays
+the JSON envelope and the format only names what the file behind the returned URL holds — which is why
+`RadarDatasetFormat` is the one place in radar where a `format` is typed.
 
 **Radar's reference data needs no permission at all — and Cloudflare's reference names the wrong one.** The
 published permission list for these endpoints asks for **User Details Read**, a group that appears nowhere in

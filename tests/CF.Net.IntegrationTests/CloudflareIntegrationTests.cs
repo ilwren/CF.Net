@@ -2293,42 +2293,56 @@ public class ReadOnlyIntegrationTests : CloudflareIntegrationTest
             Log($"radar_datasets={datasets.Count} first=[{string.Join(", ", datasets.Items.Take(3))}]");
             ReportUnmodelled("GET /radar/datasets", datasets.Items, item => item.AdditionalData);
 
-            var dataset = datasets.Items.FirstOrDefault(item => item.Id is not null);
-            if (dataset is null)
+            // One dataset answered nothing at all on a run whose list had just described it, with a title and
+            // a type, so the call asks about the first three and reports which of them answered. Whether
+            // every listed dataset can be prepared is a question Cloudflare's reference does not answer
+            // either, and "the first one was silent" is worth knowing apart from "they all were".
+            if (datasets.Items.All(item => item.Id is null))
             {
-                surprises.Add("GET /radar/datasets answered no dataset with an id, so the download call had " +
-                              "nothing to ask for");
+                surprises.Add($"GET /radar/datasets answered {datasets.Count} dataset(s) and not one of them " +
+                              "carried an id, so the download call had nothing to ask for");
             }
             else
             {
-                var download = await Client.Radar.RequestDatasetDownloadAsync(
-                    dataset.Id!.Value,
-                    RadarDatasetFormat.Csv);
+                var prepared = new List<string>();
+                var silent = new List<string>();
 
-                if (download is null)
+                foreach (var dataset in datasets.Items.Where(item => item.Id is not null).Take(3))
                 {
-                    surprises.Add($"POST /radar/datasets/download answered no dataset object at all for " +
-                                  $"dataset {dataset.Id} ({dataset.Alias ?? "no alias"}), which the list had " +
-                                  "just answered with a title and a type");
+                    var named = $"{dataset.Id} ({dataset.Alias ?? "no alias"})";
+                    var download = await Client.Radar.RequestDatasetDownloadAsync(
+                        dataset.Id!.Value,
+                        RadarDatasetFormat.Csv);
+
+                    if (download?.Url is { Length: > 0 } address &&
+                        Uri.TryCreate(address, UriKind.Absolute, out var url) &&
+                        url is not null)
+                    {
+                        // The url is Cloudflare's and carries whatever signature it put on it, so this prints
+                        // where it points and not the query string that would let anybody else use it.
+                        Log($"radar_dataset_download[{named}]={url.Scheme}://{url.Host}{url.AbsolutePath}");
+                        prepared.Add(named);
+                        break;
+                    }
+
+                    silent.Add(download is null
+                        ? $"{named} answered no dataset object at all"
+                        : string.IsNullOrEmpty(download.Url)
+                            ? $"{named} answered a dataset with no url, carrying " +
+                              (download.AdditionalData is { Count: > 0 } extras
+                                  ? string.Join(", ", extras.Keys)
+                                  : "no other field")
+                            : $"{named} answered a url this library could not read as an absolute URI");
                 }
-                else if (string.IsNullOrEmpty(download.Url))
+
+                if (prepared.Count == 0)
                 {
-                    surprises.Add($"POST /radar/datasets/download answered a dataset with no url for " +
-                                  $"dataset {dataset.Id} ({dataset.Alias ?? "no alias"}), carrying " +
-                                  $"{(download.AdditionalData is { Count: > 0 } extras ? string.Join(", ", extras.Keys) : "no other field")}");
+                    surprises.Add($"POST /radar/datasets/download prepared nothing: {string.Join("; ", silent)}");
                 }
-                else if (download.Url is { Length: > 0 } address &&
-                         Uri.TryCreate(address, UriKind.Absolute, out var url) &&
-                         url is not null)
+                else if (silent.Count > 0)
                 {
-                    // The url is Cloudflare's and carries whatever signature it put on it, so this prints
-                    // where it points and not the query string that would let anybody else use it.
-                    Log($"radar_dataset_download[{dataset.Id}]={url.Scheme}://{url.Host}{url.AbsolutePath}");
-                }
-                else
-                {
-                    surprises.Add("POST /radar/datasets/download answered something this library could not " +
-                                  "read as an absolute URI");
+                    surprises.Add($"POST /radar/datasets/download prepared {prepared[0]} only after " +
+                                  $"{string.Join("; ", silent)}");
                 }
             }
         }

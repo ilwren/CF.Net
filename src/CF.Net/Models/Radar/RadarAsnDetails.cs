@@ -316,7 +316,9 @@ public sealed class RadarAsnRelationshipMeta
         $"{TotalPeers?.ToString(CultureInfo.InvariantCulture) ?? "?"} peer(s) as of {DataTime ?? "?"}";
 }
 
-/// <summary>One relationship between two autonomous systems, as Cloudflare sees it from its own traffic.</summary>
+/// <summary>
+/// One relationship between two autonomous systems, as Cloudflare sees it from its own traffic.
+/// </summary>
 public sealed class RadarAsnRelationship
 {
     /// <summary>The first ASN.</summary>
@@ -344,12 +346,20 @@ public sealed class RadarAsnRelationship
     public string? Asn2Name { get; set; }
 
     /// <summary>
-    /// How the two are related - upstream, downstream, peer - in the word Cloudflare uses. It publishes this as
-    /// a string with no list of values, so it stays one rather than becoming an enum that would turn an
-    /// unpublished relationship into <c>Unknown</c>.
+    /// How the two are related, in the words Cloudflare uses - <c>peer</c>, <c>provider-customer</c>. It
+    /// publishes this as a string with no list of values, so it stays one rather than becoming an enum that
+    /// would turn an unpublished relationship into <c>Unknown</c>.
     /// </summary>
     [JsonPropertyName("rel")]
     public string? Rel { get; set; }
+
+    /// <summary>
+    /// Whether this relationship is backed by a valid ASPA - the RPKI object by which one AS authorises
+    /// another to announce its prefixes as its provider. Unpublished, like the nine fields an AS-SET answers,
+    /// and answered as both <c>true</c> and <c>false</c>, so it is typed as the boolean it arrived as.
+    /// </summary>
+    [JsonPropertyName("aspa_validated")]
+    public bool? AspaValidated { get; set; }
 
     /// <summary>Captures any field Cloudflare adds in the future.</summary>
     [JsonExtensionData]

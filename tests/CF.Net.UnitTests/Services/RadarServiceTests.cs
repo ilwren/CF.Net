@@ -828,7 +828,7 @@ public class RadarServiceTests
     {
         using var harness = CloudflareHarness.Create();
         harness.Respond(
-            """{"success":true,"errors":[],"messages":[],"result":{"meta":{"data_time":"2026-02-22T00:00:00Z","query_time":"2026-02-23T09:00:00Z","total_peers":3},"rels":[{"asn1":13335,"asn1_country":"US","asn1_name":"Cloudflare","asn2":15169,"asn2_country":"US","asn2_name":"Google","rel":"peers"}]}}""");
+            """{"success":true,"errors":[],"messages":[],"result":{"meta":{"data_time":"2026-02-22T00:00:00Z","query_time":"2026-02-23T09:00:00Z","total_peers":3},"rels":[{"asn1":13335,"asn1_country":"US","asn1_name":"Cloudflare","asn2":15169,"asn2_country":"US","asn2_name":"Google","rel":"provider-customer","aspa_validated":true},{"asn1":13335,"asn1_country":"US","asn1_name":"Cloudflare","asn2":402940,"asn2_country":"US","asn2_name":"Interfere","rel":"peer","aspa_validated":false}]}}""");
 
         var relationships = await harness.Client.Radar.GetAsnRelationshipsAsync(13335L, 15169L);
 
@@ -836,19 +836,27 @@ public class RadarServiceTests
         Assert.Equal("asn2=15169", harness.LastRequest.Query.TrimStart('?'));
         Assert.NotNull(relationships);
 
-        var relation = Assert.Single(relationships!.Rels!);
+        Assert.Equal(2, relationships!.Rels!.Count);
+        var relation = relationships.Rels[0];
         Assert.Equal(13335L, relation.Asn1);
         Assert.Equal("Cloudflare", relation.Asn1Name);
         Assert.Equal(15169L, relation.Asn2);
         Assert.Equal("US", relation.Asn2Country);
 
-        // Cloudflare publishes rel as a string with no list of values, so it stays one.
-        Assert.Equal("peers", relation.Rel);
-        Assert.Equal("AS13335 - AS15169 (peers)", relation.ToString());
+        // Cloudflare publishes rel as a string with no list of values, so it stays one - and a live answer
+        // spells it provider-customer and peer, not the upstream/downstream its name suggests.
+        Assert.Equal("provider-customer", relation.Rel);
+        Assert.Equal("AS13335 - AS15169 (provider-customer)", relation.ToString());
+
+        // Unpublished, and answered as both, so it is a bool rather than the JSON it arrived as.
+        Assert.True(relation.AspaValidated);
+        Assert.False(relationships.Rels[1].AspaValidated);
+        Assert.True(relation.AdditionalData is not { Count: > 0 });
+
         Assert.Equal(3L, relationships.Meta!.TotalPeers);
         Assert.Equal("2026-02-22T00:00:00Z", relationships.Meta.DataTime);
         Assert.Equal("3 peer(s) as of 2026-02-22T00:00:00Z", relationships.Meta.ToString());
-        Assert.Equal("1 relationship(s), 3 peer(s) as of 2026-02-22T00:00:00Z", relationships.ToString());
+        Assert.Equal("2 relationship(s), 3 peer(s) as of 2026-02-22T00:00:00Z", relationships.ToString());
     }
 
     [Fact]

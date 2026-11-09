@@ -2031,7 +2031,7 @@ public class ReadOnlyIntegrationTests : CloudflareIntegrationTest
         }
         catch (CloudflareApiException exception)
         {
-            refused.Add($"locations with an offset: {exception.StatusCode} [{exception.ErrorCode}]");
+            refused.Add(Refusal("locations with an offset", exception));
         }
 
         var known = firstPage.Items.FirstOrDefault(item => !string.IsNullOrEmpty(item.Alpha2));
@@ -2055,7 +2055,7 @@ public class ReadOnlyIntegrationTests : CloudflareIntegrationTest
             }
             catch (CloudflareApiException exception)
             {
-                refused.Add($"one location: {exception.StatusCode} [{exception.ErrorCode}]");
+                refused.Add(Refusal("one location", exception));
             }
         }
 
@@ -2073,7 +2073,7 @@ public class ReadOnlyIntegrationTests : CloudflareIntegrationTest
         }
         catch (CloudflareApiException exception)
         {
-            refused.Add($"asns: {exception.StatusCode} [{exception.ErrorCode}]");
+            refused.Add(Refusal("asns", exception));
         }
 
         if (listed?.Asn is { } number)
@@ -2106,7 +2106,7 @@ public class ReadOnlyIntegrationTests : CloudflareIntegrationTest
             }
             catch (CloudflareApiException exception)
             {
-                refused.Add($"one ASN: {exception.StatusCode} [{exception.ErrorCode}]");
+                refused.Add(Refusal("one ASN", exception));
             }
         }
 
@@ -2123,7 +2123,7 @@ public class ReadOnlyIntegrationTests : CloudflareIntegrationTest
         }
         catch (CloudflareApiException exception)
         {
-            refused.Add($"ASN by IP: {exception.StatusCode} [{exception.ErrorCode}]");
+            refused.Add(Refusal("ASN by IP", exception));
         }
 
         try
@@ -2147,7 +2147,7 @@ public class ReadOnlyIntegrationTests : CloudflareIntegrationTest
         }
         catch (CloudflareApiException exception)
         {
-            refused.Add($"entity by IP: {exception.StatusCode} [{exception.ErrorCode}]");
+            refused.Add(Refusal("entity by IP", exception));
         }
 
         try
@@ -2196,7 +2196,7 @@ public class ReadOnlyIntegrationTests : CloudflareIntegrationTest
         }
         catch (CloudflareApiException exception)
         {
-            refused.Add($"geolocations: {exception.StatusCode} [{exception.ErrorCode}]");
+            refused.Add(Refusal("geolocations", exception));
         }
 
         try
@@ -2211,7 +2211,7 @@ public class ReadOnlyIntegrationTests : CloudflareIntegrationTest
         }
         catch (CloudflareApiException exception)
         {
-            refused.Add($"search: {exception.StatusCode} [{exception.ErrorCode}]");
+            refused.Add(Refusal("search", exception));
         }
 
         foreach (var refusal in refused)
@@ -2284,7 +2284,7 @@ public class ReadOnlyIntegrationTests : CloudflareIntegrationTest
         }
         catch (CloudflareApiException exception)
         {
-            refused.Add($"annotations: {exception.StatusCode} [{exception.ErrorCode}]");
+            refused.Add(Refusal("annotations", exception));
         }
 
         try
@@ -2307,7 +2307,15 @@ public class ReadOnlyIntegrationTests : CloudflareIntegrationTest
 
                 if (download is null)
                 {
-                    surprises.Add($"POST /radar/datasets/download answered no url for dataset {dataset.Id}");
+                    surprises.Add($"POST /radar/datasets/download answered no dataset object at all for " +
+                                  $"dataset {dataset.Id} ({dataset.Alias ?? "no alias"}), which the list had " +
+                                  "just answered with a title and a type");
+                }
+                else if (string.IsNullOrEmpty(download.Url))
+                {
+                    surprises.Add($"POST /radar/datasets/download answered a dataset with no url for " +
+                                  $"dataset {dataset.Id} ({dataset.Alias ?? "no alias"}), carrying " +
+                                  $"{(download.AdditionalData is { Count: > 0 } extras ? string.Join(", ", extras.Keys) : "no other field")}");
                 }
                 else if (download.Url is { Length: > 0 } address &&
                          Uri.TryCreate(address, UriKind.Absolute, out var url) &&
@@ -2326,7 +2334,7 @@ public class ReadOnlyIntegrationTests : CloudflareIntegrationTest
         }
         catch (CloudflareApiException exception)
         {
-            refused.Add($"datasets: {exception.StatusCode} [{exception.ErrorCode}]");
+            refused.Add(Refusal("datasets", exception));
         }
 
         try
@@ -2374,7 +2382,7 @@ public class ReadOnlyIntegrationTests : CloudflareIntegrationTest
         }
         catch (CloudflareApiException exception)
         {
-            refused.Add($"ASN details: {exception.StatusCode} [{exception.ErrorCode}]");
+            refused.Add(Refusal("ASN details", exception));
         }
 
         try
@@ -2397,14 +2405,16 @@ public class ReadOnlyIntegrationTests : CloudflareIntegrationTest
 
             if (feed is not null && entries.Count > 0 && entries.All(entry => entry.RankChange is null))
             {
-                surprises.Add("GET /radar/entities/asns/botnet_threat_feed answered no rankChange on any " +
-                              "entry although compareDateRange=7d was sent: either the comparison needs a " +
-                              "date Cloudflare has data for, or the field is published rather than answered");
+                surprises.Add($"GET /radar/entities/asns/botnet_threat_feed answered no rankChange on any " +
+                              $"of {entries.Count} entry(s) although compareDateRange=7d was sent, and its " +
+                              $"meta.compareDate was '{feed.Meta?.CompareDate ?? "(absent)"}': either the " +
+                              "comparison needs a date Cloudflare has data for, or the field is published " +
+                              "rather than answered");
             }
         }
         catch (CloudflareApiException exception)
         {
-            refused.Add($"botnet feed: {exception.StatusCode} [{exception.ErrorCode}]");
+            refused.Add(Refusal("botnet feed", exception));
         }
 
         foreach (var refusal in refused)

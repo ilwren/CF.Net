@@ -519,6 +519,25 @@ public abstract class CloudflareIntegrationTest : IDisposable
     /// <param name="text">The text to cut, which may be null.</param>
     /// <param name="longest">How many characters to keep.</param>
     /// <returns>The text, cut at <paramref name="longest"/> with an ellipsis, or empty when there was none.</returns>
+    /// <summary>
+    /// Describes a refusal for a report line, with the body Cloudflare sent.
+    /// </summary>
+    /// <remarks>
+    /// The status and the error code are not always enough. Cloudflare answers some radar endpoints with HTTP
+    /// 200 and <c>{"success":false,"errors":[]}</c>, which this library throws for - correctly, because the
+    /// envelope says the call failed - and which a report line would otherwise print as <c>OK []</c>: a line
+    /// that reads like a defect in the report rather than an answer from Cloudflare. The body is what says
+    /// which it was, so it travels with the status.
+    /// </remarks>
+    /// <param name="what">What was being called, in words a reader can place.</param>
+    /// <param name="exception">The refusal.</param>
+    /// <returns>One line describing it.</returns>
+    protected static string Refusal(string what, CloudflareApiException exception) =>
+        $"{what}: {exception.StatusCode} [{exception.ErrorCode}]" +
+        (string.IsNullOrEmpty(exception.ResponseBody)
+            ? string.Empty
+            : $" body={Truncate(exception.ResponseBody, 200)}");
+
     protected static string Truncate(string? text, int longest) =>
         string.IsNullOrEmpty(text) || text.Length <= longest
             ? text ?? string.Empty

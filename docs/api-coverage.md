@@ -1577,6 +1577,100 @@ assets — Cloudflare garbage-collects what no deployment references.
 
 ---
 
+## Durable Objects
+
+`IDurableObjectsService` — `client.DurableObjects`
+
+Two read-only endpoints: the namespaces an account owns, and the objects inside one namespace. Neither has a
+write, because neither resource is made through the API — a namespace comes into being when a Worker script
+that exports a Durable Object class is deployed (through the deployment's `durable_object_classes` binding,
+with a migration when storage has to move with it), and an object when a script asks for one by name or by id.
+Cloudflare lists **Workers Scripts Read** first among the permissions these endpoints accept, so a token that
+can list scripts can list namespaces.
+
+| Method | Endpoint | Notes |
+| --- | --- | --- |
+| `ListNamespacesAsync(DurableObjectNamespaceListParameters?, accountId)` | `GET /accounts/{account_id}/workers/durable_objects/namespaces` | `{id, class, name, script, use_sqlite}` per namespace; page-number pagination, `per_page` up to 1000 |
+| `ListAllNamespacesAsync(accountId, pageSize)` | the same, walked | stops when Cloudflare reports no further page **or** answers an empty one |
+| `ListObjectsAsync(namespaceId, DurableObjectListParameters?, accountId)` | `GET /accounts/{account_id}/workers/durable_objects/namespaces/{namespace_id}/objects` | `{id, hasStoredData}` per object; **cursor** pagination, sized by `limit` |
+| `ListAllObjectsAsync(namespaceId, pageSize, accountId)` | the same, walked | follows `result_info.cursors.after`, and stops when Cloudflare hands back the cursor it was given |
+
+The two endpoints disagree about pagination, and that disagreement is the trap worth naming: namespaces take
+`page` and `per_page`, objects take a cursor and `limit`. A caller who assumed one style for both would ask
+for nothing and get an answer that looked empty. `DurableObjectNamespaceListParameters` exists only because
+the shared `CloudflarePagedParameters` is abstract; `DurableObjectListParameters` carries the cursor and the
+limit, and its `WithCursor(cursor)` is what the walk uses to move on without losing the page size.
+
+`hasStoredData` is camelCase in Cloudflare's own reference — the only field this library wraps that is. The
+property is named for the wire rather than corrected, because a caller comparing what arrives against what the
+reference publishes has to see the same spelling. An object Cloudflare says nothing about reads as
+`HasStoredData == null`, which is not the same as one it reports as holding no data.
+
+Listing objects is as far as the REST v4 surface goes: reading an object's storage means calling the object's
+own HTTP entry point, or talking SQLite to it over a WebSocket, and neither is part of the API this library
+wraps. `use_sqlite` on the namespace is what tells a caller which of the two an object would want.
+
+---
+
+## URL normalization
+
+`IUrlNormalizationService` — `client.UrlNormalization`
+
+One zone-level setting and three verbs: read it, set it, or delete it to fall back to Cloudflare's default.
+Which normalizer a zone runs, and on which of its requests, is what decides how a URL looks to the rules that
+match against it.
+
+| Method | Endpoint | Notes |
+| --- | --- | --- |
+| `GetAsync(zoneId)` | `GET /zones/{zone_id}/url_normalization` | `{scope, type}` — and **`null` is a published answer**, so a read can come back with no setting at all |
+| `UpdateAsync(UrlNormalizationSettings, zoneId)` | `PUT /zones/{zone_id}/url_normalization` | Cloudflare requires both fields, so an update never changes one of them on its own |
+| `ResetAsync(zoneId)` | `DELETE /zones/{zone_id}/url_normalization` | resets to the default, and answers with the setting it fell back to |
+
+`scope` is `incoming`, `both` or `none`; `type` is `cloudflare` or `rfc3986`. Both are modelled as enums with
+an `Unknown = 0` member, so a value Cloudflare adds later reads as `Unknown` instead of throwing — and
+`EnsureValid()` refuses to send one back, because a `PUT` carrying a value this library cannot spell would be
+a `PUT` of nothing. That is also why a setting read from the wire can be handed straight back to
+`UpdateAsync`: when it can, the two fields arrive; when they do not, the exception says which one is missing
+rather than Cloudflare saying it a round trip later.
+
+Cloudflare publishes no permission group named for URL normalization. This suite assumes the **Zone Settings**
+group covers it, and says so in the probe row rather than presenting the assumption as a fact — the
+`url_normalization` probe reports the answer, and the live write fact reports whether the `PUT` took and what
+a read back said afterwards.
+
+---
+
+## Origin post-quantum encryption
+
+`IOriginPostQuantumEncryptionService` — `client.OriginPostQuantumEncryption`
+
+Two verbs over one zone-level setting, and two things about it a caller has to know before using either.
+
+| Method | Endpoint | Notes |
+| --- | --- | --- |
+| `GetAsync(zoneId)` | `GET /zones/{zone_id}/cache/origin_post_quantum_encryption` | `{id: "origin_pqe", editable, value, modified_on}` — every field but `modified_on` is required, so a null result is a broken answer rather than an empty one |
+| `UpdateAsync(OriginPostQuantumEncryptionRequest, zoneId)` | `PUT` the same path | the body is the one field `value`: `off`, `supported` or `preferred` |
+
+**The path is not where the subject lives.** The setting is about the TLS handshake with the origin, and this
+library keeps the model with the other SSL resources, but Cloudflare publishes the endpoint under the zone's
+`cache` segment. The path here says `cache` because that is where the endpoint is; nothing about caching is
+involved.
+
+**Writing to it no longer changes the zone.** Cloudflare replaced this control with automatic key exchange —
+which this library already wraps as `client.Ssl.GetAutoOriginTlsKexAsync` and
+`client.Ssl.SetAutoOriginTlsKexAsync(enabled)`, on the zone setting `auto_origin_tls_kex` — and documents that
+requests to this endpoint "are no-ops and do not change a zone's post-quantum key agreement". The endpoint
+still answers, so it is still wrapped, but the answer has to be read as what the endpoint returned rather
+than as what the zone now does. The live fact writes to it once and reads it back, because that is the only
+evidence available: when the value did not move, the fact says so in a `Warn` that names the documentation
+predicting it, instead of failing on a call that behaved exactly as Cloudflare says it would.
+
+Cloudflare publishes no permission group named for this setting either. The suite assumes the zone's **SSL and
+Certificates** group covers it, on the strength of the endpoint living in the SSL documentation, and the probe
+row carries that assumption in its note.
+
+---
+
 ## Cross-cutting behaviour
 
 | Concern | Where |

@@ -71,6 +71,9 @@ public sealed class CloudflareClient : ICloudflareClient, IDisposable
         WorkersObservability = new WorkersObservabilityService(transport);
         WorkersAi = new WorkersAiService(transport);
         Turnstile = new TurnstileService(transport);
+        DurableObjects = new DurableObjectsService(transport);
+        UrlNormalization = new UrlNormalizationService(transport);
+        OriginPostQuantumEncryption = new OriginPostQuantumEncryptionService(transport);
     }
 
     /// <inheritdoc />
@@ -150,6 +153,15 @@ public sealed class CloudflareClient : ICloudflareClient, IDisposable
 
     /// <inheritdoc />
     public ITurnstileService Turnstile { get; }
+
+    /// <inheritdoc />
+    public IDurableObjectsService DurableObjects { get; }
+
+    /// <inheritdoc />
+    public IUrlNormalizationService UrlNormalization { get; }
+
+    /// <inheritdoc />
+    public IOriginPostQuantumEncryptionService OriginPostQuantumEncryption { get; }
 
     /// <inheritdoc />
     public Task<CloudflareConnectionCheck> CheckConnectionAsync(CancellationToken cancellationToken = default) =>

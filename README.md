@@ -113,6 +113,9 @@ Console.WriteLine($"{zones.Count} of {zones.TotalCount} zones");
 | `client.WorkersObservability` | `IWorkersObservabilityService` | telemetry destinations, keys and values, live tail, and the telemetry query API |
 | `client.WorkersAi` | `IWorkersAiService` | the model catalogue, tasks, authors and model schemas, inference, fine-tune listings, to-markdown |
 | `client.Turnstile` | `ITurnstileService` | Turnstile widgets: their hostnames and mode, their site keys, and secret rotation |
+| `client.DurableObjects` | `IDurableObjectsService` | Durable Object namespaces an account owns, and the objects inside one — both read-only |
+| `client.UrlNormalization` | `IUrlNormalizationService` | a zone's URL normalization: read it, set both of its fields, or delete it to fall back to the default |
+| `client.OriginPostQuantumEncryption` | `IOriginPostQuantumEncryptionService` | origin post-quantum encryption — published under the zone's `cache` path, and documented by Cloudflare as a no-op |
 
 ---
 

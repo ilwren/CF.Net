@@ -7,6 +7,7 @@ using CFNet.Http;
 using CFNet.Models.Common;
 using CFNet.Models.D1;
 using CFNet.Models.Dns;
+using CFNet.Models.DurableObjects;
 using CFNet.Models.Firewall;
 using CFNet.Models.IpRanges;
 using CFNet.Models.Kv;
@@ -1902,6 +1903,75 @@ public class ReadOnlyIntegrationTests : CloudflareIntegrationTest
                      $"{string.Join("; ", surprises)}.");
             }
         }
+    }
+
+    [Fact]
+    public async Task Durable_object_namespaces_and_the_objects_inside_one_can_be_listed()
+    {
+        if (!SkipWithoutAccount())
+        {
+            return;
+        }
+
+        CloudflarePage<DurableObjectNamespace> page;
+        try
+        {
+            page = await Client.DurableObjects.ListNamespacesAsync(
+                new DurableObjectNamespaceListParameters { Page = 1, PerPage = 50 });
+        }
+        catch (CloudflareApiException exception) when (exception.IsAuthenticationFailure)
+        {
+            SkipUnless(false, $"GET /accounts/{{account_id}}/workers/durable_objects/namespaces was refused " +
+                $"with {exception.StatusCode} [{exception.ErrorCode}]. Cloudflare lists 'Workers Scripts " +
+                $"Read' among the permissions this endpoint accepts, which this token already has for the " +
+                $"scripts themselves. {Truncate(exception.Message, 200)}");
+            return;
+        }
+
+        Log($"durable_object_namespaces={page.Count} total={page.TotalCount} " +
+            $"first_three=[{string.Join(", ", page.Items.Take(3))}]");
+        ReportUnmodelled(
+            "GET /accounts/{account_id}/workers/durable_objects/namespaces",
+            page.Items,
+            item => item.AdditionalData);
+
+        var target = page.Items.FirstOrDefault(item => !string.IsNullOrEmpty(item.Id));
+        if (target is null)
+        {
+            Warn("The account owns no Durable Object namespaces, so the objects endpoint stayed unexercised. " +
+                 "Deploying a Worker that binds a Durable Object class would cover it.");
+            return;
+        }
+
+        var objects = new List<DurableObject>();
+        try
+        {
+            await foreach (var item in Client.DurableObjects.ListAllObjectsAsync(target.Id!, pageSize: 25))
+            {
+                objects.Add(item);
+                if (objects.Count >= 50)
+                {
+                    break;
+                }
+            }
+        }
+        catch (CloudflareApiException exception)
+        {
+            // Not necessarily a permission problem: the namespaces list answered, so this says what the
+            // objects list itself did, which is the useful half of the report either way.
+            Warn($"GET /accounts/{{account_id}}/workers/durable_objects/namespaces/{target.Id}/objects was " +
+                 $"refused with {exception.StatusCode} [{exception.ErrorCode}] " +
+                 $"{Truncate(exception.Message, 200)} while the namespaces list answered {page.Count} " +
+                 $"namespace(s), so the credentials are not what failed.");
+            return;
+        }
+
+        Log($"objects_in_{target.Class ?? target.Name ?? target.Id}={objects.Count} " +
+            $"first_three=[{string.Join(", ", objects.Take(3))}]");
+        ReportUnmodelled(
+            $"GET /accounts/{{account_id}}/workers/durable_objects/namespaces/{target.Id}/objects",
+            objects,
+            item => item.AdditionalData);
     }
 }
 /// <summary>
@@ -5356,6 +5426,196 @@ public class WriteIntegrationTests : CloudflareIntegrationTest
         Warn($"{endpoint} answered fields this library does not model for a Turnstile widget: " +
              $"{string.Join(", ", widget.AdditionalData.Keys)}. The names are reported rather than the " +
              $"widget itself, because a single widget's answer carries its secret.");
+    }
+
+    [Fact]
+    public async Task Url_normalization_can_be_changed_reset_and_changed_back()
+    {
+        if (!SkipWithoutZone() || !SkipWithoutWritePermission())
+        {
+            return;
+        }
+
+        UrlNormalizationSettings? before;
+        try
+        {
+            before = await Client.UrlNormalization.GetAsync();
+        }
+        catch (CloudflareApiException exception) when (exception.IsAuthenticationFailure)
+        {
+            SkipUnless(false, $"GET /zones/{{zone_id}}/url_normalization was refused with " +
+                $"{exception.StatusCode} [{exception.ErrorCode}]. Cloudflare publishes no permission group " +
+                $"of its own for URL normalization, so this suite assumes the zone settings group covers it. " +
+                $"{Truncate(exception.Message, 200)}");
+            return;
+        }
+
+        Log($"url_normalization before={(before is null ? "(no result)" : before.ToString())}");
+        if (before?.AdditionalData is { Count: > 0 } extras)
+        {
+            Warn($"GET /zones/{{zone_id}}/url_normalization answered fields this library does not model: " +
+                 $"{string.Join(", ", extras.Keys)}.");
+        }
+
+        // Ask for the other combination, whichever way round the zone is now, so the write is observable.
+        var target = new UrlNormalizationSettings
+        {
+            Scope = before?.Scope == UrlNormalizationScope.Both
+                ? UrlNormalizationScope.Incoming
+                : UrlNormalizationScope.Both,
+            Type = before?.Type == UrlNormalizationType.Rfc3986
+                ? UrlNormalizationType.Cloudflare
+                : UrlNormalizationType.Rfc3986,
+        };
+
+        UrlNormalizationSettings? changed;
+        try
+        {
+            changed = await Client.UrlNormalization.UpdateAsync(target);
+        }
+        catch (CloudflareApiException exception) when (exception.IsAuthenticationFailure)
+        {
+            SkipUnless(false, $"PUT /zones/{{zone_id}}/url_normalization was refused with " +
+                $"{exception.StatusCode} [{exception.ErrorCode}]. The read answered, so what is missing is " +
+                $"the write half of whichever group covers this setting. " +
+                $"{Truncate(exception.Message, 200)}");
+            return;
+        }
+
+        Log($"url_normalization answered={(changed is null ? "(no result)" : changed.ToString())}");
+
+        // A setting that arrived half filled, or carrying a value this library has not met, cannot be sent
+        // back, and the reset below is the closest thing to putting the zone as it was.
+        var restorable = before is not null
+            && before.Scope is { } scope && scope != UrlNormalizationScope.Unknown
+            && before.Type is { } type && type != UrlNormalizationType.Unknown;
+
+        try
+        {
+            var readBack = await Client.UrlNormalization.GetAsync();
+            Log($"url_normalization after={(readBack is null ? "(no result)" : readBack.ToString())}");
+            if (readBack is null || readBack.Scope != target.Scope || readBack.Type != target.Type)
+            {
+                Warn($"PUT /zones/{{zone_id}}/url_normalization asked for {target} and a read back answered " +
+                     $"{(readBack is null ? "no result" : readBack.ToString())}.");
+            }
+
+            var reset = await Client.UrlNormalization.ResetAsync();
+            Log($"url_normalization reset={(reset is null ? "(no result)" : reset.ToString())}");
+        }
+        finally
+        {
+            try
+            {
+                if (restorable)
+                {
+                    var restored = await Client.UrlNormalization.UpdateAsync(before!);
+                    Log($"url_normalization restored={(restored is null ? "(no result)" : restored.ToString())}");
+                }
+                else
+                {
+                    await Client.UrlNormalization.ResetAsync();
+                    Log("url_normalization reset, because the zone reported no setting to put back.");
+                }
+            }
+            catch (CloudflareApiException exception)
+            {
+                Warn($"Putting /zones/{{zone_id}}/url_normalization back failed with {exception.StatusCode} " +
+                     $"[{exception.ErrorCode}] {Truncate(exception.Message, 200)}: the zone may be left " +
+                     $"running {target}.");
+            }
+        }
+    }
+
+    [Fact]
+    public async Task The_origin_post_quantum_encryption_setting_can_be_read_written_and_written_back()
+    {
+        if (!SkipWithoutZone() || !SkipWithoutWritePermission())
+        {
+            return;
+        }
+
+        OriginPostQuantumEncryption before;
+        try
+        {
+            before = await Client.OriginPostQuantumEncryption.GetAsync();
+        }
+        catch (CloudflareApiException exception) when (exception.IsAuthenticationFailure)
+        {
+            SkipUnless(false, $"GET /zones/{{zone_id}}/cache/origin_post_quantum_encryption was refused with " +
+                $"{exception.StatusCode} [{exception.ErrorCode}]. The setting is about TLS but Cloudflare " +
+                $"publishes it under the zone's cache segment, and this suite assumes the zone's SSL and " +
+                $"Certificates group covers it. {Truncate(exception.Message, 200)}");
+            return;
+        }
+
+        Log($"origin_pqe before={before}");
+        if (before.AdditionalData is { Count: > 0 } extras)
+        {
+            Warn($"GET /zones/{{zone_id}}/cache/origin_post_quantum_encryption answered fields this library " +
+                 $"does not model: {string.Join(", ", extras.Keys)}.");
+        }
+
+        var target = before.Value == OriginPostQuantumEncryptionMode.Preferred
+            ? OriginPostQuantumEncryptionMode.Off
+            : OriginPostQuantumEncryptionMode.Preferred;
+
+        OriginPostQuantumEncryption changed;
+        try
+        {
+            changed = await Client.OriginPostQuantumEncryption.UpdateAsync(
+                new OriginPostQuantumEncryptionRequest { Value = target });
+        }
+        catch (CloudflareApiException exception) when (exception.IsAuthenticationFailure)
+        {
+            SkipUnless(false, $"PUT /zones/{{zone_id}}/cache/origin_post_quantum_encryption was refused with " +
+                $"{exception.StatusCode} [{exception.ErrorCode}]. The read answered, so what is missing is " +
+                $"the write half of whichever group covers this setting. " +
+                $"{Truncate(exception.Message, 200)}");
+            return;
+        }
+
+        // A value this library has not met cannot be sent back, so there would be nothing to restore.
+        var restoreTo = before.Value is { } value && value != OriginPostQuantumEncryptionMode.Unknown
+            ? value
+            : (OriginPostQuantumEncryptionMode?)null;
+
+        try
+        {
+            Log($"origin_pqe answered={changed}");
+            var after = await Client.OriginPostQuantumEncryption.GetAsync();
+            Log($"origin_pqe after={after}");
+
+            // Cloudflare documents this endpoint as a no-op: automatic key exchange replaced the control it
+            // used to hold. Writing to it is still worth doing once, because the answer is what tells a
+            // caller whether the documentation and this zone agree.
+            if (after.Value != target)
+            {
+                Warn($"PUT /zones/{{zone_id}}/cache/origin_post_quantum_encryption asked for {target} and the " +
+                     $"setting reads {after.Value} afterwards" +
+                     $"{(before.Editable == false ? ", and the zone reports editable=false" : string.Empty)}" +
+                     ": Cloudflare documents this endpoint as a no-op since automatic key exchange replaced " +
+                     "it, so a write that answers success is not a write that changed the zone.");
+            }
+        }
+        finally
+        {
+            if (restoreTo is { } restore)
+            {
+                try
+                {
+                    var restored = await Client.OriginPostQuantumEncryption.UpdateAsync(
+                        new OriginPostQuantumEncryptionRequest { Value = restore });
+                    Log($"origin_pqe restored={restored}");
+                }
+                catch (CloudflareApiException exception)
+                {
+                    Warn($"Putting /zones/{{zone_id}}/cache/origin_post_quantum_encryption back failed with " +
+                         $"{exception.StatusCode} [{exception.ErrorCode}] " +
+                         $"{Truncate(exception.Message, 200)}.");
+                }
+            }
+        }
     }
 
 }

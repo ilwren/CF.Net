@@ -313,7 +313,7 @@ permissions but no zone resource returns `10007 Route not found` for a zone you 
 in the dashboard, which reads like a bug in the client and is not.
 
 This is common enough that the workflow checks for it before running anything. The step named *Check what
-the credentials can actually reach* makes one `curl` call per product area — thirty-eight of them, covering
+the credentials can actually reach* makes one `curl` call per product area — forty-one of them, covering
 zones, DNS records, DNSSEC and its ZSK, zone settings, certificate packs, custom hostnames, origin TLS
 client auth, origin CA certificates, cache purge, the account, Workers scripts, domains, routes and static
 assets, Pages, D1, KV, R2, rulesets, filter lists, page rules, firewall filters, IP Access rules, mTLS
@@ -617,6 +617,8 @@ assertion failure mid-test still removes the resource.
 | `A_redirect_ruleset_can_be_created_given_a_bulk_redirect_rule_and_removed` | a redirect list with items, a ruleset and a rule in it, with the zone's entrypoint pointed at it | the rule, the ruleset, the list, and the entrypoint put back |
 | `A_rules_list_can_be_created_filled_and_removed` | a list, its items, and a change to its description | the items, then `DELETE` the list |
 | `A_zone_setting_can_be_changed_and_changed_back` | nothing — switches one zone setting | n/a — the setting is switched back |
+| `Url_normalization_can_be_changed_reset_and_changed_back` | nothing — one `PUT` of a zone setting to the other combination of its two fields, and a `DELETE` that resets it | n/a — the original setting is put back, or reset when the zone reported none |
+| `The_origin_post_quantum_encryption_setting_can_be_read_written_and_written_back` | nothing — one `PUT` of a zone setting Cloudflare documents as a no-op | n/a — the original value is written back |
 | `A_turnstile_widget_can_be_created_read_updated_rotated_and_deleted` | a widget, then a `PUT` of it and a rotated secret | `DELETE` the widget |
 | `A_worker_secret_can_be_written_listed_read_bulk_written_and_removed` | a script with a `secret_text` binding, a secret written onto it, and a bulk write that adds one and removes the other | the secret, then `DELETE` the script |
 | `A_worker_route_can_be_created_read_changed_and_removed` | a script, a proxied A record in your zone, a route on that hostname, and two `PUT`s of it - one that moves the pattern, one that takes the script off | the route, the record, then `DELETE` the script |

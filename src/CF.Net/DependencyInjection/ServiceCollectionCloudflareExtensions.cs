@@ -283,6 +283,9 @@ public static class ServiceCollectionCloudflareExtensions
         services.TryAddSingleton<IWorkersObservabilityService>(provider => provider.GetRequiredService<ICloudflareClient>().WorkersObservability);
         services.TryAddSingleton<IWorkersAiService>(provider => provider.GetRequiredService<ICloudflareClient>().WorkersAi);
         services.TryAddSingleton<ITurnstileService>(provider => provider.GetRequiredService<ICloudflareClient>().Turnstile);
+        services.TryAddSingleton<IDurableObjectsService>(provider => provider.GetRequiredService<ICloudflareClient>().DurableObjects);
+        services.TryAddSingleton<IUrlNormalizationService>(provider => provider.GetRequiredService<ICloudflareClient>().UrlNormalization);
+        services.TryAddSingleton<IOriginPostQuantumEncryptionService>(provider => provider.GetRequiredService<ICloudflareClient>().OriginPostQuantumEncryption);
     }
 
     /// <summary>

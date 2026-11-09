@@ -145,6 +145,26 @@ public interface ICloudflareClient : IDisposable
     ITurnstileService Turnstile { get; }
 
     /// <summary>
+    /// Durable Objects: the namespaces an account owns - the classes its Worker scripts export - and the
+    /// objects inside one namespace. Both endpoints are read-only: a namespace appears when a script that
+    /// exports the class is deployed, and an object when a script asks for one.
+    /// </summary>
+    IDurableObjectsService DurableObjects { get; }
+
+    /// <summary>
+    /// URL normalization: which normalizer a zone runs, and on which of its requests, and therefore how a URL
+    /// looks to the rules that match against it.
+    /// </summary>
+    IUrlNormalizationService UrlNormalization { get; }
+
+    /// <summary>
+    /// Origin post-quantum encryption: how a zone offers post-quantum key agreements to its origin. Published
+    /// under the zone's <c>cache</c> segment, and documented by Cloudflare as a no-op since automatic key
+    /// exchange replaced the control it used to hold.
+    /// </summary>
+    IOriginPostQuantumEncryptionService OriginPostQuantumEncryption { get; }
+
+    /// <summary>
     /// Cheap connectivity check that never throws: verifies the credentials using whichever scheme is
     /// configured and reports the outcome.
     /// </summary>

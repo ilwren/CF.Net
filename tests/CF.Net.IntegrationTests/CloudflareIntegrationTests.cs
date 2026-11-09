@@ -1594,15 +1594,64 @@ public class ReadOnlyIntegrationTests : CloudflareIntegrationTest
             return;
         }
 
-        var first = databases.Items[0];
-        var result = await Client.D1.QueryAsync(first.Uuid!, "SELECT 1 AS answer");
+        // This fact queries a database somebody else may be deleting. The write class creates and removes
+        // databases named cfnet-it-* while the read-only class runs - xunit runs the two in parallel - and one
+        // run listed such a database, then was answered 404 [7404] "could not be found" when it queried it a
+        // moment later. So the candidates here are the account's own databases, and a 404 is waited out and
+        // then stepped over rather than taken as an answer.
+        var candidates = databases.Items
+            .Where(database => !string.IsNullOrEmpty(database.Uuid))
+            .Where(database => database.Name?.StartsWith("cfnet-it", StringComparison.Ordinal) != true)
+            .Take(3)
+            .ToList();
+
+        if (candidates.Count == 0)
+        {
+            Log("SKIPPED query: every database in the account is one this suite created, and it may be " +
+                "removing it while this fact runs.");
+            return;
+        }
+
+        D1QueryResult? result = null;
+        D1QueryResult? raw = null;
+        var unqueryable = new List<string>();
+
+        foreach (var database in candidates)
+        {
+            try
+            {
+                result = await RetryingUntilFoundAsync(
+                    () => Client.D1.QueryAsync(database.Uuid!, "SELECT 1 AS answer"),
+                    attempts: 3,
+                    delay: TimeSpan.FromSeconds(2));
+
+                // The raw endpoint answers the same statement with each row as an array of values.
+                raw = await RetryingUntilFoundAsync(
+                    () => Client.D1.QueryRawAsync(database.Uuid!, "SELECT 1 AS answer"),
+                    attempts: 3,
+                    delay: TimeSpan.FromSeconds(2));
+                break;
+            }
+            catch (CloudflareApiException exception) when (exception.IsNotFound)
+            {
+                result = null;
+                raw = null;
+                unqueryable.Add($"{database.Name} ({database.Uuid}): [{exception.ErrorCode}]");
+            }
+        }
+
+        if (result is null || raw is null)
+        {
+            Warn($"POST /accounts/{{account_id}}/d1/database/{{id}}/query was answered 404 for every database " +
+                 $"this fact tried, all of them listed a moment before: {string.Join("; ", unqueryable)}. " +
+                 "Listing works; querying what was listed does not, so the query assertions did not run.");
+            return;
+        }
 
         Log($"query rows={result.RowCount} duration={result.Meta?.Duration} served_by={result.Meta?.ServedByColo}");
         Assert.Equal(1, result.RowCount);
         Assert.Equal(1, result.FirstColumn<int>("answer"));
 
-        // The raw endpoint answers the same statement with each row as an array of values.
-        var raw = await Client.D1.QueryRawAsync(first.Uuid!, "SELECT 1 AS answer");
         var rawRows = raw.RowArrays();
 
         Log($"raw rows={raw.RowCount} arrays={rawRows.Count} duration={raw.Meta?.Duration} served_by={raw.Meta?.ServedByColo}");
@@ -2307,7 +2356,8 @@ public class ReadOnlyIntegrationTests : CloudflareIntegrationTest
                 var prepared = new List<string>();
                 var silent = new List<string>();
 
-                foreach (var dataset in datasets.Items.Where(item => item.Id is not null).Take(3))
+                var candidates = datasets.Items.Where(item => item.Id is not null).Take(3).ToList();
+                foreach (var dataset in candidates)
                 {
                     var named = $"{dataset.Id} ({dataset.Alias ?? "no alias"})";
                     var download = await Client.Radar.RequestDatasetDownloadAsync(
@@ -2337,7 +2387,20 @@ public class ReadOnlyIntegrationTests : CloudflareIntegrationTest
 
                 if (prepared.Count == 0)
                 {
-                    surprises.Add($"POST /radar/datasets/download prepared nothing: {string.Join("; ", silent)}");
+                    // Nothing to inspect through the typed call: the envelope parsed, and the dataset object
+                    // was simply not in it. ICloudflareClient publishes the transport, so the same request can
+                    // be made again for its body, which is the only way to see what arrived instead.
+                    var diagnostic = candidates.First();
+                    var body = CloudflareRequest.Post(
+                        "radar/datasets/download",
+                        new RadarDatasetDownloadRequest { DatasetId = diagnostic.Id!.Value });
+                    body.Query.Add("format", "CSV");
+                    body.OperationName = "Diagnose Radar Dataset Download";
+
+                    var answered = await Client.Transport.SendAsync<RadarDatasetDownloadResult>(body);
+                    surprises.Add($"POST /radar/datasets/download prepared nothing: {string.Join("; ", silent)}. " +
+                                  $"Asked again for dataset {diagnostic.Id}, it answered {answered.StatusCode} " +
+                                  $"with this body: {Truncate(answered.RawBody, 400)}");
                 }
                 else if (silent.Count > 0)
                 {

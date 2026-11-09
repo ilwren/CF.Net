@@ -2130,8 +2130,16 @@ public class WriteIntegrationTests : CloudflareIntegrationTest
             namespaceId = created.Id!;
             Log($"namespace {namespaceId} ({created.Title})");
 
-            // Cloudflare needs a moment before a fresh namespace accepts writes.
-            await Task.Delay(TimeSpan.FromSeconds(2));
+            // Cloudflare needs a moment before a fresh namespace accepts writes: one live run answered
+            // 404 [10013] "namespace not found" to a PUT two seconds after the POST that created the
+            // namespace. Waiting until it reads back is the version of that which does not guess how long
+            // the moment is.
+            var readable = await ReadUntilAsync(
+                () => Client.Kv.GetNamespaceAsync(namespaceId),
+                found => found is not null,
+                attempts: 6,
+                delay: TimeSpan.FromSeconds(3));
+            Log($"namespace readable as {readable?.Title ?? "(still not readable)"}");
 
             await Client.Kv.PutStringAsync(namespaceId, "greeting/hello", "hi there", expirationTtl: 300);
             var value = await Client.Kv.GetValueAsync(namespaceId, "greeting/hello");
@@ -5444,8 +5452,10 @@ public class WriteIntegrationTests : CloudflareIntegrationTest
         catch (CloudflareApiException exception) when (exception.IsAuthenticationFailure)
         {
             SkipUnless(false, $"GET /zones/{{zone_id}}/url_normalization was refused with " +
-                $"{exception.StatusCode} [{exception.ErrorCode}]. Cloudflare publishes no permission group " +
-                $"of its own for URL normalization, so this suite assumes the zone settings group covers it. " +
+                $"{exception.StatusCode} [{exception.ErrorCode}]. Cloudflare publishes no permission " +
+                $"group named for URL normalization, and the list its reference does publish for this " +
+                $"endpoint cannot be all of the story: it names Account Rulesets Read, which this token " +
+                $"holds, because GET /accounts/{{account_id}}/rulesets answers 200 in the same run. " +
                 $"{Truncate(exception.Message, 200)}");
             return;
         }
@@ -5476,8 +5486,8 @@ public class WriteIntegrationTests : CloudflareIntegrationTest
         catch (CloudflareApiException exception) when (exception.IsAuthenticationFailure)
         {
             SkipUnless(false, $"PUT /zones/{{zone_id}}/url_normalization was refused with " +
-                $"{exception.StatusCode} [{exception.ErrorCode}]. The read answered, so what is missing is " +
-                $"the write half of whichever group covers this setting. " +
+                $"{exception.StatusCode} [{exception.ErrorCode}]. The read answered, so what is missing " +
+                $"is the write half of a group Cloudflare does not name for this endpoint. " +
                 $"{Truncate(exception.Message, 200)}");
             return;
         }

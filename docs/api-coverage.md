@@ -1585,8 +1585,9 @@ Two read-only endpoints: the namespaces an account owns, and the objects inside 
 write, because neither resource is made through the API — a namespace comes into being when a Worker script
 that exports a Durable Object class is deployed (through the deployment's `durable_object_classes` binding,
 with a migration when storage has to move with it), and an object when a script asks for one by name or by id.
-Cloudflare lists **Workers Scripts Read** first among the permissions these endpoints accept, so a token that
-can list scripts can list namespaces.
+Cloudflare lists **Workers Scripts Read** first among the permissions these endpoints accept, and a live run
+confirmed it: the token this suite runs with lists namespaces with no group of its own, and an account with no
+Durable Object class deployed answers `200` with an empty list rather than refusing.
 
 | Method | Endpoint | Notes |
 | --- | --- | --- |
@@ -1633,10 +1634,14 @@ a `PUT` of nothing. That is also why a setting read from the wire can be handed 
 `UpdateAsync`: when it can, the two fields arrive; when they do not, the exception says which one is missing
 rather than Cloudflare saying it a round trip later.
 
-Cloudflare publishes no permission group named for URL normalization. This suite assumes the **Zone Settings**
-group covers it, and says so in the probe row rather than presenting the assumption as a fact — the
-`url_normalization` probe reports the answer, and the live write fact reports whether the `PUT` took and what
-a read back said afterwards.
+**No permission group is named for this endpoint, and the one Cloudflare's reference lists cannot be trusted.**
+A live run was refused `403 [10000]` by a token that reads `GET /accounts/{account_id}/rulesets` in the same
+run — so it holds **Account Rulesets Read**, which the reference lists among the two dozen rules-family groups
+this endpoint accepts, "at least one required". One of two things is true and they cannot be told apart from
+outside: the list is over-broad, or a zone-scoped endpoint wants a zone-scoped grant the account-scoped group
+does not carry. Guessing a group would send a reader to add a permission that may grant nothing, so this
+endpoint is wrapped and offline-tested, the live fact reports the refusal it saw and skips, and the reach
+matrix does not probe it.
 
 ---
 
@@ -1665,9 +1670,12 @@ than as what the zone now does. The live fact writes to it once and reads it bac
 evidence available: when the value did not move, the fact says so in a `Warn` that names the documentation
 predicting it, instead of failing on a call that behaved exactly as Cloudflare says it would.
 
-Cloudflare publishes no permission group named for this setting either. The suite assumes the zone's **SSL and
-Certificates** group covers it, on the strength of the endpoint living in the SSL documentation, and the probe
-row carries that assumption in its note.
+Cloudflare publishes no permission group named for this setting either, but here the assumption held: a live
+run read it with the zone's **SSL and Certificates** group (`origin_pqe=200`, three fields) and the write fact
+changed the value and read the change back. That last part is worth repeating, because it is the opposite of
+what the documentation predicts — Cloudflare says requests to this endpoint are no-ops, and on the zone this
+suite ran against the value moved. The fact reports either outcome: a value that did not move produces a
+`Warn` naming the documentation that predicted it, and a value that moved simply lands in the log.
 
 ---
 

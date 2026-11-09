@@ -217,11 +217,11 @@ For the full suite:
 | Zone | Zone Settings — Edit | `GET`/`PATCH /zones/{id}/settings`, including the SSL enrolment settings Cloudflare serves from that path |
 | Zone | Cache Purge — Purge | `POST /zones/{id}/purge_cache` |
 | Zone | Page Rules — Edit | `GET`/`POST`/`PUT`/`PATCH`/`DELETE /zones/{id}/pagerules`. **Zone — Edit** is accepted instead, and a plan only allows three page rules, so a create can be refused for a full zone rather than for the token. **No group helps an account-owned token**: Cloudflare answers `400 [1011]` "Page Rules endpoint does not support account owned tokens" to every call on this path, so page rules need a user-owned (`cfut_`) token or the global key |
-| Zone | SSL and Certificates — Edit | certificate packs, Universal SSL, custom hostnames, the fallback origin, origin TLS client auth, **and the origin CA certificates at `POST`/`GET`/`DELETE /certificates`** - a root-level path with the zone as a filter, and one Cloudflare publishes no group of its own for, so the `origin_ca` probe is what says whether this one reaches them |
+| Zone | SSL and Certificates — Edit | certificate packs, Universal SSL, custom hostnames, the fallback origin, origin TLS client auth, **and the origin CA certificates at `POST`/`GET`/`DELETE /certificates`** - a root-level path with the zone as a filter, and one Cloudflare publishes no group of its own for, so the `origin_ca` probe is what says whether this one reaches them | `GET`/`PUT /zones/{id}/cache/origin_post_quantum_encryption` is served from the zone's **cache** path but reads with this group, which a live run confirmed.
 | Account | Account Settings — Read | `GET /accounts`, `GET /accounts/{id}` |
 | Zone | Firewall Services — Edit | `GET`/`POST`/`PUT`/`DELETE /zones/{id}/filters` — the saved filters a firewall rule points at. Cloudflare documents the create as **deprecated** in favour of the ruleset engine, and a zone whose rules were all migrated may hold none |
 | Account | Account Firewall Access Rules — Read **and** Write | `GET`/`POST`/`PATCH`/`DELETE /{accounts\|zones}/{id}/firewall/access_rules/rules` — IP Access rules. **Their own group**: Firewall Services does not cover them. A live run narrowed down which path actually wants it — one token created a rule on the **zone** path and listed it back, then was refused on the **account** path with `10000` — so the group is what the account scope needs, and the zone scope was reachable without it. Read `de7a688cc47d43bd9ea700b467a09c96`, Write `a416acf9ef5a4af19fb11ed3b96b1fe6` |
-| Account | Workers Scripts — Edit | scripts, deployments, secrets, the `workers.dev` subdomain and custom domains |
+| Account | Workers Scripts — Edit | scripts, deployments, secrets, the `workers.dev` subdomain and custom domains | Durable Object namespaces and the objects in one ride on this group too — Cloudflare lists **Workers Scripts Read** first among the permissions those two endpoints accept, and a live run confirmed it.
 | Zone | Workers Routes — Edit | `GET`/`POST`/`PUT`/`DELETE /zones/{id}/workers/routes`. The token catalogue files this group under the account, but a route lives in a zone, so a token whose *Zone Resources* do not name the zone gets a `10007 Route not found` that reads like a missing permission |
 | Account | Account Settings — Edit | `PUT /accounts/{id}/workers/account-settings` — Cloudflare documents this write as needing **Account Settings Write** rather than a Workers group. A live run confirmed it: the read answers 200 and the write answers **403 `[10000]`** without that group. The fact reports the refusal instead of failing on it, and the group (`1af1fa2adc104452b74a9a3364202f20`) is in the token URL the workflow generates, so a token created from it verifies the write too |
 | Account | Account: SSL and Certificates — Read **or** Edit | `GET`/`POST`/`DELETE /accounts/{id}/mtls_certificates` and `…/{id}/associations` — the mTLS certificates an account uploads. **Not the zone-scoped group of the same name**: Cloudflare publishes two, and this one is described as *"SSL MTLS certificates or Certificate Store"*. Read `a7a233f9604845c787d4c8c39ac09c21`, Write `db37e5f1cb1a4e1aabaef8deaea43575` |
@@ -234,6 +234,17 @@ Two rows are easy to get wrong. Cache purge is its own permission group — the 
 Purge** at the level **Purge**, and `Zone Settings — Edit` does not grant it. And SSL for SaaS, custom
 hostnames and origin TLS client auth all live under **SSL and Certificates**, not under Zone or DNS, so a token
 built for "just DNS" skips every one of them with a 403 that reads like a bug in the client.
+
+One endpoint has no row here at all, and that is the honest answer rather than an omission.
+`GET`/`PUT`/`DELETE /zones/{zone_id}/url_normalization` is refused `403 [10000]` by the token this suite runs
+with, and Cloudflare publishes no permission group named for URL normalization. The list its reference does
+publish for the endpoint — two dozen rules-family groups, "at least one required" — cannot be right either:
+**Account Rulesets Read** is on it, and the token this suite runs with demonstrably holds that group, because
+`GET /accounts/{account_id}/rulesets` answers 200. So the group that actually grants URL normalization is not
+knowable from outside, and guessing one would only send a reader to add a permission that may grant nothing.
+The endpoint is wrapped and offline-tested; its live fact reports the refusal it saw and skips, and the reach
+matrix does not probe it, because a probe whose permission cannot be named would report a missing permission
+nobody can go and add.
 
 ### Creating that token from a URL
 
@@ -313,7 +324,7 @@ permissions but no zone resource returns `10007 Route not found` for a zone you 
 in the dashboard, which reads like a bug in the client and is not.
 
 This is common enough that the workflow checks for it before running anything. The step named *Check what
-the credentials can actually reach* makes one `curl` call per product area — forty-one of them, covering
+the credentials can actually reach* makes one `curl` call per product area — forty of them, covering
 zones, DNS records, DNSSEC and its ZSK, zone settings, certificate packs, custom hostnames, origin TLS
 client auth, origin CA certificates, cache purge, the account, Workers scripts, domains, routes and static
 assets, Pages, D1, KV, R2, rulesets, filter lists, page rules, firewall filters, IP Access rules, mTLS

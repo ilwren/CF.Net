@@ -92,7 +92,9 @@ public class UrlNormalizationServiceTests
 
         Assert.Equal(HttpMethod.Put, harness.LastRequest.Method);
         Assert.Equal(SettingsPath, harness.LastRequest.Path);
-        Assert.Equal("application/json", harness.LastRequest.ContentType);
+        // A JSON body goes out as StringContent, which appends the charset; the text bodies KV sends
+        // name their media type outright and arrive without one.
+        Assert.Equal("application/json; charset=utf-8", harness.LastRequest.ContentType);
         Assert.Equal("""{"scope":"incoming","type":"rfc3986"}""", harness.LastRequest.Body);
 
         Assert.NotNull(answered);

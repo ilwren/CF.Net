@@ -14,7 +14,8 @@ namespace CFNet.Models.Ssl;
 /// which do not change a zone's post-quantum key agreement. Reading it still answers, and a write still answers
 /// success, so a caller has to treat "the call worked" and "the zone changed" as different claims - which is what
 /// <c>IOriginPostQuantumEncryptionService.UpdateAsync</c> says out loud, and what the live integration test
-/// checks for.
+/// checks for. That test found the value did move on the zone it ran against, so the documentation is a warning
+/// to check rather than a promise that nothing happens.
 /// </remarks>
 [JsonConverter(typeof(CloudflareEnumConverter<OriginPostQuantumEncryptionMode>))]
 public enum OriginPostQuantumEncryptionMode

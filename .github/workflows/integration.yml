@@ -296,10 +296,6 @@ jobs:
             probe dnssec "$zone/dnssec"
             probe dnssec_zsk "$zone/dnssec/zsk"
             probe settings "$zone/settings"
-            # URL normalization is a zone setting with an endpoint of its own, and Cloudflare publishes no
-            # permission group named for it: the row below assumes the zone settings group covers it, and a
-            # live answer is what settles that assumption.
-            probe url_normalization "$zone/url_normalization"
             # Published under the zone's cache segment even though it is about the TLS handshake with the
             # origin, and documented by Cloudflare as a no-op since automatic key exchange replaced the
             # control it used to hold. A read is harmless either way.
@@ -402,11 +398,12 @@ jobs:
                'an unsigned zone answers 200 with an empty list, so empty is not a failure'),
               ('settings', 'GET /zones/{zone_id}/settings', 'Zone Settings - Read', 'zone_settings', 'read',
                'which settings appear depends on the plan, so a short list is normal'),
-              ('url_normalization', 'GET /zones/{zone_id}/url_normalization', 'Zone Settings - Read',
-               'zone_settings', 'read',
-               'Cloudflare publishes no permission group of its own for URL normalization, so the group '
-               'named here is the zone settings one that covers the neighbouring rules settings; a live run '
-               'is what confirms it'),
+              # GET /zones/{zone_id}/url_normalization is deliberately NOT probed. Cloudflare publishes no
+              # group named for it, and the list its reference does publish - two dozen rules-family groups,
+              # 'at least one required' - is over-broad: a live run was refused 403 [10000] by a token that
+              # holds Account Rulesets Read, which is on that list. A probe whose permission cannot be named
+              # would report a missing permission nobody can go and add, so the endpoint stays wrapped and
+              # offline-tested, and its live fact reports the refusal it actually saw.
               ('ssl', 'GET /zones/{zone_id}/ssl/certificate_packs', 'SSL and Certificates - Read',
                'ssl_and_certificates', 'read', ''),
               ('custom_hostnames', 'GET /zones/{zone_id}/custom_hostnames', 'SSL and Certificates - Read',
@@ -417,9 +414,8 @@ jobs:
                'SSL and Certificates - Read', 'ssl_and_certificates', 'read', ''),
               ('origin_pqe', 'GET /zones/{zone_id}/cache/origin_post_quantum_encryption',
                'SSL and Certificates - Read', 'ssl_and_certificates', 'read',
-               'the setting is about TLS but its path sits under the zone cache segment, and Cloudflare '
-               'publishes no group named for it; the group named here covers the rest of the zone SSL '
-               "settings, and Cloudflare documents the endpoint itself as a no-op"),
+               'the setting is about TLS but its path sits under the zone cache segment; a live run '
+               "confirmed the zone's SSL and Certificates group reads it"),
               ('cache_purge', 'POST /zones/{zone_id}/purge_cache', 'Cache Purge - Purge', 'cache', 'purge',
                'probed with an empty body that Cloudflare refuses, so nothing is purged either way'),
               ('dns_export', 'GET /zones/{zone_id}/dns_records/export', 'DNS - Read', 'dns', 'read',
@@ -443,8 +439,9 @@ jobs:
                'workers_scripts', 'read', ''),
               ('do_namespaces', 'GET /accounts/{account_id}/workers/durable_objects/namespaces',
                'Workers Scripts - Read', 'workers_scripts', 'read',
-               'an account with no Durable Object class deployed answers 200 with an empty list, so empty '
-               'is not a refusal'),
+               'a live run confirmed the group: this endpoint reads with the one that lists scripts. An '
+               'account with no Durable Object class deployed answers 200 with an empty list, so empty is '
+               'not a refusal'),
               ('workers_domains', 'GET /accounts/{account_id}/workers/domains', 'Workers Scripts - Read',
                'workers_scripts', 'read',
                'workers domains only exist once the account has a workers.dev subdomain or a custom domain, '

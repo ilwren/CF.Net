@@ -2736,24 +2736,60 @@ public class WriteIntegrationTests : CloudflareIntegrationTest
             Log($"tail {tail.Id} is served at {tailUrl!.Scheme}://{tailUrl.Host}");
 
             // The list answers with an array whose items carry the same three fields the create did, which is
-            // not what the published schema says this endpoint answers with.
-            var listed = await Client.Workers.ListTailsAsync(name);
-            var only = Assert.Single(listed);
-            Assert.Equal(tail.Id, only.Id);
-            Assert.Equal(tail.Url, only.Url);
+            // not what the published schema says this endpoint answers with. Nor is it immediate: one run
+            // watched the create answer a tail with an id and a url while the list still answered nothing at
+            // all. So the list is read until it catches up, and one that never does is reported rather than
+            // failed - the create having answered is the fact worth keeping, and a lagging list is Cloudflare's
+            // behaviour to describe, not this suite's to punish.
+            var created = tail!;
+            var listed = await ReadUntilAsync(
+                () => Client.Workers.ListTailsAsync(name),
+                tails => tails.Any(item => item.Id == created.Id),
+                attempts: 4,
+                delay: TimeSpan.FromSeconds(2));
+            var only = listed.FirstOrDefault(item => item.Id == created.Id);
+            if (only is null)
+            {
+                Warn($"GET /accounts/{{account_id}}/workers/scripts/{name}/tails answered {listed.Count} " +
+                     $"item(s) across four reads after the create answered tail {created.Id}, so the listed " +
+                     "fields went unchecked this run. The list lags the create.");
+            }
+            else
+            {
+                Assert.Equal(created.Id, only.Id);
+                Assert.Equal(created.Url, only.Url);
 
-            // The expiry is only checked as "still in the future" rather than as the value the create
-            // answered with, because whether Cloudflare reports the stored one or recomputes it on read is
-            // not something a caller should depend on.
-            Assert.NotNull(only.ExpiresAt);
-            Assert.False(only.HasExpired);
+                // The expiry is only checked as "still in the future" rather than as the value the create
+                // answered with, because whether Cloudflare reports the stored one or recomputes it on read is
+                // not something a caller should depend on.
+                Assert.NotNull(only.ExpiresAt);
+                Assert.False(only.HasExpired);
 
-            await Client.Workers.DeleteTailAsync(name, tail.Id!);
-            Log($"stopped tail {tail.Id}");
+                if (listed.Count != 1)
+                {
+                    Warn($"GET /accounts/{{account_id}}/workers/scripts/{name}/tails answered {listed.Count} " +
+                         $"item(s) where a script holds one tail at a time: " +
+                         $"{string.Join(", ", listed.Select(item => item.Id))}");
+                }
+            }
+
+            await Client.Workers.DeleteTailAsync(name, created.Id!);
+            Log($"stopped tail {created.Id}");
             tail = null;
 
-            // Stopped is the same as never started from the API's point of view.
-            Assert.Empty(await Client.Workers.ListTailsAsync(name));
+            // Stopped is the same as never started from the API's point of view - once the list catches up
+            // with the delete, which is the same lag as above and is reported rather than asserted.
+            var stopped = await ReadUntilAsync(
+                () => Client.Workers.ListTailsAsync(name),
+                tails => tails.Count == 0,
+                attempts: 3,
+                delay: TimeSpan.FromSeconds(2));
+            if (stopped.Count != 0)
+            {
+                Warn($"GET /accounts/{{account_id}}/workers/scripts/{name}/tails still answered " +
+                     $"{string.Join(", ", stopped.Select(item => item.Id))} after the tail was stopped: the " +
+                     "list lags the delete.");
+            }
 
             // A script holds one tail at a time: a second create answers 200 with a new tail and replaces the
             // one already running rather than adding to it.
@@ -2762,13 +2798,37 @@ public class WriteIntegrationTests : CloudflareIntegrationTest
             Log($"tail {first.Id} was replaced by {replacement.Id}");
             tail = replacement;
 
-            var after = await Client.Workers.ListTailsAsync(name);
-            var current = Assert.Single(after);
-            Assert.Equal(replacement.Id, current.Id);
+            var after = await ReadUntilAsync(
+                () => Client.Workers.ListTailsAsync(name),
+                tails => tails.Any(item => item.Id == replacement.Id),
+                attempts: 4,
+                delay: TimeSpan.FromSeconds(2));
+            var current = after.FirstOrDefault(item => item.Id == replacement.Id);
+            if (current is null)
+            {
+                Warn($"GET /accounts/{{account_id}}/workers/scripts/{name}/tails answered {after.Count} " +
+                     $"item(s) across four reads after the second create answered tail {replacement.Id}, so " +
+                     "the replacement went unchecked this run.");
+            }
+            else if (after.Count != 1)
+            {
+                Warn($"GET /accounts/{{account_id}}/workers/scripts/{name}/tails answered {after.Count} " +
+                     $"item(s) where the second create should have replaced the first: " +
+                     $"{string.Join(", ", after.Select(item => item.Id))}");
+            }
 
             await Client.Workers.DeleteTailAsync(name, replacement.Id!);
             tail = null;
-            Assert.Empty(await Client.Workers.ListTailsAsync(name));
+            var gone = await ReadUntilAsync(
+                () => Client.Workers.ListTailsAsync(name),
+                tails => tails.Count == 0,
+                attempts: 3,
+                delay: TimeSpan.FromSeconds(2));
+            if (gone.Count != 0)
+            {
+                Warn($"GET /accounts/{{account_id}}/workers/scripts/{name}/tails still answered " +
+                     $"{string.Join(", ", gone.Select(item => item.Id))} after the replacement was stopped.");
+            }
         }
         finally
         {

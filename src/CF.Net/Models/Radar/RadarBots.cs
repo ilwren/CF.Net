@@ -249,9 +249,18 @@ public enum RadarResponseStatusCategory
 /// <remarks>
 /// <para>
 /// One type serves both reads, because they answer the same object with different parts of it filled in: the
-/// list carries the seven fields every entry has, and the single-bot read adds <see cref="OperatorUrl"/>,
-/// <see cref="UserAgents"/> and <see cref="SignatureAgentUrl"/>. Those three stay <see langword="null"/> on an
-/// entry that came from the list, which is what Cloudflare's own two schemas say.
+/// list carries the fields every entry has, and the single-bot read adds <see cref="OperatorUrl"/>,
+/// <see cref="UserAgents"/>, <see cref="SignatureAgentUrl"/>, <see cref="DocumentationUrl"/> and
+/// <see cref="OperatorWebsiteUrl"/>. Those five stay <see langword="null"/> on an entry that came from the
+/// list - the first three because Cloudflare's own two schemas say so, and the last two because a live run
+/// watched them arrive on the single read and not on the list.
+/// </para>
+/// <para>
+/// That run also answered three fields the reference does not publish at all: <see cref="Categories"/> beside
+/// the single <see cref="Category"/>, <see cref="AccessLevel"/> and <see cref="ContentUse"/> on both reads.
+/// They are typed because they were seen filled, which is the rule this library keeps to - a field only ever
+/// seen named stays the JSON it arrived as, because a type built on a guess costs the whole read when the
+/// guess is wrong.
 /// </para>
 /// <para>
 /// <see cref="Category"/> and <see cref="Kind"/> are the strings Cloudflare answers with, not the enums its
@@ -261,13 +270,44 @@ public enum RadarResponseStatusCategory
 /// </remarks>
 public sealed class RadarBot
 {
+    /// <summary>How this bot reaches the sites it asks about.</summary>
+    /// <remarks>
+    /// Unpublished, and answered as <c>DIRECT</c> by every bot a live run read. Cloudflare publishes no list
+    /// of what else it can be, so it stays the string it arrives as: an answer this library cannot enumerate
+    /// is not one it should guess at.
+    /// </remarks>
+    [JsonPropertyName("accessLevel")]
+    public string? AccessLevel { get; set; }
+
     /// <summary>What the bot is for, as Cloudflare spells it.</summary>
+    /// <remarks>The one category it leads with. <see cref="Categories"/> is every category it belongs to.</remarks>
     [JsonPropertyName("category")]
     public string? Category { get; set; }
+
+    /// <summary>Every category this bot belongs to.</summary>
+    /// <remarks>
+    /// Unpublished, and the reason <see cref="Category"/> on its own is not enough: a live run read one bot
+    /// filed under three categories at once, with the single field carrying only the first of them.
+    /// </remarks>
+    [JsonPropertyName("categories")]
+    public List<string>? Categories { get; set; }
+
+    /// <summary>What the bot may do with what it fetches.</summary>
+    /// <remarks>
+    /// Unpublished, and answered in lower case - <c>immediate</c> - where every category beside it is upper
+    /// case, so it stays the string it arrives as rather than an enum built on one sighting.
+    /// </remarks>
+    [JsonPropertyName("contentUse")]
+    public string? ContentUse { get; set; }
 
     /// <summary>What Cloudflare says the bot does.</summary>
     [JsonPropertyName("description")]
     public string? Description { get; set; }
+
+    /// <summary>The address of the documentation for this bot.</summary>
+    /// <remarks>Unpublished, and answered by the single-bot read only.</remarks>
+    [JsonPropertyName("documentationUrl")]
+    public string? DocumentationUrl { get; set; }
 
     /// <summary>Whether it acts for somebody or on its own, as Cloudflare spells it.</summary>
     [JsonPropertyName("kind")]
@@ -284,6 +324,11 @@ public sealed class RadarBot
     /// <summary>Where to read about whoever runs it. Answered by the single-bot read only.</summary>
     [JsonPropertyName("operatorUrl")]
     public string? OperatorUrl { get; set; }
+
+    /// <summary>The operator's own website, beside the <see cref="OperatorUrl"/> that documents the bot.</summary>
+    /// <remarks>Unpublished, and answered by the single-bot read only.</remarks>
+    [JsonPropertyName("operatorWebsiteUrl")]
+    public string? OperatorWebsiteUrl { get; set; }
 
     /// <summary>
     /// The address of the agent that signs this bot's requests, when Cloudflare has one for it. Published as
@@ -538,18 +583,11 @@ public abstract class RadarBotParameters : ICloudflareQueryParameters
     {
     }
 
-    /// <summary>Records a per-group limit that asks for nothing.</summary>
+    /// <summary>Records a per-group limit Cloudflare would refuse.</summary>
     /// <param name="problems">The problems found so far, to add to.</param>
     /// <param name="limitPerGroup">The limit that was asked for.</param>
-    protected static void CheckLimitPerGroup(List<string> problems, int? limitPerGroup)
-    {
-        if (limitPerGroup is < 1)
-        {
-            problems.Add(
-                $"a radar limit per group has to ask for at least one entry, and this one asks for " +
-                $"{limitPerGroup}.");
-        }
-    }
+    protected static void CheckLimitPerGroup(List<string> problems, int? limitPerGroup) =>
+        RadarQuery.CheckLimitPerGroup(problems, limitPerGroup);
 
     /// <summary>Sends the seven bot filters, in the order Cloudflare publishes them.</summary>
     /// <param name="query">The query string to add to.</param>
@@ -750,6 +788,10 @@ public abstract class RadarWebCrawlerParameters : ICloudflareQueryParameters
 public sealed class RadarWebCrawlerSummaryParameters : RadarWebCrawlerParameters
 {
     /// <inheritdoc />
+    protected override void AddProblems(List<string> problems) =>
+        RadarQuery.CheckLimitPerGroup(problems, LimitPerGroup);
+
+    /// <inheritdoc />
     public override void Apply(QueryStringBuilder query) => ApplyCrawlerFilters(query);
 }
 
@@ -775,6 +817,7 @@ public sealed class RadarWebCrawlerTimeseriesGroupsParameters : RadarWebCrawlerP
         RadarQuery.CheckEnums(problems, "normalization", Normalization is { } normalization
             ? new List<RadarTimeseriesNormalization> { normalization }
             : null);
+        RadarQuery.CheckLimitPerGroup(problems, LimitPerGroup);
     }
 
     /// <inheritdoc />

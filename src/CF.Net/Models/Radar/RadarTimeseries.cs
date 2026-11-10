@@ -619,6 +619,25 @@ internal static class RadarQuery
         }
     }
 
+    /// <summary>Records a per-group limit Cloudflare would refuse.</summary>
+    /// <remarks>
+    /// The minimum is two, and that is not a published number being guessed at locally: a live run sent
+    /// <c>limitPerGroup=1</c> to all four endpoints that take it and every one of them answered
+    /// <c>400 [2001] Too small</c>, while <c>limit=1</c> on the rankings beside them read fine. Saying so
+    /// here turns that 400 into a sentence that names the reason.
+    /// </remarks>
+    /// <param name="problems">The problems found so far, to add to.</param>
+    /// <param name="limitPerGroup">The limit that was asked for.</param>
+    internal static void CheckLimitPerGroup(List<string> problems, int? limitPerGroup)
+    {
+        if (limitPerGroup is < 2)
+        {
+            problems.Add(
+                $"a radar limit per group has to ask for at least two entries, because Cloudflare answers " +
+                $"400 [2001] 'Too small' to one, and this one asks for {limitPerGroup}.");
+        }
+    }
+
     /// <summary>Records every value of a filter this version of the library has no spelling for.</summary>
     /// <typeparam name="TEnum">The enum to check.</typeparam>
     /// <param name="problems">The problems found so far, to add to.</param>

@@ -1379,7 +1379,7 @@ public class RadarServiceTests
     {
         using var harness = CloudflareHarness.Create();
         harness.Respond(
-            """{"success":true,"errors":[],"messages":[],"result":{"bots":[{"category":"SEARCH_ENGINE_CRAWLER","description":"Google's search crawler","kind":"BOT","name":"Googlebot","operator":"Google","slug":"googlebot","userAgentPatterns":["Googlebot/*"]},{"category":"AI_CRAWLER","description":"Fetches pages for training","kind":"BOT","name":"GPTBot","operator":"OpenAI","slug":"gptbot","userAgentPatterns":["GPTBot/*"]}]}}""");
+            """{"success":true,"errors":[],"messages":[],"result":{"bots":[{"accessLevel":"DIRECT","categories":["SEARCH_ENGINE_CRAWLER","SECURITY"],"category":"SEARCH_ENGINE_CRAWLER","contentUse":"immediate","description":"Google's search crawler","kind":"BOT","name":"Googlebot","operator":"Google","slug":"googlebot","userAgentPatterns":["Googlebot/*"]},{"category":"AI_CRAWLER","description":"Fetches pages for training","kind":"BOT","name":"GPTBot","operator":"OpenAI","slug":"gptbot","userAgentPatterns":["GPTBot/*"]}]}}""");
 
         var bots = await harness.Client.Radar.ListBotsAsync(new RadarBotListParameters
         {
@@ -1409,10 +1409,25 @@ public class RadarServiceTests
         Assert.Equal("Google", first.Operator);
         Assert.Equal(new[] { "Googlebot/*" }, first.UserAgentPatterns!);
         Assert.Equal("Googlebot (BOT) by Google", first.ToString());
+
+        // Three fields Cloudflare's reference does not publish at all, which a live run answered on every
+        // entry of the list: a bot can be filed under several categories at once, and it says how it reaches
+        // a site and what it may do with what it fetches. Typed, because they were seen filled.
+        Assert.Equal("DIRECT", first.AccessLevel);
+        Assert.Equal(new[] { "SEARCH_ENGINE_CRAWLER", "SECURITY" }, first.Categories!);
+        Assert.Equal("immediate", first.ContentUse);
+        Assert.Equal("SEARCH_ENGINE_CRAWLER", first.Category);
+
+        // The second entry has none of them, which is the point: they are nullable because Cloudflare omits
+        // them rather than because this library doubts them.
+        Assert.Null(bots.Items[1].Categories);
+        Assert.Null(bots.Items[1].AccessLevel);
         Assert.True(first.AdditionalData is not { Count: > 0 });
 
-        // Three fields only the single-bot read answers, so a list entry carries none of them.
+        // Five fields only the single-bot read answers, so a list entry carries none of them.
         Assert.Null(first.OperatorUrl);
+        Assert.Null(first.OperatorWebsiteUrl);
+        Assert.Null(first.DocumentationUrl);
         Assert.Null(first.UserAgents);
         Assert.Null(first.SignatureAgentUrl);
     }
@@ -1453,11 +1468,11 @@ public class RadarServiceTests
     }
 
     [Fact]
-    public async Task GetBotAsync_reads_the_three_fields_only_the_single_read_answers()
+    public async Task GetBotAsync_reads_the_fields_only_the_single_read_answers()
     {
         using var harness = CloudflareHarness.Create();
         harness.Respond(
-            """{"success":true,"errors":[],"messages":[],"result":{"bot":{"category":"AI_CRAWLER","description":"Fetches pages for training","kind":"BOT","name":"GPTBot","operator":"OpenAI","operatorUrl":"https://openai.com/gptbot","slug":"gptbot","userAgentPatterns":["GPTBot/*"],"userAgents":["GPTBot/1.0"],"signatureAgentUrl":null}}}""");
+            """{"success":true,"errors":[],"messages":[],"result":{"bot":{"category":"AI_CRAWLER","description":"Fetches pages for training","documentationUrl":"https://openai.com/gptbot","kind":"BOT","name":"GPTBot","operator":"OpenAI","operatorUrl":"https://openai.com/gptbot","operatorWebsiteUrl":"https://openai.com","slug":"gptbot","userAgentPatterns":["GPTBot/*"],"userAgents":["GPTBot/1.0"],"signatureAgentUrl":null}}}""");
 
         var bot = await harness.Client.Radar.GetBotAsync("gptbot");
 
@@ -1466,6 +1481,11 @@ public class RadarServiceTests
         Assert.Equal("GPTBot", bot!.Name);
         Assert.Equal("https://openai.com/gptbot", bot.OperatorUrl);
         Assert.Equal(new[] { "GPTBot/1.0" }, bot.UserAgents!);
+
+        // Two more that the reference does not publish, and a live run read them arriving here and not on the
+        // list: the operator's own website, and the documentation for the bot itself.
+        Assert.Equal("https://openai.com", bot.OperatorWebsiteUrl);
+        Assert.Equal("https://openai.com/gptbot", bot.DocumentationUrl);
 
         // Published as nullable, and answered as null here: not every bot signs its requests.
         Assert.Null(bot.SignatureAgentUrl);
@@ -1767,7 +1787,11 @@ public class RadarServiceTests
 
         Assert.Equal(2, error.Problems.Count);
         Assert.Contains("not a bot category", error.Problems[0], StringComparison.Ordinal);
-        Assert.Contains("at least one entry", error.Problems[1], StringComparison.Ordinal);
+
+        // Two rather than one, because a live run sent limitPerGroup=1 to all four endpoints that take it and
+        // each of them answered 400 [2001] 'Too small', where limit=1 on the rankings beside them read fine.
+        Assert.Contains("at least two entries", error.Problems[1], StringComparison.Ordinal);
+        Assert.Contains("400 [2001]", error.Problems[1], StringComparison.Ordinal);
         Assert.Equal(0, harness.RequestCount);
 
         var crawler = await Assert.ThrowsAsync<CloudflareConfigurationException>(() =>
@@ -1779,6 +1803,16 @@ public class RadarServiceTests
                 }));
 
         Assert.Contains("not a client type", Assert.Single(crawler.Problems), StringComparison.Ordinal);
+        Assert.Equal(0, harness.RequestCount);
+
+        // The crawler tree takes the same parameter, and Cloudflare refuses a one there too, so it is checked
+        // there as well.
+        var crawlerLimit = await Assert.ThrowsAsync<CloudflareConfigurationException>(() =>
+            harness.Client.Radar.GetWebCrawlerTimeseriesGroupsAsync(
+                RadarWebCrawlerDimension.Vertical,
+                new RadarWebCrawlerTimeseriesGroupsParameters { LimitPerGroup = 1 }));
+
+        Assert.Contains("at least two entries", Assert.Single(crawlerLimit.Problems), StringComparison.Ordinal);
         Assert.Equal(0, harness.RequestCount);
     }
 

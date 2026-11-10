@@ -1063,25 +1063,21 @@ public sealed class RadarService : CloudflareService, IRadarService
     // saying as a configuration problem rather than leaving the converter's own exception to explain it.
     private static string Spell(RadarBotDimension dimension)
     {
-        if (!CloudflareEnumConverter<RadarBotDimension>.TryToWire(dimension, out var wire))
-        {
-            throw new CloudflareConfigurationException(
-                $"'{dimension}' is not a radar bot dimension this version of the library knows about, so there " +
-                "is no path to put it in.");
-        }
-
-        return wire;
+        // TryToWire only answers true with a spelling in hand, so the null-forgiving operator is not a
+        // guess here: the branch with nothing to say is the one that throws.
+        return CloudflareEnumConverter<RadarBotDimension>.TryToWire(dimension, out var wire)
+            ? wire!
+            : throw new CloudflareConfigurationException(
+                $"'{dimension}' is not a radar bot dimension this version of the library knows about, so " +
+                "there is no path to put it in.");
     }
 
     private static string Spell(RadarWebCrawlerDimension dimension)
     {
-        if (!CloudflareEnumConverter<RadarWebCrawlerDimension>.TryToWire(dimension, out var wire))
-        {
-            throw new CloudflareConfigurationException(
-                $"'{dimension}' is not a radar web-crawler dimension this version of the library knows about, " +
-                "so there is no path to put it in.");
-        }
-
-        return wire;
+        return CloudflareEnumConverter<RadarWebCrawlerDimension>.TryToWire(dimension, out var wire)
+            ? wire!
+            : throw new CloudflareConfigurationException(
+                $"'{dimension}' is not a radar web-crawler dimension this version of the library knows " +
+                "about, so there is no path to put it in.");
     }
 }

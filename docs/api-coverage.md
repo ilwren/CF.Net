@@ -1971,6 +1971,32 @@ read as `RadarTopList<RadarVerifiedBot>` and `RadarTopList<RadarVerifiedBotCateg
 `RadarSummaryMeta`. Both take the same nine parameters, and a verified bot's share of traffic arrives as a
 string and stays one.
 
+**`limitPerGroup` has a minimum of two.** Cloudflare answers `400 [2001] Too small: expected number to be >=2`
+to a per-group limit of one, on all four of these endpoints that take one, while `limit=1` on the rankings
+beside them reads fine. That is a minimum Cloudflare enforces rather than one this library invented, so
+`RadarQuery.CheckLimitPerGroup` refuses it in both the bot and the crawler trees and says why in the message.
+The `limitPerGroup` on `GET /radar/search/global` is deliberately left at its old check for at least one
+entry: nothing has proved that endpoint's minimum is the same.
+
+**What the first live run answered.** All nine read `200` with a token holding no radar permission — the same
+overstatement the two radar sections before this one found, where the reference names a *User Details Read*
+group that appears nowhere in Cloudflare's catalogue. `summary_0` really is a dictionary of strings; both
+grouped endpoints really do answer the numbered `serie_0` the rankings send, so one model serves both
+families as intended; `GET /radar/bots/timeseries` answered its groups under the names the call had filtered
+by, and `Group(name)` read them; and both verified-bot rankings answered entries, with each share of traffic
+arriving as the string it is typed as. The two reads of a bot split the way the reference says they do —
+`operatorUrl` and `userAgents` came on the single read and not on the list, and `signatureAgentUrl` came on
+neither for the bot that run happened to read.
+
+What the reference does *not* publish is five fields, and the run answered all five filled: `categories`,
+because a bot can be filed under three categories at once where `category` carries only the first;
+`accessLevel`, answered `DIRECT`; and `contentUse`, answered `immediate` in lower case where every category
+beside it is upper case — those three on both reads — plus `documentationUrl` and `operatorWebsiteUrl` on the
+single one. They are typed now, because the rule this library keeps to is that a field seen filled gets a
+type and a field only ever seen named stays the JSON it arrived as. The four probes that take a per-group
+limit first went out asking for one entry each and were answered `400 [2001]`, which is where the minimum
+above came from; they ask for two now.
+
 ⛔ **Not wrapped:** `format=CSV` on any of these nine, for the reason every other radar read has — Cloudflare
 replaces the envelope with a CSV body, which surfaces as an empty result rather than as an error. The single
 bot read is wrapped but deliberately left out of the CI reach matrix: a probe needs a URL that answers the

@@ -1,0 +1,1388 @@
+name: Integration
+
+# Runs the tests that talk to the real Cloudflare API.
+#
+# It is NOT triggered by push or pull_request on purpose: those runs have no credentials, and a
+# schedule/dispatch-only workflow keeps untrusted forks from being able to spend your API quota or
+# touch your account.
+#
+# The cadence that follows from it: new endpoints are proven by the offline unit tests on every push
+# (ci.yml), and the live suite is run once per phase - dispatch it by hand when a batch of endpoints is
+# finished, or let the Monday schedule do it.
+#
+# TEMPORARY EXCEPTION to that, and the cause is a GitHub rule rather than anything in this file:
+# workflow_dispatch and schedule only fire for a workflow that exists on the DEFAULT branch, and this one
+# lives on arena/5d11f1dd-cf-net until PR #1 is merged. So the Actions page shows no "Run workflow" button
+# and the Monday cron has never fired. Until the merge, a push trigger scoped to that one branch is how a
+# live run gets made. And because a push event carries no dispatch inputs, the writes switch in the env
+# block below also has a TEMPORARY 'github.event_name == push' clause in it, so a push run exercises write
+# operations as well as reads - which is what the first live run was asked to do. Both temporary parts, the
+# trigger and that clause, get deleted together in one commit once the branch is merged; neither belongs in
+# the schedule/dispatch-only design this workflow is meant to end up with.
+#
+# To make it do anything, add these repository secrets
+# (Settings -> Secrets and variables -> Actions -> New repository secret):
+#
+#   CLOUDFLARE_API_TOKEN      required  - API token scoped to the resources you want to exercise
+#   CLOUDFLARE_ACCOUNT_ID     required  - for Workers, Pages, D1, KV and R2
+#   CLOUDFLARE_ZONE_ID        required  - for the DNS record and cache purge tests
+#   CLOUDFLARE_API_EMAIL      optional  - only for the legacy global-key path
+#   CLOUDFLARE_GLOBAL_API_KEY optional  - only for the legacy global-key path
+#
+# Without them the job reports a warning and the tests skip themselves instead of failing.
+# See docs/integration-testing.md for how to create a correctly scoped token.
+
+on:
+  workflow_dispatch:
+    inputs:
+      enable_writes:
+        description: 'Allow tests that create and delete resources (KV namespace, R2 bucket, D1 database, Worker, Pages project, DNS record, cache purge)'
+        type: boolean
+        default: false
+      cassette:
+        description: 'Record every call into tests/cassettes/<name>.json, for the offline unit tests to replay (leave empty to disable recording)'
+        type: string
+        default: ''
+      commit_cassette:
+        description: 'Commit the recorded cassette back to this branch'
+        type: boolean
+        default: false
+      filter:
+        description: "Narrow the run, e.g. FullyQualifiedName~R2 (always combined with Category=Integration)"
+        type: string
+        default: ''
+  schedule:
+    # Mondays at 04:00 UTC - read-only, so it can run unattended.
+    - cron: '0 4 * * 1'
+  # TEMPORARY - see the header. Remove once this workflow is on the default branch.
+  push:
+    branches:
+      - arena/5d11f1dd-cf-net
+
+permissions:
+  contents: read
+
+concurrency:
+  group: integration-${{ github.workflow }}
+  cancel-in-progress: false
+
+env:
+  DOTNET_NOLOGO: true
+  DOTNET_CLI_TELEMETRY_OPTOUT: true
+  CONFIGURATION: Release
+  # Injected from repository secrets. GitHub masks secret values in every log line automatically.
+  CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+  CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+  CLOUDFLARE_ZONE_ID: ${{ secrets.CLOUDFLARE_ZONE_ID }}
+  CLOUDFLARE_API_EMAIL: ${{ secrets.CLOUDFLARE_API_EMAIL }}
+  CLOUDFLARE_GLOBAL_API_KEY: ${{ secrets.CLOUDFLARE_GLOBAL_API_KEY }}
+  # TEMPORARY, together with the push trigger below: '|| github.event_name == \'push\'' makes a push run
+  # do write operations, because a push event carries no dispatch inputs and the person who asked for a
+  # first live run asked for it to include writes. Delete that clause and the push trigger in one commit.
+  CLOUDFLARE_IT_ENABLE_WRITES: ${{ (github.event_name == 'push' || github.event.inputs.enable_writes == true || github.event.inputs.enable_writes == 'true') && 'true' || 'false' }}
+  # Recording is off unless a cassette name is given. CLOUDFLARE_IT_RECORD only means something
+  # together with CLOUDFLARE_IT_CASSETTE.
+  CLOUDFLARE_IT_CASSETTE: ${{ github.event.inputs.cassette || '' }}
+  CLOUDFLARE_IT_RECORD: ${{ github.event.inputs.cassette && 'true' || 'false' }}
+
+jobs:
+  integration:
+    name: Cloudflare API integration tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: write   # only used by the opt-in "commit the cassette" step
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v6
+        with:
+          dotnet-version: 8.0.x
+
+      - name: Report which credential scheme is available
+        id: credentials
+        shell: bash
+        run: |
+          if [ -n "${CLOUDFLARE_API_TOKEN:-}" ]; then
+            echo "scheme=API token" >> "$GITHUB_OUTPUT"
+            echo "available=true" >> "$GITHUB_OUTPUT"
+            echo "::notice::Using CLOUDFLARE_API_TOKEN."
+          elif [ -n "${CLOUDFLARE_GLOBAL_API_KEY:-}" ] && [ -n "${CLOUDFLARE_API_EMAIL:-}" ]; then
+            echo "scheme=Global API key" >> "$GITHUB_OUTPUT"
+            echo "available=true" >> "$GITHUB_OUTPUT"
+            echo "::notice::Using CLOUDFLARE_GLOBAL_API_KEY with CLOUDFLARE_API_EMAIL."
+          else
+            echo "scheme=none" >> "$GITHUB_OUTPUT"
+            echo "available=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::No Cloudflare credentials are configured. Add CLOUDFLARE_API_TOKEN (and CLOUDFLARE_ACCOUNT_ID / CLOUDFLARE_ZONE_ID) as repository secrets - see docs/integration-testing.md."
+          fi
+
+          if [ -z "${CLOUDFLARE_ACCOUNT_ID:-}" ]; then
+            echo "::warning::CLOUDFLARE_ACCOUNT_ID is not set; Workers, Pages, D1, KV and R2 tests will skip. It is 32 hexadecimal characters - any domain's Overview page in the API section, or Ctrl/Cmd+K then 'Copy account ID'. Not the account name, not a dashboard URL."
+          fi
+          if [ -z "${CLOUDFLARE_ZONE_ID:-}" ]; then
+            echo "::warning::CLOUDFLARE_ZONE_ID is not set; DNS and cache purge tests will skip. It is 32 hexadecimal characters - that domain's Overview page, in the API section next to Zone ID. The token also needs the zone in its Zone Resources."
+          fi
+          if [ "${CLOUDFLARE_ACCOUNT_ID:-}" != "" ] || [ "${CLOUDFLARE_ZONE_ID:-}" != "" ]; then
+            # Shape checking lives in the fixture (CFNet.TestKit.CredentialFormat), which reports a
+            # malformed value by name to the test output and to the run report this job summarises.
+            echo "Credential shapes are checked by the tests themselves; a wrong one is named in the summary."
+          fi
+
+          echo "Write operations: ${CLOUDFLARE_IT_ENABLE_WRITES}"
+
+          if [ -n "${CLOUDFLARE_IT_CASSETTE:-}" ]; then
+            echo "::notice::Recording this run into tests/cassettes/${CLOUDFLARE_IT_CASSETTE}.json. Credentials are redacted on the way in."
+          fi
+
+      - name: Verify the credentials against the live API
+        id: verify
+        if: steps.credentials.outputs.available == 'true'
+        shell: bash
+        run: |
+          set -o pipefail
+          PY=$(command -v python3 || command -v python || true)
+          if [ -z "$PY" ]; then echo "no python"; exit 0; fi
+
+          base="${CLOUDFLARE_BASE_ADDRESS:-https://api.cloudflare.com/client/v4}"
+          base="${base%/}"
+
+          # Describe the shapes first. Cloudflare answers both "this was pasted wrong" and "this token
+          # was revoked" with the same 1000 Invalid API Token, and shape is the half of that question a
+          # log can answer - without printing any part of a secret beyond its length and its kind.
+          "$PY" - <<'PY'
+          import os
+
+          known = (
+              ('cfut_', 'a user API token'),
+              ('cfat_', 'an account-owned API token'),
+              ('cfk_', 'a Global API Key'),
+          )
+
+          def describe(name, value):
+              if not value:
+                  print(f'::notice::{name} is not set.')
+                  return
+              trimmed = value.strip()
+              problems = []
+              if value != trimmed:
+                  problems.append('surrounding whitespace')
+              if len(trimmed) > 1 and trimmed[0] == trimmed[-1] and trimmed[0] in ('"', chr(39)):
+                  problems.append('surrounding quotes')
+              kind = next((label for prefix, label in known if trimmed.startswith(prefix)),
+                          'no recognised cfut_/cfat_/cfk_ prefix (a pre-2026 credential, or the wrong value)')
+              note = ' - PROBLEM: ' + ' and '.join(problems) if problems else ''
+              print(f'::notice::{name}: {len(trimmed)} characters, {kind}{note}.')
+
+          describe('CLOUDFLARE_API_TOKEN', os.environ.get('CLOUDFLARE_API_TOKEN'))
+          describe('CLOUDFLARE_GLOBAL_API_KEY', os.environ.get('CLOUDFLARE_GLOBAL_API_KEY'))
+
+          for name in ('CLOUDFLARE_ACCOUNT_ID', 'CLOUDFLARE_ZONE_ID'):
+              value = (os.environ.get(name) or '').strip()
+              hexish = len(value) == 32 and all(c in '0123456789abcdefABCDEF' for c in value)
+              verdict = 'a 32-character hexadecimal id' if hexish else \
+                  f'{len(value)} characters, which is NOT a 32-character hexadecimal id'
+              print(f'::notice::{name}: {verdict}.')
+          PY
+
+          # Then ask Cloudflare. An account-owned token (cfat_) is verified under the account, so both
+          # endpoints are tried and the answer says which accepted it - which also tells the suite
+          # whether the user-scoped verify endpoint can work with this token at all.
+          if [ -n "${CLOUDFLARE_API_TOKEN:-}" ]; then
+            auth=(-H "Authorization: Bearer ${CLOUDFLARE_API_TOKEN}")
+            user_url="$base/user/tokens/verify"
+          else
+            auth=(-H "X-Auth-Key: ${CLOUDFLARE_GLOBAL_API_KEY}" -H "X-Auth-Email: ${CLOUDFLARE_API_EMAIL}")
+            user_url="$base/user"
+          fi
+
+          curl --silent --show-error --max-time 30 --output "$RUNNER_TEMP/verify-user.json" \
+            "$user_url" "${auth[@]}" || true
+          if [ -n "${CLOUDFLARE_ACCOUNT_ID:-}" ]; then
+            curl --silent --show-error --max-time 30 --output "$RUNNER_TEMP/verify-account.json" \
+              "$base/accounts/${CLOUDFLARE_ACCOUNT_ID}/tokens/verify" "${auth[@]}" || true
+          fi
+
+          "$PY" - "$RUNNER_TEMP/verify-user.json" "$RUNNER_TEMP/verify-account.json" "$user_url" <<'PY'
+          import json, os, sys
+
+          user_body, account_body, user_url = sys.argv[1], sys.argv[2], sys.argv[3]
+
+          def read(path):
+              try:
+                  with open(path, encoding='utf-8') as handle:
+                      return json.load(handle)
+              except Exception:
+                  return None
+
+          def rendered(payload):
+              if payload is None:
+                  return 'no parsable response (was the endpoint reachable?)'
+              errors = payload.get('errors') or []
+              return ', '.join(f"{e.get('code')}: {e.get('message')}" for e in errors) or 'no error detail was returned'
+
+          user_payload = read(user_body)
+          account_payload = read(account_body) if os.path.exists(account_body) else None
+
+          if user_payload and user_payload.get('success'):
+              status = (user_payload.get('result') or {}).get('status')
+              suffix = f' (token status: {status})' if status else ''
+              print(f'::notice::Cloudflare accepted these credentials at {user_url}{suffix}.')
+              sys.exit(0)
+
+          if account_payload and account_payload.get('success'):
+              status = (account_payload.get('result') or {}).get('status')
+              suffix = f' (token status: {status})' if status else ''
+              print(f'::notice::Cloudflare accepted these credentials at the account-scoped verify endpoint{suffix}.')
+              print('::warning::This is an account-owned token, so GET /user/tokens/verify rejects it. The A_token_can_be_verified_directly test uses that endpoint and will fail; every other call in the suite is unaffected.')
+              sys.exit(0)
+
+          print('::error::Cloudflare rejected these credentials.')
+          print(f'::error::  {user_url} -> {rendered(user_payload)}')
+          if account_payload is not None:
+              print(f'::error::  accounts/{{account_id}}/tokens/verify -> {rendered(account_payload)}')
+          print('::error::Usual causes, most common first: the secret was saved with quotes or a trailing newline; the value is a token id, an account id or a dashboard URL rather than the secret; the token was rolled or revoked after it was saved; or it is account-owned (cfat_) and only the account-scoped endpoint accepts it.')
+          sys.exit(1)
+          PY
+
+      - name: Check what the credentials can actually reach
+        if: steps.credentials.outputs.available == 'true'
+        # A diagnostic must never be the reason the suite reports failure: if this step's own curl or
+        # python misbehaves, the tests still have to run and still have to be believed.
+        continue-on-error: true
+        shell: bash
+        run: |
+          set -o pipefail
+          base="${CLOUDFLARE_BASE_ADDRESS:-https://api.cloudflare.com/client/v4}"
+          base="${base%/}"
+
+          if [ -n "${CLOUDFLARE_API_TOKEN:-}" ]; then
+            auth=(-H "Authorization: Bearer ${CLOUDFLARE_API_TOKEN}")
+          else
+            auth=(-H "X-Auth-Key: ${CLOUDFLARE_GLOBAL_API_KEY}" -H "X-Auth-Email: ${CLOUDFLARE_API_EMAIL}")
+          fi
+
+          # One read-only call per product area. A token can be perfectly valid and still see nothing -
+          # that is the failure mode that produced a green run in which every zone-scoped test skipped -
+          # so each area is asked directly and named here, rather than the gap being inferred from the
+          # test summary afterwards.
+          probe() {
+            label="$1"
+            url="$2"
+            method="${3:-GET}"
+            body="${4:-}"
+            args=(--silent --show-error --max-time 30 --request "$method"
+                  --output "$RUNNER_TEMP/reach-$label.json" --write-out '%{http_code}' "$url" "${auth[@]}")
+            if [ -n "$body" ]; then
+              args+=(-H "Content-Type: application/json" --data "$body")
+            fi
+            code=$(curl "${args[@]}" || echo 000)
+            # A 5xx, or a curl that never got an answer, says Cloudflare's edge gave up rather than what these
+            # credentials can reach - and one endpoint here proves it: GET /radar/entities/asns/13335/as_set
+            # answers 503 with a body that is not JSON to this probe, run after run, while the library's own
+            # call to the same path reads 200 seconds later in the same run. So a probe that gets one asks
+            # once more and both answers are reported: this matrix is about reach, and a first attempt that
+            # failed is part of what the run saw.
+            case "$code" in
+              5?? | 000)
+                first="$code"
+                sleep 3
+                code=$(curl "${args[@]}" || echo 000)
+                echo "$first" > "$RUNNER_TEMP/reach-$label.retried"
+                ;;
+            esac
+            echo "$code" > "$RUNNER_TEMP/reach-$label.status"
+          }
+
+          probe zones "$base/zones?per_page=1"
+          # Neither an account nor a zone, and Cloudflare publishes no permission group for it - so this is
+          # the one probe that says whether the credentials are being sent the way Cloudflare expects without
+          # depending on any resource being in scope.
+          probe ips "$base/ips"
+          # Radar's reference data: no account and no zone in the path either, but unlike /ips Cloudflare's
+          # reference names a permission for these - 'User Details Read', a group nothing else this suite
+          # calls asks for. These probes are what settles whether a token needs it, and the notice this step
+          # prints lists every live group whose name mentions radar or user details, with the id a token URL
+          # would have to carry.
+          probe radar_locations "$base/radar/entities/locations?limit=1"
+          probe radar_asns "$base/radar/entities/asns?limit=1"
+          probe radar_geolocations "$base/radar/geolocations?limit=1"
+          probe radar_search "$base/radar/search/global?query=cloudflare&limit=1"
+          probe radar_annotations "$base/radar/annotations?limit=1"
+          probe radar_outages "$base/radar/annotations/outages?limit=1"
+          probe radar_datasets "$base/radar/datasets?limit=1"
+          # Two of radar's endpoints hang off one ASN rather than off the API root, and AS13335 is
+          # Cloudflare's own, so both have something to answer about whatever account this runs against.
+          probe radar_as_set "$base/radar/entities/asns/13335/as_set"
+          probe radar_botnet "$base/radar/entities/asns/botnet_threat_feed?limit=1"
+          # Radar's rankings: the domains Cloudflare sees the Internet using, the services behind them, and
+          # how both moved. The timeseries ones take Cloudflare's own dateRange grammar - a count of days or
+          # weeks, not a timestamp - and the domain one takes a domain in the path, so cloudflare.com is the
+          # one that answers the same whatever account this runs against.
+          probe radar_ranking_top "$base/radar/ranking/top?limit=1"
+          probe radar_ranking_timeseries "$base/radar/ranking/timeseries_groups?dateRange=1d&limit=1"
+          probe radar_ranking_domain "$base/radar/ranking/domain/cloudflare.com"
+          probe radar_is_categories "$base/radar/ranking/internet_services/categories?limit=1"
+          probe radar_is_top "$base/radar/ranking/internet_services/top?limit=1"
+          probe radar_is_timeseries "$base/radar/ranking/internet_services/timeseries_groups?dateRange=1d&limit=1"
+          # Radar's bot traffic: what Cloudflare sees that is not a person. The summaries and the grouped
+          # timeseries both take a dimension in the path - the value the answer is broken down by - so each
+          # probe names one, and the crawler pair is probed once for each of the two shapes it shares with
+          # the bots beside it. The read of a single bot, GET /radar/bots/{bot_slug}, is deliberately not
+          # probed: a probe needs a URL that answers the same whatever account this runs against, and any
+          # slug could be one radar has retired, which would put a 404 in the matrix that says nothing about
+          # reach. The live fact reads it with a slug the list just returned.
+          probe radar_bots "$base/radar/bots?limit=1"
+          # Two per group, not one: the first run of these probes asked for limitPerGroup=1 and every one of
+          # them answered 400 [2001] 'Too small: expected number to be >=2', while limit=1 on the rankings
+          # above reads fine. That is a minimum Cloudflare enforces on this parameter alone, so the library
+          # refuses it too rather than sending a request it knows will be turned down.
+          #
+          # The two summaries then answered a second thing when they were given a two: 400 [2001]
+          # 'limit_per_group is incompatible with BotsGroupingDimensions.BOT_KIND dimension', and the same for
+          # the crawlers' CLIENT_TYPE. So a per-group limit is refused outright for some dimensions and
+          # Cloudflare publishes no list of which, and both summary probes now ask without one - a probe is
+          # about reach, and this parameter is optional. The grouped pair keeps it, because BOT_CATEGORY and
+          # RESPONSE_STATUS_CATEGORY have both been seen accepting two.
+          probe radar_bots_summary "$base/radar/bots/summary/BOT_KIND?dateRange=1d"
+          probe radar_bots_timeseries "$base/radar/bots/timeseries?dateRange=1d&aggInterval=1d"
+          probe radar_bots_timeseries_groups \
+            "$base/radar/bots/timeseries_groups/BOT_CATEGORY?dateRange=1d&aggInterval=1d&limitPerGroup=2"
+          probe radar_crawlers_summary \
+            "$base/radar/bots/crawlers/summary/CLIENT_TYPE?dateRange=1d"
+          probe radar_crawlers_timeseries_groups \
+            "$base/radar/bots/crawlers/timeseries_groups/RESPONSE_STATUS_CATEGORY?dateRange=1d&aggInterval=1d&limitPerGroup=2"
+          probe radar_verified_bots_top "$base/radar/verified_bots/top/bots?limit=1&dateRange=1d"
+          probe radar_verified_bot_categories "$base/radar/verified_bots/top/categories?limit=1&dateRange=1d"
+
+          if [ -n "${CLOUDFLARE_ZONE_ID:-}" ]; then
+            zone="$base/zones/${CLOUDFLARE_ZONE_ID}"
+            probe zone "$zone"
+            probe dns "$zone/dns_records?per_page=1"
+            probe dnssec "$zone/dnssec"
+            probe dnssec_zsk "$zone/dnssec/zsk"
+            probe settings "$zone/settings"
+            # Published under the zone's cache segment even though it is about the TLS handshake with the
+            # origin, and documented by Cloudflare as a no-op since automatic key exchange replaced the
+            # control it used to hold. A read is harmless either way.
+            probe origin_pqe "$zone/cache/origin_post_quantum_encryption"
+            probe ssl "$zone/ssl/certificate_packs?per_page=1"
+            probe custom_hostnames "$zone/custom_hostnames?per_page=1"
+            probe origin_tls "$zone/origin_tls_client_auth/settings"
+            # Origin CA certificates are the one resource here whose path carries neither a zone nor an
+            # account: /certificates at the API root, with zone_id as a filter. The account-prefixed path the
+            # resource's name suggests answers 404 [10404] "No route for that URI", which a live run found, so
+            # a 404 here means the path has moved again rather than that anything is missing.
+            probe origin_ca "$base/certificates?zone_id=${CLOUDFLARE_ZONE_ID}&per_page=5"
+            # An empty body is refused before anything is purged, so this reads the permission without
+            # touching the cache: 403 means Cache Purge is missing, a validation error means it is there.
+            probe cache_purge "$zone/purge_cache" POST '{}'
+            # The endpoints below are wrapped in the library but their response shapes are not published
+            # anywhere this workflow can read, so the probe records what Cloudflare actually sends. That is
+            # what stops the next model from being a guess.
+            probe dns_export "$zone/dns_records/export"
+            probe dns_scan_list "$zone/dns_records/scan/review?per_page=1"
+            # Same empty-body trick as cache purge: an empty batch changes nothing, and 400 rather than 403
+            # is what proves DNS Write is there. The import endpoint is deliberately NOT probed - a POST
+            # there carries a zone file and a flag that can delete existing records first, and no empty body
+            # is worth that risk. Import needs DNS Write too, so this probe already covers it.
+            probe dns_batch "$zone/dns_records/batch" POST '{}'
+            # The zone-scoped groups the next modules need. Listing rulesets covers every phase at once,
+            # so a 403 here is ambiguous between them and the row says so.
+            probe zone_rulesets "$zone/rulesets?per_page=1"
+            probe waiting_rooms "$zone/waiting_rooms?per_page=1"
+            # Routes are the zone-scoped half of the Workers API, so this belongs here rather than with the
+            # account-scoped Workers probes below: a token holding Workers Routes Read but no Zone Resources
+            # entry for this zone answers 10007 here, and that is the failure this probe exists to name.
+            probe workers_routes "$zone/workers/routes"
+            probe pagerules "$zone/pagerules"
+            # The deprecated half of the firewall API: a zone's saved filters, which a firewall rule points
+            # at. Cloudflare still serves the list, so a 403 here says Firewall Services is missing while a
+            # 404 would say the deprecation has reached this account and the path is gone.
+            probe filters "$zone/filters?per_page=1"
+          fi
+
+          if [ -n "${CLOUDFLARE_ACCOUNT_ID:-}" ]; then
+            account="$base/accounts/${CLOUDFLARE_ACCOUNT_ID}"
+            probe account "$account"
+            # Every permission group this token could be given, with the key the token-creation URL wants.
+            # Guessing those keys has already produced two wrong URLs (Pages is 'page', R2 is 'workers_r2'),
+            # so the list comes from the API instead.
+            probe permission_groups "$account/tokens/permission_groups"
+            probe workers_scripts "$account/workers/scripts?per_page=1"
+            probe workers_domains "$account/workers/domains"
+            # Durable Object namespaces are read-only - a namespace appears when a script that exports the
+            # class is deployed - and Cloudflare lists Workers Scripts Read among the permissions this
+            # endpoint accepts, so a 403 here beside a readable workers_scripts probe would be a surprise.
+            probe do_namespaces "$account/workers/durable_objects/namespaces?per_page=1"
+            # The static asset upload session is a POST whose only path argument is a script name, so it is
+            # probed against a name nothing owns: a 404 says the permission is there and the script is not,
+            # while a 403 says the token lacks Workers Scripts write. The asset bytes go up under the JWT this
+            # call answers with rather than under the API token, so the live test covers them instead.
+            probe workers_assets "$account/workers/scripts/cfnet-probe-does-not-exist/assets-upload-session" POST '{"manifest":{"/probe.txt":{"hash":"00000000000000000000000000000000","size":5}}}'
+            probe pages "$account/pages/projects"
+            probe d1 "$account/d1/database?per_page=1"
+            probe kv "$account/storage/kv/namespaces?per_page=1"
+            probe r2 "$account/r2/buckets?per_page=1"
+            # The account-scoped groups the next modules need: Bulk Redirects is the first three, and the
+            # rest are the modules behind them. All read-only, and per_page=1 where Cloudflare takes it,
+            # because GET rulesets and GET ai/models/search answer with everything the account can see.
+            probe rulesets "$account/rulesets?per_page=1"
+            probe rule_lists "$account/rules/lists?per_page=1"
+            probe turnstile "$account/challenges/widgets?per_page=1"
+            # IP Access rules carry a permission group of their own - Account Firewall Access Rules, not
+            # Firewall Services - so this probe is the one that says whether that group is there. The same
+            # resource is served from a zone path too, and one answer covers both.
+            probe access_rules "$account/firewall/access_rules/rules?per_page=1"
+            # The account-scoped SSL group, which is a different id from the zone-scoped one that covers
+            # certificate packs, Universal SSL and the Origin CA certificates above: a 403 here beside a
+            # readable ssl probe is that distinction and not a broken token.
+            probe mtls_certificates "$account/mtls_certificates"
+            probe lb_monitors "$account/load_balancers/monitors"
+            probe lb_pools "$account/load_balancers/pools"
+            probe workers_ai "$account/ai/models/search?per_page=1"
+            probe tokens "$account/tokens?per_page=1"
+          fi
+
+          PY=$(command -v python3 || command -v python || true)
+          if [ -z "$PY" ]; then echo "no python"; exit 0; fi
+          "$PY" - <<'PY'
+          import json, os, urllib.parse
+
+          temp = os.environ.get('RUNNER_TEMP', '.')
+
+          # label -> (endpoint, dashboard permission, template key, template type, entitlement note).
+          # The keys are Cloudflare's own, and two do not match their dashboard labels: Pages is 'page'
+          # and R2 is 'workers_r2'. The note carries the reasons a 403 here is not the token's fault.
+          AREAS = [
+              ('zones', 'GET /zones', 'Zone - Read', 'zone', 'read', ''),
+              ('zone', 'GET /zones/{zone_id}', 'Zone - Read', 'zone', 'read', ''),
+              ('dns', 'GET /zones/{zone_id}/dns_records', 'DNS - Read', 'dns', 'read', ''),
+              ('dnssec', 'GET /zones/{zone_id}/dnssec', 'DNS - Read', 'dns', 'read',
+               'an unsigned zone still answers 200 here, with status disabled'),
+              ('dnssec_zsk', 'GET /zones/{zone_id}/dnssec/zsk', 'DNS - Read', 'dns', 'read',
+               'an unsigned zone answers 200 with an empty list, so empty is not a failure'),
+              ('settings', 'GET /zones/{zone_id}/settings', 'Zone Settings - Read', 'zone_settings', 'read',
+               'which settings appear depends on the plan, so a short list is normal'),
+              # GET /zones/{zone_id}/url_normalization is deliberately NOT probed. Cloudflare publishes no
+              # group named for it, and the list its reference does publish - two dozen rules-family groups,
+              # 'at least one required' - is over-broad: a live run was refused 403 [10000] by a token that
+              # holds Account Rulesets Read, which is on that list. A probe whose permission cannot be named
+              # would report a missing permission nobody can go and add, so the endpoint stays wrapped and
+              # offline-tested, and its live fact reports the refusal it actually saw.
+              ('ssl', 'GET /zones/{zone_id}/ssl/certificate_packs', 'SSL and Certificates - Read',
+               'ssl_and_certificates', 'read', ''),
+              ('custom_hostnames', 'GET /zones/{zone_id}/custom_hostnames', 'SSL and Certificates - Read',
+               'ssl_and_certificates', 'read',
+               'SSL for SaaS is a paid feature that has to be enabled on the zone; a 403 here while the rest '
+               'of this permission group reads fine is that, not the token'),
+              ('origin_tls', 'GET /zones/{zone_id}/origin_tls_client_auth/settings',
+               'SSL and Certificates - Read', 'ssl_and_certificates', 'read', ''),
+              ('origin_pqe', 'GET /zones/{zone_id}/cache/origin_post_quantum_encryption',
+               'SSL and Certificates - Read', 'ssl_and_certificates', 'read',
+               'the setting is about TLS but its path sits under the zone cache segment; a live run '
+               "confirmed the zone's SSL and Certificates group reads it"),
+              ('cache_purge', 'POST /zones/{zone_id}/purge_cache', 'Cache Purge - Purge', 'cache', 'purge',
+               'probed with an empty body that Cloudflare refuses, so nothing is purged either way'),
+              ('dns_export', 'GET /zones/{zone_id}/dns_records/export', 'DNS - Read', 'dns', 'read',
+               'the BIND zone file; the shape recorded here is the one the library has to match'),
+              ('dns_scan_list', 'GET /zones/{zone_id}/dns_records/scan/review', 'DNS - Read', 'dns', 'read',
+               'a zone that has never been scanned answers with an empty list rather than an error'),
+              ('dns_batch', 'POST /zones/{zone_id}/dns_records/batch', 'DNS - Write', 'dns', 'edit',
+               'probed with an empty batch, which changes no records either way'),
+              ('zone_rulesets', 'GET /zones/{zone_id}/rulesets', 'Dynamic URL Redirects - Read',
+               'd8e12db741544d1586ec1d6f5d3c7786', 'read',
+               'one list covers every ruleset phase, so a 403 here is this group or Firewall Services and '
+               'the two cannot be told apart from outside'),
+              ('waiting_rooms', 'GET /zones/{zone_id}/waiting_rooms', 'Waiting Rooms - Read',
+               'cab5202d07ef47beae788e6bc95cb6fe', 'read', ''),
+              ('account', 'GET /accounts/{account_id}', 'Account Settings - Read', 'account_settings', 'read', ''),
+              ('permission_groups', 'GET /accounts/{account_id}/tokens/permission_groups',
+               'Account API Tokens - Read', 'account_api_tokens', 'read',
+               'refused with 9109 for a token holding only Account API Tokens read; one holding write as '
+               'well answers with the whole catalogue, which is what the id cross-check below reads'),
+              ('workers_scripts', 'GET /accounts/{account_id}/workers/scripts', 'Workers Scripts - Read',
+               'workers_scripts', 'read', ''),
+              ('do_namespaces', 'GET /accounts/{account_id}/workers/durable_objects/namespaces',
+               'Workers Scripts - Read', 'workers_scripts', 'read',
+               'a live run confirmed the group: this endpoint reads with the one that lists scripts. An '
+               'account with no Durable Object class deployed answers 200 with an empty list, so empty is '
+               'not a refusal'),
+              ('workers_domains', 'GET /accounts/{account_id}/workers/domains', 'Workers Scripts - Read',
+               'workers_scripts', 'read',
+               'workers domains only exist once the account has a workers.dev subdomain or a custom domain, '
+               'so a refusal here while scripts read fine is usually that rather than the token'),
+              ('workers_assets',
+               'POST /accounts/{account_id}/workers/scripts/{script_name}/assets-upload-session',
+               'Workers Scripts - Write', 'workers_scripts', 'edit',
+               'probed against a script name nothing owns, and a live run answered 200 with an object of two '
+               'fields anyway - buckets and jwt - so neither a 404 nor a refusal is the expected answer; the '
+               'two upload endpoints it hands a JWT to take no API credentials at all and are covered by the '
+               'live test'),
+              ('pages', 'GET /accounts/{account_id}/pages/projects', 'Pages - Read', 'page', 'read',
+               'this endpoint refuses page and per_page with 8000024 on some accounts, which the library '
+               'retries without'),
+              ('d1', 'GET /accounts/{account_id}/d1/database', 'D1 - Read', 'd1', 'read', ''),
+              ('kv', 'GET /accounts/{account_id}/storage/kv/namespaces', 'Workers KV Storage - Read',
+               'workers_kv_storage', 'read', ''),
+              ('r2', 'GET /accounts/{account_id}/r2/buckets', 'Workers R2 Storage - Read', 'workers_r2', 'read',
+               'R2 also has to be enabled on the account, under Storage and Databases, separately from the token'),
+              # Everything below has no short key, so the template key column carries the permission group
+              # id: the same value the token URL is built from, and the one the Create token endpoint takes.
+              ('rulesets', 'GET /accounts/{account_id}/rulesets', 'Account Rulesets - Read',
+               'fb39996ee9044d2a8725921e02744b39', 'read', ''),
+              ('rule_lists', 'GET /accounts/{account_id}/rules/lists', 'Account Rule Lists - Read',
+               '4f1071168de8466e9808de86febfc516', 'read',
+               'the dashboard calls this Filter Lists; Bulk Redirects needs it together with Account '
+               'Rulesets and Mass URL Redirects'),
+              ('turnstile', 'GET /accounts/{account_id}/challenges/widgets', 'Turnstile Sites - Read',
+               '5d78fd7895974fd0bdbbbb079482721b', 'read', ''),
+              ('pagerules', 'GET /zones/{zone_id}/pagerules', 'Page Rules - Read',
+               'b415b70a4fd1412886f164451f20405c', 'read',
+               'refused with 400 [1011] "Page Rules endpoint does not support account owned tokens" for a '
+               'cfat_ token, the list as much as the writes, so a 400 here is the token kind and not the '
+               'permission; a user-owned cfut_ token or the global key is what answers it'),
+              ('filters', 'GET /zones/{zone_id}/filters', 'Firewall Services - Read',
+               '4ec32dfcb35641c5bb32d5ef1ab963b4', 'read',
+               'the saved filters a firewall rule points at. A live run answered 410 Gone [10020] '
+               '"filters.api.deprecated. This API has been deprecated. Please use the Rulesets API instead", '
+               'so for this account the deprecation has arrived and no token reaches it - a 200 with an empty '
+               'list is what an account whose rules were never migrated answers'),
+              ('access_rules', 'GET /accounts/{account_id}/firewall/access_rules/rules',
+               'Account Firewall Access Rules - Read', 'de7a688cc47d43bd9ea700b467a09c96', 'read',
+               'a group of its own: Firewall Services does not cover IP Access rules, so a token that reads '
+               'the filters above can still be refused here, and this row is what names that refusal'),
+              ('mtls_certificates', 'GET /accounts/{account_id}/mtls_certificates',
+               'Account: SSL and Certificates - Read', 'a7a233f9604845c787d4c8c39ac09c21', 'read',
+               'not the zone-scoped group of the same name: Cloudflare publishes two, and this one describes '
+               'itself as "SSL MTLS certificates or Certificate Store", so a token holding the zone group is '
+               'refused here with a 403 that reads like a missing permission'),
+              ('ips', 'GET /ips', 'none - this endpoint is public', 'none', 'read',
+               'no account and no zone in the path and no permission group published for it, so a 200 says '
+               'the credentials are being sent the way Cloudflare expects and nothing more'),
+              ('radar_locations', 'GET /radar/entities/locations', 'Radar - Read',
+               'dfe525ec7b07472c827d8d009178b2ac', 'read',
+               "Cloudflare's reference names 'User Details Read' for the radar endpoints - a group that "
+               'appears nowhere in its catalogue - while the catalogue itself carries Radar Read, which the '
+               'reference does not mention. A token holding neither reads all four of these fine, so the '
+               'reference data needs no permission at all; the id is here because the timeseries endpoints '
+               'behind it are the ones that will, and so a refusal says which group is missing'),
+              ('radar_asns', 'GET /radar/entities/asns', 'Radar - Read',
+               'dfe525ec7b07472c827d8d009178b2ac', 'read',
+               'radar pages with offset and limit and answers no result_info, so an empty list is not a '
+               'refusal and there is no total to read'),
+              ('radar_geolocations', 'GET /radar/geolocations', 'Radar - Read',
+               'dfe525ec7b07472c827d8d009178b2ac', 'read',
+               'the geolocation tree - continents, countries and their divisions, each carrying the place '
+               'above it'),
+              ('radar_search', 'GET /radar/search/global', 'Radar - Read',
+               'dfe525ec7b07472c827d8d009178b2ac', 'read',
+               'probed with query=cloudflare, the one parameter Cloudflare requires; no hits would still be '
+               'a 200. The single-geolocation read is not probed: it wants the geoId an answer carries, and '
+               'asking by code answers 400 [2001] whatever the token holds'),
+              ('radar_annotations', 'GET /radar/annotations', 'Radar - Read',
+               'dfe525ec7b07472c827d8d009178b2ac', 'read',
+               'the outages and anomalies Cloudflare notices in its own data; an empty week would still be a '
+               '200, so what this row settles is the permission and not the payload'),
+              ('radar_outages', 'GET /radar/annotations/outages', 'Radar - Read',
+               'dfe525ec7b07472c827d8d009178b2ac', 'read',
+               'the annotation list narrowed to outages, answering the same shape under a different path'),
+              ('radar_datasets', 'GET /radar/datasets', 'Radar - Read',
+               'dfe525ec7b07472c827d8d009178b2ac', 'read',
+               'the published datasets; the download call beside it is not probed, because it is a POST whose '
+               'permission cannot differ from the read that names the id it takes'),
+              ('radar_as_set', 'GET /radar/entities/asns/13335/as_set', 'Radar - Read',
+               'dfe525ec7b07472c827d8d009178b2ac', 'read',
+               "probed against Cloudflare's own ASN, which is the one number that answers the same everywhere; "
+               'this endpoint publishes its fields in snake_case while its neighbours use camelCase. It also '
+               'answers 503 with a body that is not JSON to this probe, run after run, while the library '
+               'reads the same path 200 in the same run - an expensive AS-SET walk that Cloudflare\'s edge '
+               'gives up on, which is why a probe asks twice before it is believed'),
+              ('radar_botnet', 'GET /radar/entities/asns/botnet_threat_feed', 'Radar - Read',
+               'dfe525ec7b07472c827d8d009178b2ac', 'read',
+               'the ranking of ASNs by botnet activity; it answers a meta object beside the list, so the '
+               'total it carries is the only total radar offers anywhere'),
+              ('radar_ranking_top', 'GET /radar/ranking/top', 'Radar - Read',
+               'dfe525ec7b07472c827d8d009178b2ac', 'read',
+               'the domains Cloudflare ranks; it answers one series per date or name asked for and publishes '
+               'only the first, so one top_0 in a 200 is the whole published shape'),
+              ('radar_ranking_timeseries', 'GET /radar/ranking/timeseries_groups', 'Radar - Read',
+               'dfe525ec7b07472c827d8d009178b2ac', 'read',
+               "probed with Cloudflare's own dateRange grammar, a count of days or weeks rather than a "
+               'timestamp; a period with nothing in it would still be a 200'),
+              ('radar_ranking_domain', 'GET /radar/ranking/domain/cloudflare.com', 'Radar - Read',
+               'dfe525ec7b07472c827d8d009178b2ac', 'read',
+               "probed against Cloudflare's own domain, which is ranked whatever the account; a domain "
+               'outside the buckets answers 200 with no rank in it'),
+              ('radar_is_categories', 'GET /radar/ranking/internet_services/categories', 'Radar - Read',
+               'dfe525ec7b07472c827d8d009178b2ac', 'read',
+               'the category names the two internet-service rankings are filtered by'),
+              ('radar_is_top', 'GET /radar/ranking/internet_services/top', 'Radar - Read',
+               'dfe525ec7b07472c827d8d009178b2ac', 'read',
+               'the services behind the traffic rather than the domains in it, labelled with the category '
+               'each series is for'),
+              ('radar_is_timeseries', 'GET /radar/ranking/internet_services/timeseries_groups',
+               'Radar - Read', 'dfe525ec7b07472c827d8d009178b2ac', 'read',
+               'the same timeseries shape as the domain ranking, which is why one model serves both'),
+              ('radar_bots', 'GET /radar/bots', 'Radar - Read',
+               'dfe525ec7b07472c827d8d009178b2ac', 'read',
+               "Cloudflare's catalogue of the bots it knows; it pages with offset and limit and answers no "
+               'result_info, so a short list is the end of it rather than a refusal'),
+              ('radar_bots_summary', 'GET /radar/bots/summary/BOT_KIND', 'Radar - Read',
+               'dfe525ec7b07472c827d8d009178b2ac', 'read',
+               'one number per value of the dimension in the path, answered as a dictionary under summary_0 '
+               'rather than as a list this library would have to name; probed without a limitPerGroup, '
+               'because BOT_KIND is one of the dimensions Cloudflare refuses that parameter for with 400 '
+               '[2001] and publishes no list of which are which'),
+              ('radar_bots_timeseries', 'GET /radar/bots/timeseries', 'Radar - Read',
+               'dfe525ec7b07472c827d8d009178b2ac', 'read',
+               'asked for an interval of 1d, which the answer reports as ONE_DAY; its groups are named after '
+               'whatever was filtered by, so none of them is published and all of them stay readable by name'),
+              ('radar_bots_timeseries_groups', 'GET /radar/bots/timeseries_groups/BOT_CATEGORY',
+               'Radar - Read', 'dfe525ec7b07472c827d8d009178b2ac', 'read',
+               'the same numbered serie_0 shape the rankings answer, which is why one model serves both; '
+               'BOT_CATEGORY takes a limitPerGroup, whose smallest accepted value is two'),
+              ('radar_crawlers_summary', 'GET /radar/bots/crawlers/summary/CLIENT_TYPE', 'Radar - Read',
+               'dfe525ec7b07472c827d8d009178b2ac', 'read',
+               'the web-crawler half of the same summary shape, filtered by the client type that asked; also '
+               'probed without a limitPerGroup, which CLIENT_TYPE refuses the way BOT_KIND does'),
+              ('radar_crawlers_timeseries_groups',
+               'GET /radar/bots/crawlers/timeseries_groups/RESPONSE_STATUS_CATEGORY', 'Radar - Read',
+               'dfe525ec7b07472c827d8d009178b2ac', 'read',
+               'the one radar endpoint that lets a caller ask for a normalization, and it accepts three of '
+               'the eight it reports; RESPONSE_STATUS_CATEGORY takes two per group, the smallest number '
+               'Cloudflare accepts'),
+              ('radar_verified_bots_top', 'GET /radar/verified_bots/top/bots', 'Radar - Read',
+               'dfe525ec7b07472c827d8d009178b2ac', 'read',
+               'the verified bots ranked by the share of traffic they accounted for; the share arrives as a '
+               'string and stays one'),
+              ('radar_verified_bot_categories', 'GET /radar/verified_bots/top/categories', 'Radar - Read',
+               'dfe525ec7b07472c827d8d009178b2ac', 'read',
+               'the same ranking rolled up by category, and the same nine parameters as the one beside it'),
+              ('workers_routes', 'GET /zones/{zone_id}/workers/routes', 'Workers Routes - Read',
+               '2072033d694d415a936eaeb94e6405b8', 'read',
+               'a zone with no routes answers 200 and an empty list; this one is zone-scoped, so it needs '
+               'CLOUDFLARE_ZONE_ID to name a zone inside the Zone Resources the token was given'),
+              ('lb_monitors', 'GET /accounts/{account_id}/load_balancers/monitors',
+               'Load Balancing: Monitors and Pools - Read', '9d24387c6e8544e2bc4024a03991339f', 'read', ''),
+              ('lb_pools', 'GET /accounts/{account_id}/load_balancers/pools',
+               'Load Balancing: Monitors and Pools - Read', '9d24387c6e8544e2bc4024a03991339f', 'read', ''),
+              ('workers_ai', 'GET /accounts/{account_id}/ai/models/search', 'Workers AI - Read',
+               'a92d2450e05d4e7bb7d0a64968f83d11', 'read', ''),
+              ('origin_ca', 'GET /certificates?zone_id=…', 'SSL and Certificates - Read',
+               'ssl_and_certificates', 'read',
+               'a root-level path with the zone as a filter, and one Cloudflare publishes no permission group '
+               'of its own for: a 200 with an empty list means the group reaches it and the zone has no origin '
+               'certificates, a 403 beside a readable ssl probe says it does not, and a 404 [10404] means the '
+               'path has moved - which the account-prefixed one this resource is named after already has'),
+              ('tokens', 'GET /accounts/{account_id}/tokens', 'Account API Tokens - Read',
+               'account_api_tokens', 'read',
+               'tokens/permission_groups was refused with 9109 while a token held only Read, so listing the '
+               'tokens themselves is the plainer answer to whether this group is there'),
+          ]
+
+          WRITE_LEVELS = {
+              'zone': 'edit', 'dns': 'edit', 'zone_settings': 'edit', 'ssl_and_certificates': 'edit',
+              'workers_scripts': 'edit', 'page': 'edit', 'd1': 'edit', 'workers_kv_storage': 'edit',
+              'workers_r2': 'edit', 'cache': 'purge',
+          }
+
+          # Probes that send a body Cloudflare is expected to refuse, so a validation error proves the
+          # permission is there without changing anything.
+          EMPTY_BODY_PROBES = {'cache_purge', 'dns_batch'}
+
+          def read(label):
+              status_file = os.path.join(temp, f'reach-{label}.status')
+              if not os.path.exists(status_file):
+                  return None, None
+              with open(status_file, encoding='utf-8') as handle:
+                  status = handle.read().strip()
+              try:
+                  with open(os.path.join(temp, f'reach-{label}.json'), encoding='utf-8') as handle:
+                      return status, json.load(handle)
+              except Exception:
+                  return status, None
+
+          def first_attempt(label):
+              # The code a probe got before it asked again, or None when one ask was enough.
+              path = os.path.join(temp, f'reach-{label}.retried')
+              if not os.path.exists(path):
+                  return None
+              with open(path, encoding='utf-8') as handle:
+                  return handle.read().strip()
+
+          def shape(payload):
+              # A 200 is not the same as an answer: this is what distinguishes "readable" from "readable
+              # and empty", which is the difference that a status code alone cannot show.
+              if payload is None:
+                  return 'unparsable body'
+              if payload.get('success') is False:
+                  errors = payload.get('errors') or []
+                  return 'success=false ' + '; '.join(
+                      f"{e.get('code')}: {e.get('message')}" for e in errors)[:120]
+              if 'result' not in payload:
+                  return 'no result field'
+              result = payload['result']
+              if result is None:
+                  return 'result is NULL'
+              if isinstance(result, list):
+                  return f'{len(result)} item(s)' + ('' if result else ' - EMPTY')
+              if isinstance(result, dict):
+                  return f'object, {len(result)} field(s)'
+              if isinstance(result, str):
+                  return f'string, {len(result)} char(s)'
+              return type(result).__name__
+
+          def detail(payload):
+              if not payload:
+                  return ''
+              return '; '.join(f"{e.get('code')}: {e.get('message')}"
+                               for e in (payload.get('errors') or []))[:160]
+
+          answers = {label: read(label) for label, *_ in AREAS}
+
+          def answered(status):
+              # Anything 2xx counts: GET /zones/{zone_id}/origin_tls_client_auth/settings answers 202
+              # Accepted on a live zone, and treating that as anything other than "readable" would report
+              # a permission that is there as one that is not.
+              return bool(status) and status.startswith('2')
+
+          # Granted as (key, type) pairs, not keys alone: DNS Read being there says nothing about DNS
+          # Write, and treating a 403 on the batch probe as "the group reads fine elsewhere" would send
+          # somebody hunting for a paid feature instead of adding a permission.
+          granted = {(key, ptype) for label, _, _, key, ptype, _ in AREAS
+                     if answered(answers[label][0])}
+
+          rows = []
+          missing = []
+          entitlement = []
+          scope = []
+          compact = []
+
+          for label, endpoint, group, key, ptype, note in AREAS:
+              status, payload = answers[label]
+              if status is None:
+                  continue
+              form = shape(payload)
+              again = first_attempt(label)
+              compact.append(f'{label}={status}[{form}]' + (f' (after {again})' if again else ''))
+
+              if label in EMPTY_BODY_PROBES and not answered(status) and status not in ('403', '404'):
+                  verdict = 'permission present - the empty body was refused, nothing was purged'
+              elif answered(status):
+                  verdict = f'readable ({form})'
+                  if again:
+                      verdict += (f' - the first attempt answered {again}, so Cloudflare\'s edge gave up once '
+                                  'and the credentials are not what changed')
+              elif status == '403':
+                  refused = detail(payload) or 'no error detail'
+                  if label == 'zone':
+                      # The list probe can answer 200 with nothing in it while this one is refused, and
+                      # calling that a feature limit would send somebody hunting through paid add-ons
+                      # instead of the token's Zone Resources.
+                      verdict = ("FORBIDDEN - this zone is outside the token's Zone Resources, or "
+                                 f'CLOUDFLARE_ZONE_ID is not a zone in this account ({refused})')
+                      scope.append(endpoint)
+                  elif (key, ptype) in granted:
+                      verdict = 'FORBIDDEN, but the same permission group read fine elsewhere - ' + (
+                          note or 'a feature or entitlement limit rather than a missing permission')
+                      entitlement.append((endpoint, group, note))
+                  elif label == 'r2':
+                      # R2 has to be enabled on the account before any token can read it, so a 403 here is
+                      # reported separately rather than as a permission to add.
+                      verdict = f'FORBIDDEN - {refused}. ' + note
+                  else:
+                      verdict = f'FORBIDDEN - needs {group} ({refused})' + (f'. {note}' if note else '')
+                      missing.append((group, key, ptype))
+              elif status == '404':
+                  verdict = ('not found - a wrong id or an absent resource, not a permission' +
+                             (f'. {note}' if note else ''))
+                  if label == 'zone':
+                      scope.append(endpoint)
+              elif status == '410':
+                  # Gone is Cloudflare saying the endpoint has been retired, not that the token is short of
+                  # something: the filters API answers 410 [10020] filters.api.deprecated and points at the
+                  # Rulesets API. Listing it as a missing permission would send somebody hunting for a group
+                  # that changes nothing.
+                  verdict = ('GONE - Cloudflare has retired this endpoint' + (f'. {note}' if note else ''))
+                  entitlement.append((endpoint, group, note))
+              else:
+                  verdict = f'HTTP {status} ' + (detail(payload) or form)
+                  if again:
+                      verdict += f', asked twice - the first attempt answered {again}'
+                  else:
+                      verdict += '. Cloudflare\'s edge gave up rather than refusing: a 5xx is not a verdict ' \
+                          'about these credentials, and the library\'s own call to some of these paths reads ' \
+                          'fine in the same run'
+              rows.append((endpoint, group, status, verdict, note))
+
+          # A notice that is cut short loses exactly the newest rows - the ones a run was pushed to see -
+          # so the dense lists below go out in whole-token chunks rather than as one line sliced at a
+          # character limit. Annotations are also the only part of a run readable through the API without
+          # downloading the job log, which is why these lists are printed at all.
+          def chunk(tokens, limit=1400):
+              parts, current = [], ''
+              for token in tokens:
+                  if current and len(current) + len(token) + 1 > limit:
+                      parts.append(current)
+                      current = ''
+                  current = f'{current} {token}'.strip()
+              if current:
+                  parts.append(current)
+              return parts
+
+          lines = ['### What these credentials can reach', '',
+                   '| Endpoint | Permission it needs | HTTP | Verdict |', '| --- | --- | ---: | --- |']
+          for endpoint, group, status, verdict, note in rows:
+              lines.append(f'| `{endpoint}` | {group} | {status} | {verdict} |')
+          lines.append('')
+
+          zones_status, zones_payload = answers['zones']
+          empty_zone_list = answered(zones_status) and not ((zones_payload or {}).get('result') or [])
+          if empty_zone_list:
+              lines += [
+                  '**`GET /zones` succeeded but returned no zones.** The token authenticates and can see '
+                  'nothing zone-scoped, so DNS records, DNSSEC, zone settings, SSL, custom hostnames, origin '
+                  'TLS client auth and cache purge will all skip. Edit the token and, under **Zone '
+                  'Resources**, include the zone in `CLOUDFLARE_ZONE_ID` (or *All zones*) - permissions alone '
+                  'are not enough, the zone has to be in scope.', '']
+
+          zone_status, zone_payload = answers['zone']
+          null_zone_result = answered(zone_status) and (zone_payload or {}).get('result') is None
+          if null_zone_result:
+              lines += [
+                  '**`GET /zones/{zone_id}` answered 200 with a null result**, which the library reports as '
+                  '`null` exactly as it does a 403 or a 404. Cloudflare does this for a zone outside the '
+                  'token\'s Zone Resources as well as for one that does not exist, so check the id and the '
+                  'token scope rather than the client.', '']
+
+          if scope:
+              lines += ['**The configured zone was refused.** `CLOUDFLARE_ZONE_ID` is either outside the '
+                        "token's **Zone Resources** or is not a zone in the account named by "
+                        '`CLOUDFLARE_ACCOUNT_ID`. Cloudflare answers 403 for both and does not distinguish '
+                        'them, and it also answers 200 with a null result for some out-of-scope zones, which '
+                        'the library reports as `null` the same way it reports a 404.', '']
+
+          if missing:
+              wanted = []
+              for entry in missing:
+                  if entry not in wanted:
+                      wanted.append(entry)
+              lines += ['**Missing permissions:** ' +
+                        ', '.join(f'{group} (`{{"key":"{key}","type":"{ptype}"}}`)'
+                                  for group, key, ptype in wanted), '']
+          if entitlement:
+              lines += ['**Refused but not a permission problem:**']
+              lines += [f'- `{endpoint}` ({group}) - {note}' for endpoint, group, note in entitlement]
+              lines.append('')
+
+          groups = []
+          pg_status, pg_payload = answers['permission_groups']
+          if answered(pg_status) and isinstance((pg_payload or {}).get('result'), list):
+              groups = pg_payload['result']
+
+          if groups:
+              wanted = ('ruleset', 'redirect', 'list', 'filter', 'firewall', 'waf', 'rate limit',
+                        'radar', 'user details')
+              interesting = [g for g in groups
+                             if any(word in json.dumps(g).lower() for word in wanted)]
+              lines += ['#### Permission groups this account can grant', '',
+                        f'{len(groups)} groups in total. These are the ones that matter for the endpoints '
+                        'still to be wrapped - the WAF\'s custom rules and rate limits, lockdowns and user '
+                        'agent rules, and whatever the firewall group names below turns out to be - and '
+                        'the `id` or key shown here is what a `permissionGroupKeys` URL has to carry:', '',
+                        '```json', json.dumps(interesting, indent=1)[:7000], '```', '',
+                        '<details><summary>All ' + str(len(groups)) + ' groups</summary>', '',
+                        '```json', json.dumps(groups)[:60000], '```', '', '</details>', '']
+              # Ids and names only: the full objects carry descriptions and categories that fill a notice
+              # before the group this run is actually looking for ever reaches it.
+              brief = [f'{g.get("name")}: {g.get("id")}' for g in interesting]
+              pieces = chunk(brief)
+              for index, piece in enumerate(pieces, start=1):
+                  suffix = f' ({index}/{len(pieces)})' if len(pieces) > 1 else ''
+                  print(f'::notice::Permission groups for the next batch{suffix}: {piece}')
+
+          def encode(permissions):
+              return urllib.parse.quote(
+                  json.dumps([{'key': key, 'type': ptype} for key, ptype in permissions],
+                             separators=(',', ':')), safe='')
+
+          # Every permission group this suite wants, now or next, by permission group id.
+          #
+          # Ids are the reliable form for an account token URL: Cloudflare documents that an id names
+          # exactly one group, that the type beside it is then ignored, and that a key the dashboard
+          # cannot resolve is reported in the form rather than dropped. Short keys exist for only about
+          # twenty-eight groups and cover none of the Rulesets, Rule Lists, redirect, tail, observability,
+          # Workers AI, Turnstile, waiting room or load balancing ones, so a key based URL could never
+          # carry the lot - and two of the keys it could carry do not match their dashboard labels.
+          #
+          # These are the ids GET /accounts/{account_id}/tokens/permission_groups returns, that the Create
+          # token endpoint takes and that the Terraform provider uses. The cross-check below confirms them
+          # against the live catalogue on any run whose token can read it, so a stale id surfaces as a
+          # notice instead of as a permission that silently never arrives.
+          WANTED_GROUPS = [
+              ('c8fed203ed3043cba015a93ad1616f1f', 'Zone Read', 'zone', 'read'),
+              ('e6d2666161e84845a636613608cee8d5', 'Zone Write', 'zone', 'edit'),
+              ('82e64a83756745bbbb1c9c2701bf816b', 'DNS Read', 'zone', 'read'),
+              ('4755a26eedb94da69e1066d98aa820be', 'DNS Write', 'zone', 'edit'),
+              ('517b21aee92c4d89936c976ba6e4be55', 'Zone Settings Read', 'zone', 'read'),
+              ('3030687196b94b638145a3953da2b699', 'Zone Settings Write', 'zone', 'edit'),
+              ('7b7216b327b04b8fbc8f524e1f9b7531', 'SSL and Certificates Read', 'zone', 'read'),
+              ('c03055bc037c4ea9afb9a9f104b7b721', 'SSL and Certificates Write', 'zone', 'edit'),
+              ('e17beae8b8cb423a99b1730f21238bed', 'Cache Purge', 'zone', 'purge'),
+              ('9c88f9c5bce24ce7af9a958ba9c504db', 'Analytics Read', 'zone', 'read'),
+              ('4ec32dfcb35641c5bb32d5ef1ab963b4', 'Firewall Services Read', 'zone', 'read'),
+              ('43137f8d07884d3198dc0ee77ca6e79b', 'Firewall Services Write', 'zone', 'edit'),
+              ('b415b70a4fd1412886f164451f20405c', 'Page Rules Read', 'zone', 'read'),
+              ('ed07f6c337da4195b4e72a1fb2c6bcae', 'Page Rules Write', 'zone', 'edit'),
+              ('d8e12db741544d1586ec1d6f5d3c7786', 'Dynamic URL Redirects Read', 'zone', 'read'),
+              ('74e1036f577a48528b78d2413b40538d', 'Dynamic URL Redirects Write', 'zone', 'edit'),
+              ('cab5202d07ef47beae788e6bc95cb6fe', 'Waiting Rooms Read', 'zone', 'read'),
+              ('24fc124dc8254e0db468e60bf410c800', 'Waiting Rooms Write', 'zone', 'edit'),
+              ('c1fde68c7bcc44588cbb6ddbc16d6480', 'Account Settings Read', 'account', 'read'),
+              # PUT /accounts/{account_id}/workers/account-settings is documented as needing this rather than
+              # a Workers group, and a live run answered 403 [10000] for a token without it - so it is wanted
+              # here, ahead of the fact that would otherwise keep reporting the refusal.
+              ('1af1fa2adc104452b74a9a3364202f20', 'Account Settings Write', 'account', 'edit'),
+              ('eb56a6953c034b9d97dd838155666f06', 'Account API Tokens Read', 'account', 'read'),
+              ('5bc3f8b21c554832afc660159ab75fa4', 'Account API Tokens Write', 'account', 'edit'),
+              ('1a71c399035b4950a1bd1466bbe4f420', 'Workers Scripts Read', 'account', 'read'),
+              ('e086da7e2179491d91ee5f35b3ca210a', 'Workers Scripts Write', 'account', 'edit'),
+              ('8b47d2786a534c08a1f94ee8f9f599ef', 'Workers KV Storage Read', 'account', 'read'),
+              ('f7f0eda5697f475c90846e879bab8666', 'Workers KV Storage Write', 'account', 'edit'),
+              ('b4992e1108244f5d8bfbd5744320c2e1', 'Workers R2 Storage Read', 'account', 'read'),
+              ('bf7481a1826f439697cb59a20b22293e', 'Workers R2 Storage Write', 'account', 'edit'),
+              ('192192df92ee43ac90f2aeeffce67e35', 'D1 Read', 'account', 'read'),
+              ('09b2857d1c31407795e75e3fed8617a1', 'D1 Write', 'account', 'edit'),
+              ('84a7755d54c646ca87cd50682a34bf7c', 'Queues Read', 'account', 'read'),
+              ('366f57075ffc42689627bcf8242a1b6d', 'Queues Write', 'account', 'edit'),
+              ('e247aedd66bd41cc9193af0213416666', 'Pages Read', 'account', 'read'),
+              ('8d28297797f24fb8a0c332fe0866ec89', 'Pages Write', 'account', 'edit'),
+              ('2072033d694d415a936eaeb94e6405b8', 'Workers Routes Read', 'account', 'read'),
+              ('28f4b596e7d643029c524985477ae49a', 'Workers Routes Write', 'account', 'edit'),
+              ('fb39996ee9044d2a8725921e02744b39', 'Account Rulesets Read', 'account', 'read'),
+              ('56907406c3d548ed902070ec4df0e328', 'Account Rulesets Write', 'account', 'edit'),
+              # IP Access rules are the current half of the firewall API this library wraps, and they do not
+              # ride on Firewall Services - the group above covers the zone's saved filters and nothing else.
+              ('de7a688cc47d43bd9ea700b467a09c96', 'Account Firewall Access Rules Read', 'account', 'read'),
+              ('a416acf9ef5a4af19fb11ed3b96b1fe6', 'Account Firewall Access Rules Write', 'account', 'edit'),
+              # mTLS certificates want the account-scoped SSL group, which is a different id from the
+              # zone-scoped pair above that covers certificate packs, Universal SSL, custom hostnames and the
+              # Origin CA certificates. Both are wanted, because the two names are one word apart.
+              ('a7a233f9604845c787d4c8c39ac09c21', 'Account: SSL and Certificates Read', 'account', 'read'),
+              ('db37e5f1cb1a4e1aabaef8deaea43575', 'Account: SSL and Certificates Write', 'account', 'edit'),
+              ('4f1071168de8466e9808de86febfc516', 'Account Rule Lists Read', 'account', 'read'),
+              ('2edbf20661fd4661b0fe10e9e12f485c', 'Account Rule Lists Write', 'account', 'edit'),
+              ('429a068902904c5a9ed9fc267c67da9a', 'Mass URL Redirects Read', 'account', 'read'),
+              ('abe78e2276664f4db588c1f675a77486', 'Mass URL Redirects Write', 'account', 'edit'),
+              ('05880cd1bdc24d8bae0be2136972816b', 'Workers Tail Read', 'account', 'read'),
+              ('66c1ed49f4ed46098b75696a6d4ee3c9', 'Workers Observability Read', 'account', 'read'),
+              ('82c075da3f4647a2a03becd0fe240f8a', 'Workers Observability Write', 'account', 'edit'),
+              ('a92d2450e05d4e7bb7d0a64968f83d11', 'Workers AI Read', 'account', 'read'),
+              ('5d78fd7895974fd0bdbbbb079482721b', 'Turnstile Sites Read', 'account', 'read'),
+              ('755c05aa014b4f9ab263aa80b8167bd8', 'Turnstile Sites Write', 'account', 'edit'),
+              ('3e4e20ee40b9475dae22201c468fdb70', 'Account Waiting Rooms Read', 'account', 'read'),
+              ('9d24387c6e8544e2bc4024a03991339f', 'Load Balancing: Monitors and Pools Read', 'account', 'read'),
+              ('d2a1802cc9a34e30852f8b33869b2f3c', 'Load Balancing: Monitors and Pools Write', 'account', 'edit'),
+              ('b89a480218d04ceb98b4fe57ca29dc1f', 'Account Analytics Read', 'account', 'read'),
+              # Radar's reference data reads without this - a live run proved it - but the timeseries,
+              # summary and ranked endpoints behind it are the next several rounds of work, and this id came
+              # out of the account's live catalogue rather than out of Cloudflare's published permission
+              # list, which names a 'User Details Read' group that does not exist.
+              ('dfe525ec7b07472c827d8d009178b2ac', 'Radar Read', 'user', 'read'),
+          ]
+
+          wanted_full = [(gid, ptype) for gid, _, _, ptype in WANTED_GROUPS]
+          # The read-only URL keeps Cache Purge for the same reason the probe does: it reads that
+          # permission with a body Cloudflare refuses, so nothing is purged by having it.
+          wanted_read = [(gid, ptype) for gid, wanted, _, ptype in WANTED_GROUPS
+                         if ptype == 'read' or wanted == 'Cache Purge']
+
+          seen = []
+          for _, _, _, key, ptype, _ in AREAS:
+              if (key, ptype) not in seen:
+                  seen.append((key, ptype))
+          # The verify step before this one calls accounts/{account_id}/tokens/verify, which has no probe
+          # of its own here - a token built from the URLs below still has to be able to answer it.
+          seen.append(('account_api_tokens', 'read'))
+          full = [(key, WRITE_LEVELS.get(key, ptype)) for key, ptype in seen]
+          name = urllib.parse.quote('CF.Net integration')
+
+          account_full = ('https://dash.cloudflare.com/?to=/:account/api-tokens'
+                          f'&permissionGroupKeys={encode(wanted_full)}&name={name}')
+          account_read = ('https://dash.cloudflare.com/?to=/:account/api-tokens'
+                          f'&permissionGroupKeys={encode(wanted_read)}&name={name}')
+          # User token URLs take short keys only, drop anything unmatched without a word, and have no key
+          # for most of the groups above, so this one stays key based and covers the probe list. The
+          # account-token base already carries a '?', the profile one does not - forgetting it here
+          # produces a URL that opens a 404 instead of the token form.
+          user_full = ('https://dash.cloudflare.com/profile/api-tokens?'
+                       f'permissionGroupKeys={encode(full)}&accountId=%2A&zoneId=all&name={name}')
+
+          if groups:
+              live = {entry.get('id'): entry.get('name') for entry in groups if isinstance(entry, dict)}
+              # An id the live catalogue no longer carries is a group Cloudflare retired, which would
+              # grant nothing; an id whose name moved is cosmetic, and is reported as such.
+              gone = [wanted for gid, wanted, _, _ in WANTED_GROUPS if gid not in live]
+              moved = [f'{live[gid]} (this list calls it {wanted})'
+                       for gid, wanted, _, _ in WANTED_GROUPS if gid in live and live[gid] != wanted]
+              if gone or moved:
+                  print('::notice::Permission group catalogue drift: ' +
+                        '; '.join(['no live group is named ' + n for n in gone] +
+                                  ['id now reads ' + m for m in moved])[:1200] +
+                        '. The URL is built from ids, so a renamed group still grants the right thing; a '
+                        'group Cloudflare retired would not, and this line is the warning.')
+              else:
+                  print(f'::notice::All {len(WANTED_GROUPS)} permission group ids behind the token URL were '
+                        "confirmed against this account's live catalogue.")
+          else:
+              print('::notice::The token URL carries ' + str(len(WANTED_GROUPS)) + ' permission groups by '
+                    'id. It could not be cross-checked against the live catalogue, because reading '
+                    'GET /accounts/{account_id}/tokens/permission_groups was refused for this token.')
+
+          lines += [
+              '#### Create the token without ticking boxes',
+              '',
+              'Cloudflare pre-fills the token form from a URL. Each of these carries the whole permission '
+              'set; you still choose the account and, for an account-owned token, the **Zone Resources** in '
+              'the form itself.',
+              '',
+              f'- Account-owned (`cfat_`), **full suite including writes**: {account_full}',
+              f'- Account-owned (`cfat_`), **read-only** (all the Monday schedule needs): {account_read}',
+              f'- User-owned (`cfut_`), full suite - also the only kind that can answer '
+              f'`GET /user/tokens/verify`: {user_full}',
+              '',
+              'The two account URLs carry **' + str(len(WANTED_GROUPS)) + ' permission groups by id**: '
+              'every group this suite touches now, plus the ones the next modules need - Rulesets, Rule '
+              'Lists and Mass/Dynamic URL Redirects for Bulk Redirects, Workers Tail, Workers '
+              'Observability, Workers AI, Turnstile, Waiting Rooms, Load Balancing monitors and pools, '
+              'Account Settings Write for the Workers account-settings write, and Radar Read for the '
+              'timeseries endpoints behind the reference data this suite already reads. '
+              'Creating a token from one of them and replacing the secret is the whole job: there is no box '
+              'to tick, and if Cloudflare ever stops resolving an id the form says so by name.',
+              '',
+              'What no URL can pre-fill is **Account Resources** and **Zone Resources**. The zone-scoped '
+              'groups - Zone, DNS, Zone Settings, SSL and Certificates, Cache Purge, Analytics, Firewall '
+              'Services, Page Rules, Dynamic URL Redirects, Waiting Rooms, Workers Routes - grant nothing '
+              'until the form lists the zone, and a zone missing from Zone Resources is the `10007 Route not '
+              'found` that skips every zone test.',
+              '',
+              'The user-owned URL is the odd one out: Cloudflare resolves those by short key, drops '
+              'unmatched entries silently, and has no short key for most of the groups above, so it carries '
+              'the probe list and nothing more.',
+              '']
+
+          body = '\n'.join(lines)
+          summary = os.environ.get('GITHUB_STEP_SUMMARY')
+          if summary:
+              with open(summary, 'a', encoding='utf-8') as handle:
+                  handle.write(body + '\n')
+          print(body)
+
+          pieces = chunk(compact)
+          for index, piece in enumerate(pieces, start=1):
+              suffix = f' ({index}/{len(pieces)})' if len(pieces) > 1 else ''
+              print(f'::notice::Reach matrix{suffix}: {piece}')
+          if missing:
+              names = ', '.join(sorted({group for group, _, _ in missing}))
+              groups = len({group for group, _, _ in missing})
+              print(f'::error::{len(missing)} probe(s) were refused, covering {groups} missing '
+                    f'permission(s): {names}. '
+                    'The step summary has a token-creation URL that pre-fills every permission this suite '
+                    'needs.')
+          if entitlement:
+              names = ', '.join(endpoint for endpoint, _, _ in entitlement)
+              print(f'::notice::{len(entitlement)} probe(s) refused while their permission group read fine '
+                    f'elsewhere: {names}. That is a feature or entitlement limit, not the token - the step '
+                    'summary says which feature each one is.')
+          if scope:
+              print("::error::CLOUDFLARE_ZONE_ID was refused (or not found): the zone is outside the token's "
+                    'Zone Resources, or it is not a zone in the account named by CLOUDFLARE_ACCOUNT_ID. '
+                    'Every zone-scoped test will skip until that is fixed.')
+          if not missing and not entitlement and not scope:
+              refused = sum(1 for row in rows if row[2] == '403')
+              if refused:
+                  print(f'::notice::{len(rows)} probes answered, {refused} refused for reasons that are not '
+                        'permissions (R2 not enabled, or a paid feature not switched on for the zone). '
+                        'Everything the suite needs from the token is in scope.')
+              else:
+                  print(f'::notice::{len(rows)} of {len(rows)} probes answered and nothing was refused: every '
+                        'product area this suite reads is in scope.')
+          if empty_zone_list:
+              print("::error::GET /zones returned no zones: add the zone to the token's Zone Resources, or "
+                    'the zone belongs to a different account than CLOUDFLARE_ACCOUNT_ID and an '
+                    'account-owned token will never see it.')
+          if null_zone_result:
+              print('::error::GET /zones/{zone_id} answered 200 with a null result, which reads as "no such '
+                    'zone" to the library and usually means the zone is outside the token\'s Zone Resources.')
+          r2_status, _ = answers['r2']
+          if r2_status == '403':
+              print('::notice::R2 answered 403 and is not counted as missing: either the token lacks Workers '
+                    'R2 Storage - Read, or R2 is not enabled on this account, which is a one-time dashboard '
+                    'step. The R2 tests skip with a reason either way.')
+          PY
+
+      - name: Restore
+        run: dotnet restore tests/CF.Net.IntegrationTests/CF.Net.IntegrationTests.csproj
+
+      - name: Run integration tests
+        if: steps.credentials.outputs.available == 'true'
+        shell: bash
+        env:
+          # Passed through the environment rather than interpolated into the script, so a dispatch
+          # input can never become shell.
+          EXTRA_FILTER: ${{ github.event.inputs.filter || '' }}
+        run: |
+          set -o pipefail
+
+          # Every test that ends early appends one line here and every Cloudflare call another, and
+          # the "Summarise the run" step turns the file into tables. xunit v2 has no dynamic skip, so
+          # without it a credential-less run would look exactly like one that talked to Cloudflare 25
+          # times. It is set from the shell variable here rather than from the runner context in a
+          # job-level env:, which GitHub does not allow - the whole file is rejected if you try.
+          export CLOUDFLARE_IT_REPORT="${CLOUDFLARE_IT_REPORT:-$RUNNER_TEMP/integration-report.tsv}"
+
+          filter="Category=Integration"
+          if [ -n "${EXTRA_FILTER:-}" ]; then
+            filter="Category=Integration&${EXTRA_FILTER}"
+          fi
+          echo "Filter: $filter"
+
+          dotnet test tests/CF.Net.IntegrationTests/CF.Net.IntegrationTests.csproj \
+            --configuration "$CONFIGURATION" \
+            --no-restore \
+            --filter "$filter" \
+            --logger "trx;LogFileName=integration.trx" \
+            --logger "console;verbosity=detailed" \
+            --results-directory TestResults
+
+      - name: Skipped
+        if: steps.credentials.outputs.available != 'true'
+        run: echo "Integration tests skipped - no credentials. The job is green because there is nothing to verify."
+
+      - name: Summarise the run
+        if: always()
+        shell: bash
+        run: |
+          set -o pipefail
+          export CLOUDFLARE_IT_REPORT="${CLOUDFLARE_IT_REPORT:-$RUNNER_TEMP/integration-report.tsv}"
+          PY=$(command -v python3 || command -v python || true)
+          if [ -z "$PY" ]; then echo "no python"; exit 0; fi
+          "$PY" - <<'PY'
+          import glob, os, xml.etree.ElementTree as ET
+
+          ns = {'t': 'http://microsoft.com/schemas/VisualStudio/TeamTest/2010'}
+
+          def cell(text):
+              return (text or '').replace('|', r'\|').replace('\n', ' ')
+
+          counts = {}
+          failures = []
+          total = 0
+          for trx in sorted(glob.glob('TestResults/**/*.trx', recursive=True)):
+              try:
+                  root = ET.parse(trx).getroot()
+              except Exception:
+                  continue
+              for result in root.findall('.//t:UnitTestResult', ns):
+                  total += 1
+                  outcome = result.get('outcome') or 'Unknown'
+                  counts[outcome] = counts.get(outcome, 0) + 1
+                  if outcome == 'Failed':
+                      info = result.find('.//t:ErrorInfo', ns)
+                      message = (info.findtext('t:Message', '', ns) or '').strip() if info is not None else ''
+                      failures.append((result.get('testName') or '?', message))
+
+          skipped = []
+          calls = []
+          report = os.environ.get('CLOUDFLARE_IT_REPORT')
+          if report and os.path.exists(report):
+              with open(report, encoding='utf-8') as handle:
+                  for line in handle.read().splitlines():
+                      fields = line.split(chr(9))
+                      if len(fields) < 3:
+                          continue
+                      if fields[0].upper() == 'SKIPPED':
+                          skipped.append((fields[1], fields[2]))
+                      elif fields[0].upper() == 'INFO':
+                          calls.append((fields[1], fields[2]))
+
+          lines = ['### Cloudflare integration run', '']
+          if total == 0:
+              lines += ['No test results were produced. The suite never ran, which normally means no credentials were configured.', '']
+          else:
+              lines += ['| Outcome | Tests |', '| --- | ---: |']
+              for outcome in sorted(counts):
+                  lines.append(f'| {outcome} | {counts[outcome]} |')
+              lines += [f'| **Total** | **{total}** |', '']
+
+          if skipped:
+              lines += [
+                  f'<details open><summary>{len(skipped)} test(s) ended early without calling Cloudflare</summary>',
+                  '', '| Test | Why |', '| --- | --- |']
+              for test, reason in skipped:
+                  lines.append(f'| `{cell(test)}` | {cell(reason)} |')
+              lines += [
+                  '', '</details>', '',
+                  'These are reported as passing, which is why the job can be green without having verified anything.',
+                  'Add the matching secret - or set the switch named in the reason - to make them run for real.', '']
+
+          if calls:
+              shown = calls[:200]
+              lines += [
+                  f'<details><summary>{len(calls)} Cloudflare call(s) this run made</summary>',
+                  '', '| Call | Result |', '| --- | --- |']
+              for call, result in shown:
+                  lines.append(f'| `{cell(call)}` | {cell(result)} |')
+              if len(calls) > len(shown):
+                  lines.append(f'| ... and {len(calls) - len(shown)} more | |')
+              lines += ['', '</details>', '']
+
+          if failures:
+              lines += [f'<details open><summary>{len(failures)} failing test(s)</summary>', '']
+              for test, message in failures:
+                  lines += [f'**{cell(test)}**', '', '```', (message or '(no message)')[:1200], '```', '']
+              lines.append('</details>')
+
+          # Annotations are the only per-test detail this run publishes that is readable through the
+          # GitHub API without downloading the job log, so they repeat what the summary says. GitHub
+          # keeps at most 10 of each level per step, so the remainder collapses into one extra line
+          # rather than vanishing. A percent sign or a newline in a message would otherwise end the
+          # annotation early, hence the escaping.
+          def annotation(level, message):
+              safe = message.replace('%', '%25').replace(chr(13), '%0D').replace(chr(10), '%0A')
+              print('::' + level + '::' + safe)
+
+          if total:
+              tally = ', '.join(outcome + '=' + str(counts[outcome]) for outcome in sorted(counts))
+              annotation('notice', 'Integration suite: ' + tally + ' (total ' + str(total) + ')')
+          for test, message in failures[:9]:
+              annotation('error', str(test) + ': ' + (message or '(no message)')[:900])
+          if len(failures) > 9:
+              annotation('error', 'and ' + str(len(failures) - 9) + ' more failing test(s), listed in the job summary')
+          for test, reason in skipped[:5]:
+              annotation('notice', 'SKIPPED ' + str(test) + ': ' + str(reason)[:280])
+          if len(skipped) > 5:
+              annotation('notice', 'and ' + str(len(skipped) - 5) + ' more skipped test(s), listed in the job summary')
+
+          # The transcript is the only place that shows which endpoint answered what, so it goes out too -
+          # chunked, because one annotation long enough to hold every call gets truncated anyway. The
+          # caps above and here keep the whole step inside GitHub's 10-notices-per-step limit.
+          for start in range(0, min(len(calls), 64), 16):
+              chunk = calls[start:start + 16]
+              joined = ' | '.join(str(call) + ' -> ' + str(result) for call, result in chunk)
+              annotation('notice', 'Cloudflare calls ' + str(start + 1) + '-' + str(start + len(chunk)) + ': ' + joined[:1600])
+          text = '\n'.join(lines)
+          print(text)
+          summary = os.environ.get('GITHUB_STEP_SUMMARY')
+          if summary:
+              with open(summary, 'a', encoding='utf-8') as handle:
+                  handle.write(text + '\n')
+          PY
+
+      # The observations a run makes - a quirk Cloudflare has, a response shape it does not publish, a
+      # setting this zone does not report - used to travel inside the call transcript, where the ten
+      # annotations per step that GitHub keeps were already spoken for by the outcome tally, the skip
+      # table and the transcript chunks. That is how the batch response this suite exists to record went
+      # missing once. They get their own step, and therefore their own budget.
+      - name: Report what the run learned
+        if: always()
+        shell: bash
+        run: |
+          set -o pipefail
+          export CLOUDFLARE_IT_REPORT="${CLOUDFLARE_IT_REPORT:-$RUNNER_TEMP/integration-report.tsv}"
+          if [ ! -f "$CLOUDFLARE_IT_REPORT" ]; then
+            echo "No run report was written."
+            exit 0
+          fi
+
+          PY=$(command -v python3 || command -v python || true)
+          if [ -z "$PY" ]; then echo "no python"; exit 0; fi
+          "$PY" - <<'PY'
+          import os
+
+          report = os.environ.get('CLOUDFLARE_IT_REPORT')
+          observations = []
+          if report and os.path.exists(report):
+              with open(report, encoding='utf-8') as handle:
+                  for line in handle.read().splitlines():
+                      fields = line.split('\t')
+                      # INFO lines whose subject is 'configuration' are what Warn() writes; every other
+                      # INFO line is one row of the call transcript.
+                      if len(fields) >= 3 and fields[0].upper() == 'INFO' and fields[1] == 'configuration':
+                          observations.append(fields[2])
+
+          if not observations:
+              print('Nothing to report beyond the call transcript.')
+              raise SystemExit(0)
+
+          body = '\n'.join(['### What this run learned', ''] +
+                            ['- ' + observation for observation in observations])
+          summary = os.environ.get('GITHUB_STEP_SUMMARY')
+          if summary:
+              with open(summary, 'a', encoding='utf-8') as handle:
+                  handle.write(body + '\n')
+          print(body)
+
+          for observation in observations[:9]:
+              safe = observation.replace('%', '%25').replace('\r', '%0D').replace('\n', '%0A')
+              print('::notice::Learned: ' + safe[:1600])
+          if len(observations) > 9:
+              print('::notice::Learned: and ' + str(len(observations) - 9) +
+                    ' more observation(s), listed in the job summary')
+          PY
+
+      - name: Show what was recorded
+        if: always() && github.event_name == 'workflow_dispatch' && github.event.inputs.cassette != ''
+        run: |
+          echo "### Cassette" >> "$GITHUB_STEP_SUMMARY"
+          if ls tests/cassettes/*.json >/dev/null 2>&1; then
+            echo '```json' >> "$GITHUB_STEP_SUMMARY"
+            head -c 4000 tests/cassettes/"${CLOUDFLARE_IT_CASSETTE}".json >> "$GITHUB_STEP_SUMMARY" || true
+            echo '```' >> "$GITHUB_STEP_SUMMARY"
+            echo >> "$GITHUB_STEP_SUMMARY"
+            echo "Exchanges recorded: $(grep -c '"pathAndQuery"' tests/cassettes/"${CLOUDFLARE_IT_CASSETTE}".json || echo 0)" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "Nothing was recorded - the tests probably all skipped." >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      # Either download the artifact below and commit it yourself, or let the workflow do it.
+      - name: Commit the cassette back to the branch
+        if: always() && github.event_name == 'workflow_dispatch' && github.event.inputs.cassette != '' && (github.event.inputs.commit_cassette == true || github.event.inputs.commit_cassette == 'true')
+        run: |
+          if ! ls tests/cassettes/*.json >/dev/null 2>&1; then
+            echo "No cassette file to commit."
+            exit 0
+          fi
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git checkout -B "$GITHUB_REF_NAME"
+          git add tests/cassettes
+          if git diff --cached --quiet; then
+            echo "The cassette is unchanged."
+          else
+            git commit -m "Record Cloudflare cassette '${{ github.event.inputs.cassette }}'"
+            git push origin "HEAD:$GITHUB_REF_NAME"
+          fi
+
+      - name: Upload recorded cassette
+        if: always() && github.event_name == 'workflow_dispatch' && github.event.inputs.cassette != ''
+        uses: actions/upload-artifact@v7
+        with:
+          name: cassette-${{ github.event.inputs.cassette }}
+          path: tests/cassettes/**/*.json
+          if-no-files-found: ignore
+          retention-days: 30
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: integration-results
+          path: TestResults/**/*.trx
+          if-no-files-found: ignore
+          retention-days: 30

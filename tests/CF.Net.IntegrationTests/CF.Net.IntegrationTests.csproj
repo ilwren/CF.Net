@@ -1,0 +1,36 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    Integration tests hit the real Cloudflare API. They are:
+      * tagged [Trait("Category", "Integration")] so the unit test run can exclude them,
+      * skipped at runtime unless CLOUDFLARE_API_TOKEN (or the legacy key pair) is present,
+      * destructive only when CLOUDFLARE_IT_ENABLE_WRITES=true.
+    The .github/workflows/integration.yml workflow is the reference for how to supply the secrets.
+    Single TFM on purpose: with credentials present every run costs real API calls.
+  -->
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <AssemblyName>CF.Net.IntegrationTests</AssemblyName>
+    <RootNamespace>CFNet.IntegrationTests</RootNamespace>
+    <IsPackable>false</IsPackable>
+    <IsTestProject>true</IsTestProject>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="18.10.1" />
+    <PackageReference Include="xunit" Version="2.9.3" />
+    <PackageReference Include="xunit.runner.visualstudio" Version="2.8.2">
+      <PrivateAssets>all</PrivateAssets>
+      <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
+    </PackageReference>
+    <PackageReference Include="Microsoft.Extensions.DependencyInjection" Version="8.0.1" />
+    <!-- 8.0.1 is the exact version Microsoft.Extensions.Http 8.0.1 requires, so no NU1605 downgrade. -->
+    <PackageReference Include="Microsoft.Extensions.Logging" Version="8.0.1" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\CF.Net\CF.Net.csproj" />
+    <ProjectReference Include="..\CF.Net.TestKit\CF.Net.TestKit.csproj" />
+  </ItemGroup>
+
+</Project>

@@ -1,0 +1,1129 @@
+using System.Net;
+using System.Text.Json;
+using CFNet.Configuration;
+using CFNet.DependencyInjection;
+using CFNet.Exceptions;
+using CFNet.Http;
+using CFNet.Models.Common;
+using CFNet.Serialization;
+using CFNet.Services;
+using CFNet.UnitTests.Testing;
+using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.DependencyInjection;
+using Xunit;
+
+namespace CFNet.UnitTests.DependencyInjection;
+
+public class UserServiceTests
+{
+    [Fact]
+    public async Task VerifyTokenAsync_calls_the_verify_endpoint()
+    {
+        using var harness = CloudflareHarness.Create();
+        harness.RespondWithResult("{\"id\":\"t-1\",\"status\":\"active\"}");
+
+        var verification = await harness.Client.User.VerifyTokenAsync();
+
+        Assert.Equal("/client/v4/user/tokens/verify", harness.LastRequest.Path);
+        Assert.Equal(HttpMethod.Get, harness.LastRequest.Method);
+        Assert.Equal("t-1", verification.Id);
+        Assert.Equal("active", verification.Status);
+        Assert.True(verification.IsActive);
+    }
+
+    [Fact]
+    public async Task GetAsync_reads_the_user_object()
+    {
+        using var harness = CloudflareHarness.Create();
+        harness.RespondWithResult("{\"id\":\"u-1\",\"email\":\"owner@example.test\",\"first_name\":\"Ada\",\"last_name\":\"Lovelace\",\"country\":\"GB\",\"two_factor_authentication_enabled\":false}");
+
+        var user = await harness.Client.User.GetAsync();
+
+        Assert.Equal("/client/v4/user", harness.LastRequest.Path);
+        Assert.Equal("u-1", user.Id);
+        Assert.Equal("owner@example.test", user.Email);
+        Assert.Equal("Ada", user.FirstName);
+        Assert.Equal("Lovelace", user.LastName);
+        Assert.Equal("GB", user.Country);
+
+        // Fields without a typed member are still reachable.
+        Assert.NotNull(user.AdditionalData);
+        Assert.True(user.AdditionalData!.ContainsKey("two_factor_authentication_enabled"));
+    }
+
+    [Fact]
+    public async Task CheckConnectionAsync_verifies_a_token_without_throwing_on_failure()
+    {
+        using var harness = CloudflareHarness.Create();
+        harness.RespondWithResult("{\"id\":\"t-1\",\"status\":\"active\"}");
+
+        var check = await harness.Client.CheckConnectionAsync();
+
+        Assert.True(check.IsSuccess);
+        Assert.Equal(CloudflareAuthenticationMode.ApiToken, check.Method);
+        Assert.Contains("active", check.Message, StringComparison.Ordinal);
+        Assert.True(check.Elapsed >= TimeSpan.Zero);
+    }
+
+    [Fact]
+    public async Task CheckConnectionAsync_reports_an_inactive_token()
+    {
+        using var harness = CloudflareHarness.Create();
+        harness.RespondWithResult("{\"id\":\"t-1\",\"status\":\"disabled\"}");
+
+        var check = await harness.Client.CheckConnectionAsync();
+
+        Assert.False(check.IsSuccess);
+        Assert.Contains("disabled", check.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task CheckConnectionAsync_falls_back_to_the_user_endpoint_for_a_global_key()
+    {
+        using var harness = CloudflareHarness.CreateWithGlobalKey();
+        harness.RespondWithResult("{\"id\":\"u-1\",\"email\":\"owner@example.test\"}");
+
+        var check = await harness.Client.CheckConnectionAsync();
+
+        Assert.Equal("/client/v4/user", harness.LastRequest.Path);
+        Assert.True(check.IsSuccess);
+        Assert.Equal(CloudflareAuthenticationMode.GlobalApiKey, check.Method);
+        Assert.Equal("owner@example.test", check.AccountEmail);
+        Assert.Contains("owner@example.test", check.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task CheckConnectionAsync_reports_an_api_failure_with_its_status_and_code()
+    {
+        using var harness = CloudflareHarness.Create();
+        harness.RespondWithError(HttpStatusCode.Unauthorized, 10000, "Invalid Authentication");
+        // A user-scoped rejection is also retried against the account endpoint, which refuses too; the
+        // original rejection is the one that gets reported.
+        harness.RespondWithError(HttpStatusCode.Forbidden, 1000, "Invalid API Token");
+
+        var check = await harness.Client.CheckConnectionAsync();
+
+        Assert.False(check.IsSuccess);
+        Assert.Equal(HttpStatusCode.Unauthorized, check.StatusCode);
+        Assert.Equal(10000, check.ErrorCode);
+        Assert.Contains("Invalid Authentication", check.Message, StringComparison.Ordinal);
+        Assert.Equal(2, harness.RequestCount);
+    }
+
+    [Fact]
+    public async Task CheckConnectionAsync_reports_missing_credentials_without_sending_anything()
+    {
+        using var harness = CloudflareHarness.Create(options =>
+        {
+            options.ApiToken = "placeholder";
+        });
+
+        // The transport validates on send, so drop the credentials after construction.
+        harness.Options.ApiToken = null;
+
+        var check = await harness.Client.CheckConnectionAsync();
+
+        Assert.False(check.IsSuccess);
+        Assert.Equal(CloudflareAuthenticationMode.None, check.Method);
+        Assert.Equal(0, harness.RequestCount);
+    }
+
+    [Fact]
+    public async Task CheckConnectionAsync_reports_a_timeout()
+    {
+        using var harness = CloudflareHarness.CreateWithResponder(
+            (_, _) => throw new TaskCanceledException("timed out"),
+            options => options.MaxRetries = 0);
+
+        var check = await harness.Client.CheckConnectionAsync();
+
+        Assert.False(check.IsSuccess);
+        Assert.True(check.IsTimeout);
+        Assert.Equal(1, harness.RequestCount);
+    }
+
+    [Fact]
+    public async Task VerifyAccountTokenAsync_uses_the_account_scoped_verify_endpoint()
+    {
+        using var harness = CloudflareHarness.Create();
+        harness.RespondWithResult("{\"id\":\"t-2\",\"status\":\"active\"}");
+
+        var verification = await harness.Client.User.VerifyAccountTokenAsync();
+
+        Assert.Equal($"/client/v4/accounts/{CloudflareHarness.TestAccountId}/tokens/verify", harness.LastRequest.Path);
+        Assert.True(verification.IsActive);
+    }
+
+    [Fact]
+    public async Task VerifyAccountTokenAsync_accepts_an_explicit_account_id()
+    {
+        using var harness = CloudflareHarness.Create();
+        harness.RespondWithResult("{\"id\":\"t-3\",\"status\":\"active\"}");
+
+        await harness.Client.User.VerifyAccountTokenAsync("acct-other");
+
+        Assert.Equal("/client/v4/accounts/acct-other/tokens/verify", harness.LastRequest.Path);
+    }
+
+    [Fact]
+    public async Task VerifyAccountTokenAsync_needs_an_account_id()
+    {
+        using var harness = CloudflareHarness.Create(options => options.AccountId = null);
+        harness.RespondWithResult("{\"id\":\"t-4\",\"status\":\"active\"}");
+
+        var exception = await Assert.ThrowsAsync<CloudflareConfigurationException>(
+            () => harness.Client.User.VerifyAccountTokenAsync());
+
+        Assert.NotEmpty(exception.Problems);
+    }
+
+    [Fact]
+    public async Task CheckConnectionAsync_verifies_an_account_owned_token_without_trying_the_user_endpoint()
+    {
+        using var harness = CloudflareHarness.Create(options => options.ApiToken = "cfat_0123456789012345678901234567890123456789");
+        harness.RespondWithResult("{\"id\":\"t-5\",\"status\":\"active\"}");
+
+        var check = await harness.Client.CheckConnectionAsync();
+
+        Assert.True(check.IsSuccess);
+        Assert.Contains("Account-owned", check.Message, StringComparison.Ordinal);
+        Assert.Equal($"/client/v4/accounts/{CloudflareHarness.TestAccountId}/tokens/verify", harness.LastRequest.Path);
+        Assert.Equal(1, harness.RequestCount);
+    }
+
+    [Fact]
+    public async Task CheckConnectionAsync_falls_back_to_the_account_endpoint_when_the_user_one_rejects_the_token()
+    {
+        // Tokens issued before 2026 carry no prefix, so the user-scoped rejection is the only hint that
+        // the credential is account-owned. Without the fallback this reports "invalid token" for a
+        // secret that works.
+        using var harness = CloudflareHarness.Create();
+        harness.RespondWithError(HttpStatusCode.Forbidden, 1000, "Invalid API Token");
+        harness.RespondWithResult("{\"id\":\"t-6\",\"status\":\"active\"}");
+
+        var check = await harness.Client.CheckConnectionAsync();
+
+        Assert.True(check.IsSuccess);
+        Assert.Equal(2, harness.RequestCount);
+        Assert.Contains("account-owned", check.Message, StringComparison.Ordinal);
+        Assert.Equal($"/client/v4/accounts/{CloudflareHarness.TestAccountId}/tokens/verify", harness.LastRequest.Path);
+    }
+
+    [Fact]
+    public async Task CheckConnectionAsync_still_reports_the_rejection_when_both_endpoints_refuse_the_token()
+    {
+        using var harness = CloudflareHarness.Create();
+        harness.RespondWithError(HttpStatusCode.Forbidden, 1000, "Invalid API Token");
+        harness.RespondWithError(HttpStatusCode.Forbidden, 1000, "Invalid API Token");
+
+        var check = await harness.Client.CheckConnectionAsync();
+
+        Assert.False(check.IsSuccess);
+        Assert.Equal(2, harness.RequestCount);
+        Assert.Contains("Invalid API Token", check.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task CheckConnectionAsync_does_not_fall_back_without_an_account_id()
+    {
+        using var harness = CloudflareHarness.Create(options => options.AccountId = null);
+        harness.RespondWithError(HttpStatusCode.Forbidden, 1000, "Invalid API Token");
+
+        var check = await harness.Client.CheckConnectionAsync();
+
+        Assert.False(check.IsSuccess);
+        Assert.Equal(1, harness.RequestCount);
+    }
+
+    [Fact]
+    public async Task Accounts_ListAsync_and_GetAsync_use_the_accounts_collection()
+    {
+        using var harness = CloudflareHarness.Create();
+        harness.RespondWithPage(
+            "[{\"id\":\"acct-1\",\"name\":\"Personal\",\"type\":\"standard\"},{\"id\":\"acct-2\",\"name\":\"Work\"}]",
+            page: 1, totalPages: 1, count: 2, totalCount: 2);
+
+        var page = await harness.Client.Accounts.ListAsync(new AccountListParameters { Name = "Personal", Page = 1, PerPage = 20 });
+
+        Assert.Equal("/client/v4/accounts", harness.LastRequest.Path);
+        Assert.Equal("page=1&per_page=20&name=Personal", harness.LastRequest.Query.TrimStart('?'));
+        Assert.Equal(2, page.Count);
+        Assert.Equal("standard", page.Items[0].Type);
+
+        harness.RespondWithResult("{\"id\":\"acct-1\",\"name\":\"Personal\"}");
+        var account = await harness.Client.Accounts.GetAsync("acct-1");
+
+        Assert.Equal("/client/v4/accounts/acct-1", harness.LastRequest.Path);
+        Assert.Equal("Personal", account!.Name);
+    }
+
+    [Fact]
+    public async Task Accounts_GetAsync_falls_back_to_the_default_account_id()
+    {
+        using var harness = CloudflareHarness.Create();
+        harness.RespondWithResult("{\"id\":\"acct-1234\"}");
+
+        await harness.Client.Accounts.GetAsync();
+
+        Assert.Equal($"/client/v4/accounts/{CloudflareHarness.TestAccountId}", harness.LastRequest.Path);
+    }
+
+    [Fact]
+    public async Task Accounts_GetAsync_returns_null_when_the_account_is_not_reachable()
+    {
+        using var harness = CloudflareHarness.Create();
+        harness.RespondWithError(HttpStatusCode.NotFound, 10000, "not found");
+
+        Assert.Null(await harness.Client.Accounts.GetAsync("acct-x"));
+    }
+}
+
+/// <summary>
+/// Four tests here and in <see cref="ServiceCollectionExtensionsTests"/> set and restore
+/// <c>CLOUDFLARE_API_TOKEN</c> in the process environment, and <c>FromEnvironment</c> reads that environment
+/// live rather than from a snapshot. xunit runs different classes in parallel, so one class's <c>finally</c>
+/// restoring the variable to <c>null</c> can land between another's set and its read - which is exactly how
+/// <c>AddCloudflareFromEnvironment_reads_the_process_environment</c> failed on the windows-latest job of CI
+/// run 38356357755 with "Expected di-token, Actual null" while passing on ubuntu. Both classes therefore run
+/// in the collection that disables parallelism.
+/// </summary>
+[Collection("Environment")]
+public class CloudflareClientTests
+{
+    [Fact]
+    public void Create_builds_a_client_that_exposes_every_service()
+    {
+        using var client = CloudflareClient.Create(options =>
+        {
+            options.ApiToken = "tok";
+            options.AccountId = "acct";
+            options.ZoneId = "zone";
+        });
+
+        Assert.NotNull(client.User);
+        Assert.NotNull(client.Accounts);
+        Assert.NotNull(client.Zones);
+        Assert.NotNull(client.DnsRecords);
+        Assert.NotNull(client.Workers);
+        Assert.NotNull(client.Pages);
+        Assert.NotNull(client.D1);
+        Assert.NotNull(client.Kv);
+        Assert.NotNull(client.R2);
+        Assert.NotNull(client.Transport);
+        Assert.Equal("acct", client.Options.AccountId);
+    }
+
+    [Fact]
+    public void The_services_all_share_one_transport()
+    {
+        using var client = CloudflareClient.Create(options => options.ApiToken = "tok");
+
+        var transport = client.Transport;
+
+        // Every service holds the same transport, so one ConfigureRequest hook applies everywhere.
+        Assert.IsType<CloudflareClient>(client);
+        Assert.Same(transport, ((ICloudflareClient)client).Transport);
+        Assert.IsAssignableFrom<IZonesService>(client.Zones);
+        Assert.IsAssignableFrom<IDnsRecordsService>(client.DnsRecords);
+        Assert.IsAssignableFrom<IDnssecService>(client.Dnssec);
+        Assert.IsAssignableFrom<IWorkersScriptsService>(client.Workers);
+        Assert.IsAssignableFrom<IWorkersAssetsService>(client.WorkersAssets);
+        Assert.IsAssignableFrom<IPagesProjectsService>(client.Pages);
+        Assert.IsAssignableFrom<ID1DatabaseService>(client.D1);
+        Assert.IsAssignableFrom<IKvService>(client.Kv);
+        Assert.IsAssignableFrom<IR2Service>(client.R2);
+        Assert.IsAssignableFrom<ISslService>(client.Ssl);
+        Assert.IsAssignableFrom<ICustomHostnamesService>(client.CustomHostnames);
+        Assert.IsAssignableFrom<IOriginTlsClientAuthService>(client.OriginTlsClientAuth);
+        Assert.IsAssignableFrom<IUserService>(client.User);
+        Assert.IsAssignableFrom<IAccountsService>(client.Accounts);
+        Assert.IsAssignableFrom<IRulesListService>(client.Lists);
+        Assert.IsAssignableFrom<IRulesetService>(client.Rulesets);
+        Assert.IsAssignableFrom<IPageRulesService>(client.PageRules);
+        Assert.IsAssignableFrom<IOriginCaCertificatesService>(client.OriginCaCertificates);
+        Assert.IsAssignableFrom<IFirewallService>(client.Firewall);
+        Assert.IsAssignableFrom<IMtlsCertificateService>(client.MtlsCertificates);
+        Assert.IsAssignableFrom<IIpRangesService>(client.IpRanges);
+        Assert.IsAssignableFrom<IWorkersObservabilityService>(client.WorkersObservability);
+        Assert.IsAssignableFrom<IWorkersAiService>(client.WorkersAi);
+        Assert.IsAssignableFrom<ITurnstileService>(client.Turnstile);
+        Assert.IsAssignableFrom<IDurableObjectsService>(client.DurableObjects);
+        Assert.IsAssignableFrom<IUrlNormalizationService>(client.UrlNormalization);
+        Assert.IsAssignableFrom<IOriginPostQuantumEncryptionService>(client.OriginPostQuantumEncryption);
+        Assert.IsAssignableFrom<IRadarService>(client.Radar);
+    }
+
+    [Fact]
+    public void Create_validates_the_options_before_anything_is_built()
+    {
+        var exception = Assert.Throws<CloudflareConfigurationException>(() => CloudflareClient.Create());
+
+        Assert.Contains("CLOUDFLARE_API_TOKEN", exception.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void CreateFromEnvironment_reads_the_credentials()
+    {
+        var previousToken = Environment.GetEnvironmentVariable(CloudflareDefaults.EnvironmentVariables.ApiToken);
+        Environment.SetEnvironmentVariable(CloudflareDefaults.EnvironmentVariables.ApiToken, "env-token");
+
+        try
+        {
+            using var client = CloudflareClient.CreateFromEnvironment();
+
+            Assert.Equal("env-token", client.Options.ApiToken);
+            Assert.Equal(CloudflareAuthenticationMode.ApiToken, client.Options.AuthenticationMode);
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable(CloudflareDefaults.EnvironmentVariables.ApiToken, previousToken);
+        }
+    }
+
+    [Fact]
+    public void The_transport_constructor_rejects_a_null_transport()
+    {
+        Assert.Throws<ArgumentNullException>(() => new CloudflareClient((ICloudflareTransport)null!));
+    }
+
+    [Fact]
+    public void A_client_built_around_a_caller_supplied_transport_does_not_own_it()
+    {
+        using var handler = new StubHttpMessageHandler();
+        using var httpClient = new HttpClient(handler);
+        var transport = new CloudflareTransport(httpClient, new CloudflareClientOptions { ApiToken = "tok" });
+        using var client = new CloudflareClient(transport);
+
+        client.Dispose();
+        client.Dispose();
+
+        // The caller still owns the transport and the HttpClient, so disposing the client is a no-op
+        // for both and the options stay readable.
+        Assert.Equal("tok", transport.Options.ApiToken);
+        Assert.Equal("tok", client.Options.ApiToken);
+        Assert.Same(transport, client.Transport);
+    }
+
+    [Fact]
+    public void Dispose_is_idempotent()
+    {
+        var client = CloudflareClient.Create(options => options.ApiToken = "tok");
+
+        client.Dispose();
+        client.Dispose();
+    }
+
+    [Fact]
+    public void The_factory_creates_independent_clients_from_shared_defaults()
+    {
+        var factory = new CloudflareClientFactory(new CloudflareClientOptions
+        {
+            ApiToken = "default-token",
+            AccountId = "default-account",
+            UserAgent = "CF.Net.Tests/1.0",
+        });
+
+        using var first = factory.Create();
+        using var second = factory.Create(options =>
+        {
+            options.ApiToken = "other-token";
+            options.AccountId = "other-account";
+        });
+
+        Assert.NotSame(first, second);
+        Assert.Equal("default-token", first.Options.ApiToken);
+        Assert.Equal("default-account", first.Options.AccountId);
+        Assert.Equal("other-token", second.Options.ApiToken);
+        Assert.Equal("other-account", second.Options.AccountId);
+
+        // Transport tuning is inherited from the defaults.
+        Assert.Equal("CF.Net.Tests/1.0", second.Options.UserAgent);
+    }
+
+    [Fact]
+    public void The_factory_copies_its_defaults_so_later_mutation_does_not_leak()
+    {
+        var defaults = new CloudflareClientOptions { ApiToken = "tok", AccountId = "acct" };
+        var factory = new CloudflareClientFactory(defaults);
+
+        defaults.ApiToken = "changed";
+
+        using var client = factory.Create();
+
+        Assert.Equal("tok", client.Options.ApiToken);
+    }
+
+    [Fact]
+    public void The_factory_creates_from_environment_on_top_of_its_defaults()
+    {
+        var previous = Environment.GetEnvironmentVariable(CloudflareDefaults.EnvironmentVariables.ApiToken);
+        Environment.SetEnvironmentVariable(CloudflareDefaults.EnvironmentVariables.ApiToken, "env-token");
+
+        try
+        {
+            var factory = new CloudflareClientFactory(new CloudflareClientOptions
+            {
+                ApiToken = "default-token",
+                UserAgent = "CF.Net.Tests/1.0",
+                MaxRetries = 7,
+            });
+
+            using var client = factory.CreateFromEnvironment();
+
+            // The environment wins on credentials, the defaults win on transport tuning.
+            Assert.Equal("env-token", client.Options.ApiToken);
+            Assert.Equal("CF.Net.Tests/1.0", client.Options.UserAgent);
+            Assert.Equal(7, client.Options.MaxRetries);
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable(CloudflareDefaults.EnvironmentVariables.ApiToken, previous);
+        }
+    }
+
+    [Fact]
+    public void The_factory_validates_before_creating_a_client()
+    {
+        var factory = new CloudflareClientFactory();
+
+        Assert.Throws<CloudflareConfigurationException>(() => factory.Create());
+    }
+
+    [Fact]
+    public void The_factory_can_source_http_clients_from_a_host()
+    {
+        using var handler = new StubHttpMessageHandler();
+        using var httpClient = new HttpClient(handler);
+        var created = 0;
+
+        var factory = new CloudflareClientFactory(
+            new CloudflareClientOptions { ApiToken = "tok" },
+            httpClientFactory: () =>
+            {
+                created++;
+                return httpClient;
+            });
+
+        using var client = factory.Create();
+
+        Assert.Equal(1, created);
+        Assert.NotNull(client.Transport);
+    }
+}
+
+/// <summary>
+/// Runs in the non-parallel collection for the reason documented on <see cref="CloudflareClientTests"/>:
+/// these tests mutate <c>CLOUDFLARE_API_TOKEN</c> and <c>CLOUDFLARE_ACCOUNT_ID</c> process-wide, and so does
+/// that class.
+/// </summary>
+[Collection("Environment")]
+public class ServiceCollectionExtensionsTests
+{
+    [Fact]
+    public void AddCloudflare_registers_the_client_the_factory_and_every_service()
+    {
+        using var provider = new ServiceCollection()
+            .AddCloudflare(options =>
+            {
+                options.ApiToken = "tok";
+                options.AccountId = "acct";
+                options.ZoneId = "zone";
+            })
+            .BuildServiceProvider();
+
+        var client = provider.GetRequiredService<ICloudflareClient>();
+
+        Assert.NotNull(client);
+        Assert.Equal("acct", client.Options.AccountId);
+
+        // Each service resolves to the same singleton the client exposes.
+        Assert.Same(client.Zones, provider.GetRequiredService<IZonesService>());
+        Assert.Same(client.DnsRecords, provider.GetRequiredService<IDnsRecordsService>());
+        Assert.Same(client.Dnssec, provider.GetRequiredService<IDnssecService>());
+        Assert.Same(client.Workers, provider.GetRequiredService<IWorkersScriptsService>());
+        Assert.Same(client.WorkersAssets, provider.GetRequiredService<IWorkersAssetsService>());
+        Assert.Same(client.Pages, provider.GetRequiredService<IPagesProjectsService>());
+        Assert.Same(client.D1, provider.GetRequiredService<ID1DatabaseService>());
+        Assert.Same(client.Kv, provider.GetRequiredService<IKvService>());
+        Assert.Same(client.R2, provider.GetRequiredService<IR2Service>());
+        Assert.Same(client.Ssl, provider.GetRequiredService<ISslService>());
+        Assert.Same(client.CustomHostnames, provider.GetRequiredService<ICustomHostnamesService>());
+        Assert.Same(client.OriginTlsClientAuth, provider.GetRequiredService<IOriginTlsClientAuthService>());
+        Assert.Same(client.User, provider.GetRequiredService<IUserService>());
+        Assert.Same(client.Accounts, provider.GetRequiredService<IAccountsService>());
+        Assert.Same(client.Lists, provider.GetRequiredService<IRulesListService>());
+        Assert.Same(client.Rulesets, provider.GetRequiredService<IRulesetService>());
+        Assert.Same(client.PageRules, provider.GetRequiredService<IPageRulesService>());
+        Assert.Same(client.OriginCaCertificates, provider.GetRequiredService<IOriginCaCertificatesService>());
+        Assert.Same(client.Firewall, provider.GetRequiredService<IFirewallService>());
+        Assert.Same(client.MtlsCertificates, provider.GetRequiredService<IMtlsCertificateService>());
+        Assert.Same(client.IpRanges, provider.GetRequiredService<IIpRangesService>());
+        Assert.Same(client.WorkersObservability, provider.GetRequiredService<IWorkersObservabilityService>());
+        Assert.Same(client.WorkersAi, provider.GetRequiredService<IWorkersAiService>());
+        Assert.Same(client.Turnstile, provider.GetRequiredService<ITurnstileService>());
+        Assert.Same(client.DurableObjects, provider.GetRequiredService<IDurableObjectsService>());
+        Assert.Same(client.UrlNormalization, provider.GetRequiredService<IUrlNormalizationService>());
+        Assert.Same(client.OriginPostQuantumEncryption, provider.GetRequiredService<IOriginPostQuantumEncryptionService>());
+        Assert.Same(client.Radar, provider.GetRequiredService<IRadarService>());
+        Assert.Same(client.Transport, provider.GetRequiredService<ICloudflareTransport>());
+        Assert.Same(client, provider.GetRequiredService<CloudflareClient>());
+        Assert.NotNull(provider.GetRequiredService<ICloudflareClientFactory>());
+    }
+
+    [Fact]
+    public void AddCloudflare_is_idempotent()
+    {
+        using var provider = new ServiceCollection()
+            .AddCloudflare(options => options.ApiToken = "tok")
+            .AddCloudflare(options => options.ApiToken = "other")
+            .BuildServiceProvider();
+
+        // Both Configure callbacks run, the last one wins.
+        Assert.Equal("other", provider.GetRequiredService<ICloudflareClient>().Options.ApiToken);
+    }
+
+    [Fact]
+    public void AddCloudflare_accepts_a_ready_made_options_instance()
+    {
+        using var provider = new ServiceCollection()
+            .AddCloudflare(new CloudflareClientOptions { ApiToken = "tok", AccountId = "acct", MaxRetries = 5 })
+            .BuildServiceProvider();
+
+        var options = provider.GetRequiredService<ICloudflareClient>().Options;
+
+        Assert.Equal("tok", options.ApiToken);
+        Assert.Equal("acct", options.AccountId);
+        Assert.Equal(5, options.MaxRetries);
+    }
+
+    [Fact]
+    public void AddCloudflareFromConfiguration_binds_the_Cloudflare_section()
+    {
+        var configuration = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["Cloudflare:ApiToken"] = "config-token",
+                ["Cloudflare:AccountId"] = "config-account",
+                ["Cloudflare:ZoneId"] = "config-zone",
+                ["Cloudflare:MaxRetries"] = "4",
+                ["Cloudflare:ThrowOnApiError"] = "false",
+                ["Cloudflare:Timeout"] = "00:00:30",
+                ["Cloudflare:BaseAddress"] = "https://proxy.example.test/client/v4/",
+                ["Other:ApiToken"] = "ignored",
+            })
+            .Build();
+
+        using var provider = new ServiceCollection()
+            .AddCloudflareFromConfiguration(configuration)
+            .BuildServiceProvider();
+
+        var options = provider.GetRequiredService<ICloudflareClient>().Options;
+
+        Assert.Equal("config-token", options.ApiToken);
+        Assert.Equal("config-account", options.AccountId);
+        Assert.Equal("config-zone", options.ZoneId);
+        Assert.Equal(4, options.MaxRetries);
+        Assert.False(options.ThrowOnApiError);
+        Assert.Equal(TimeSpan.FromSeconds(30), options.Timeout);
+        Assert.Equal("https://proxy.example.test/client/v4/", options.BaseAddress.OriginalString);
+    }
+
+    [Fact]
+    public void AddCloudflareFromConfiguration_honours_a_custom_section_and_a_callback()
+    {
+        var configuration = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["Cloudflare:Other:ApiToken"] = "nested-token",
+            })
+            .Build();
+
+        using var provider = new ServiceCollection()
+            .AddCloudflareFromConfiguration(
+                configuration,
+                sectionName: "Cloudflare:Other",
+                configure: options => options.AccountId = "from-callback")
+            .BuildServiceProvider();
+
+        var options = provider.GetRequiredService<ICloudflareClient>().Options;
+
+        Assert.Equal("nested-token", options.ApiToken);
+        Assert.Equal("from-callback", options.AccountId);
+    }
+
+    [Fact]
+    public void AddCloudflareFromConfiguration_falls_back_to_the_default_section_name()
+    {
+        var configuration = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?> { ["Cloudflare:ApiToken"] = "tok" })
+            .Build();
+
+        using var provider = new ServiceCollection()
+            .AddCloudflareFromConfiguration(configuration, sectionName: "   ")
+            .BuildServiceProvider();
+
+        Assert.Equal("tok", provider.GetRequiredService<ICloudflareClient>().Options.ApiToken);
+    }
+
+    [Fact]
+    public void AddCloudflareFromEnvironment_reads_the_process_environment()
+    {
+        var previous = Environment.GetEnvironmentVariable(CloudflareDefaults.EnvironmentVariables.ApiToken);
+        var previousAccount = Environment.GetEnvironmentVariable(CloudflareDefaults.EnvironmentVariables.AccountId);
+        Environment.SetEnvironmentVariable(CloudflareDefaults.EnvironmentVariables.ApiToken, "di-token");
+        Environment.SetEnvironmentVariable(CloudflareDefaults.EnvironmentVariables.AccountId, "di-account");
+
+        try
+        {
+            using var provider = new ServiceCollection()
+                .AddCloudflareFromEnvironment()
+                .BuildServiceProvider();
+
+            var options = provider.GetRequiredService<ICloudflareClient>().Options;
+
+            Assert.Equal("di-token", options.ApiToken);
+            Assert.Equal("di-account", options.AccountId);
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable(CloudflareDefaults.EnvironmentVariables.ApiToken, previous);
+            Environment.SetEnvironmentVariable(CloudflareDefaults.EnvironmentVariables.AccountId, previousAccount);
+        }
+    }
+
+    [Fact]
+    public void AddCloudflareFromEnvironment_lets_the_callback_override()
+    {
+        var previous = Environment.GetEnvironmentVariable(CloudflareDefaults.EnvironmentVariables.ApiToken);
+        Environment.SetEnvironmentVariable(CloudflareDefaults.EnvironmentVariables.ApiToken, "env-token");
+
+        try
+        {
+            using var provider = new ServiceCollection()
+                .AddCloudflareFromEnvironment(options => options.ApiToken = "callback-token")
+                .BuildServiceProvider();
+
+            Assert.Equal("callback-token", provider.GetRequiredService<ICloudflareClient>().Options.ApiToken);
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable(CloudflareDefaults.EnvironmentVariables.ApiToken, previous);
+        }
+    }
+
+    [Fact]
+    public void AddCloudflareHttpClient_registers_a_named_client_with_the_shared_timeout()
+    {
+        var collection = new ServiceCollection();
+        var builder = collection.AddCloudflareHttpClient(
+            options =>
+            {
+                options.ApiToken = "tok";
+                options.Timeout = TimeSpan.FromSeconds(13);
+            });
+
+        Assert.NotNull(builder);
+
+        using var provider = collection.BuildServiceProvider();
+
+        var namedClient = provider.GetRequiredService<IHttpClientFactory>()
+            .CreateClient(ServiceCollectionCloudflareExtensions.HttpClientName);
+
+        Assert.Equal("https://api.cloudflare.com/client/v4/", namedClient.BaseAddress!.OriginalString);
+        Assert.Equal(TimeSpan.FromSeconds(13), namedClient.Timeout);
+
+        var transport = provider.GetRequiredService<ICloudflareTransport>();
+
+        Assert.NotNull(transport);
+        Assert.Equal("tok", transport.Options.ApiToken);
+    }
+
+    [Fact]
+    public void AddCloudflareHttpClient_accepts_further_client_configuration()
+    {
+        using var stub = new StubHttpMessageHandler();
+        var collection = new ServiceCollection();
+        collection.AddCloudflareHttpClient(
+            options => options.ApiToken = "tok",
+            httpClientName: "cf",
+            configureClient: client => client.ConfigurePrimaryHttpMessageHandler(() => stub));
+
+        using var provider = collection.BuildServiceProvider();
+
+        var namedClient = provider.GetRequiredService<IHttpClientFactory>().CreateClient("cf");
+
+        Assert.NotNull(namedClient);
+        Assert.Equal(TimeSpan.FromSeconds(100), namedClient.Timeout);
+    }
+
+    [Fact]
+    public void AddCloudflareHttpClient_falls_back_to_the_default_name()
+    {
+        var collection = new ServiceCollection();
+        collection.AddCloudflareHttpClient(options => options.ApiToken = "tok", httpClientName: "  ");
+
+        using var provider = collection.BuildServiceProvider();
+
+        Assert.NotNull(provider.GetRequiredService<IHttpClientFactory>()
+            .CreateClient(ServiceCollectionCloudflareExtensions.HttpClientName));
+    }
+
+    [Fact]
+    public async Task AddCloudflareHttpClient_sends_through_the_named_client()
+    {
+        // Registering the stub in the container first keeps the handler builder callback pure:
+        // mutating an IServiceCollection after BuildServiceProvider is not supported.
+        var stub = new StubHttpMessageHandler();
+        stub.RespondWithResult("[{\"id\":\"z-1\",\"name\":\"a.test\"}]");
+
+        var collection = new ServiceCollection();
+        collection.AddSingleton(stub);
+        collection.AddCloudflareHttpClient(
+            options =>
+            {
+                options.ApiToken = "tok";
+                options.MaxRetries = 0;
+            },
+            configureClient: client => client.ConfigurePrimaryHttpMessageHandler(
+                provider => provider.GetRequiredService<StubHttpMessageHandler>()));
+
+        using var provider = collection.BuildServiceProvider();
+
+        var page = await provider.GetRequiredService<IZonesService>().ListAsync();
+
+        Assert.Single(page.Items);
+        Assert.Equal("a.test", page.Items[0].Name);
+        Assert.Equal("/client/v4/zones", stub.LastRequest.Path);
+        Assert.Equal("Bearer tok", stub.LastRequest.Header("Authorization"));
+    }
+
+    [Fact]
+    public void AddCloudflareClientFactory_registers_only_the_factory()
+    {
+        using var provider = new ServiceCollection()
+            .AddCloudflareClientFactory(options =>
+            {
+                options.ApiToken = "tok";
+                options.UserAgent = "CF.Net.Tests/1.0";
+            })
+            .BuildServiceProvider();
+
+        var factory = provider.GetRequiredService<ICloudflareClientFactory>();
+        using var client = factory.Create(options => options.AccountId = "acct");
+
+        Assert.Equal("tok", client.Options.ApiToken);
+        Assert.Equal("acct", client.Options.AccountId);
+        Assert.Equal("CF.Net.Tests/1.0", client.Options.UserAgent);
+        Assert.Null(provider.GetService<ICloudflareClient>());
+    }
+
+    [Fact]
+    public void The_factory_registered_by_AddCloudflare_reuses_the_named_http_client_when_one_exists()
+    {
+        var collection = new ServiceCollection();
+        collection.AddCloudflareHttpClient(options => options.ApiToken = "tok");
+
+        using var provider = collection.BuildServiceProvider();
+
+        using var first = provider.GetRequiredService<ICloudflareClientFactory>().Create();
+        using var second = provider.GetRequiredService<ICloudflareClientFactory>().Create();
+
+        Assert.NotSame(first, second);
+        Assert.Equal("tok", first.Options.ApiToken);
+    }
+
+    [Fact]
+    public void The_extensions_reject_a_null_service_collection()
+    {
+        Assert.Throws<ArgumentNullException>(
+            () => ServiceCollectionCloudflareExtensions.AddCloudflare(null!, (Action<CloudflareClientOptions>?)null));
+        Assert.Throws<ArgumentNullException>(
+            () => ServiceCollectionCloudflareExtensions.AddCloudflare(null!, new CloudflareClientOptions()));
+        Assert.Throws<ArgumentNullException>(
+            () => ServiceCollectionCloudflareExtensions.AddCloudflareFromConfiguration(null!, new ConfigurationBuilder().Build()));
+        Assert.Throws<ArgumentNullException>(
+            () => new ServiceCollection().AddCloudflareFromConfiguration(null!));
+        Assert.Throws<ArgumentNullException>(
+            () => ServiceCollectionCloudflareExtensions.AddCloudflareHttpClient(null!));
+        Assert.Throws<ArgumentNullException>(
+            () => ServiceCollectionCloudflareExtensions.AddCloudflareClientFactory(null!));
+    }
+
+    [Fact]
+    public async Task A_custom_transport_registered_beforehand_wins_over_the_default_one()
+    {
+        // TryAddSingleton only registers when nothing is there yet, which is exactly the extension
+        // point an application needs to inject a logging or mocking transport.
+        var stub = new StubHttpMessageHandler();
+        stub.RespondWithResult("[{\"uuid\":\"db-1\",\"name\":\"app\"}]");
+
+        var options = new CloudflareClientOptions
+        {
+            ApiToken = "tok",
+            AccountId = "acct",
+            MaxRetries = 0,
+        };
+
+        var collection = new ServiceCollection();
+        collection.AddSingleton<ICloudflareTransport>(new CloudflareTransport(new HttpClient(stub), options));
+        collection.AddCloudflare(configure =>
+        {
+            configure.ApiToken = options.ApiToken;
+            configure.AccountId = options.AccountId;
+        });
+
+        using var provider = collection.BuildServiceProvider();
+
+        var databases = await provider.GetRequiredService<ID1DatabaseService>().ListAsync();
+
+        Assert.Equal("app", Assert.Single(databases.Items).Name);
+        Assert.Equal("/client/v4/accounts/acct/d1/database", stub.LastRequest.Path);
+        Assert.Same(
+            provider.GetRequiredService<ICloudflareTransport>(),
+            provider.GetRequiredService<ICloudflareClient>().Transport);
+    }
+}
+
+/// <summary>
+/// <c>GET /user/tokens/permission_groups</c> - what a token may be granted, which is the question every
+/// "why was this call refused" investigation ends up asking.
+/// </summary>
+public class PermissionGroupTests
+{
+    /// <summary>Three of the rows from the reference's own 200 example, unchanged.</summary>
+    private const string DocumentedRows = """
+        [
+          {"id":"1a71c399035b4950a1bd1466bbe4f420","category":"developer_platform","is_selectable":true,"name":"Workers Scripts Read","scopes":["com.cloudflare.api.account"]},
+          {"id":"d2a1802cc9a34e30852f8b33869b2f3c","category":"network_services","is_selectable":false,"name":"Load Balancing: Monitors and Pools Write","scopes":["com.cloudflare.api.account"]},
+          {"id":"9d24387c6e8544e2bc4024a03991339f","category":"network_services","is_selectable":true,"name":"Load Balancing: Monitors and Pools Read","scopes":["com.cloudflare.api.account"]}
+        ]
+        """;
+
+    [Fact]
+    public async Task ListPermissionGroupsAsync_reads_the_documented_rows()
+    {
+        using var harness = CloudflareHarness.Create();
+        harness.RespondWithPage(DocumentedRows, page: 1, totalPages: 1, count: 3, totalCount: 3);
+
+        var groups = await harness.Client.User.ListPermissionGroupsAsync();
+
+        Assert.EndsWith("/user/tokens/permission_groups", harness.LastRequest.Path, StringComparison.Ordinal);
+        Assert.Equal(string.Empty, harness.LastRequest.Query);
+        Assert.Equal(3, groups.Count);
+
+        var scripts = groups.Items[0];
+        Assert.Equal("1a71c399035b4950a1bd1466bbe4f420", scripts.Id);
+        Assert.Equal("Workers Scripts Read", scripts.Name);
+        Assert.Equal(CloudflarePermissionCategories.DeveloperPlatform, scripts.Category);
+        Assert.True(scripts.IsSelectable);
+        Assert.True(scripts.IsAccountScoped);
+        Assert.False(scripts.IsZoneScoped);
+        Assert.False(scripts.IsUserScoped);
+        Assert.Equal("Workers Scripts Read (developer_platform)", scripts.ToString());
+
+        // is_selectable is false for groups the caller may not grant, which is the difference between a
+        // group existing and a token being able to hold it.
+        Assert.False(groups.Items[1].IsSelectable);
+        Assert.Equal("Load Balancing: Monitors and Pools Write", groups.Items[1].Name);
+    }
+
+    [Fact]
+    public async Task ListPermissionGroupsAsync_filters_by_name_and_scope()
+    {
+        using var harness = CloudflareHarness.Create();
+        harness.RespondWithPage(DocumentedRows, page: 1, totalPages: 1, count: 3, totalCount: 3);
+
+        await harness.Client.User.ListPermissionGroupsAsync(
+            name: "Workers",
+            scope: CloudflarePermissionScopes.Account);
+
+        Assert.Equal(
+            "?name=Workers&scope=com.cloudflare.api.account",
+            harness.LastRequest.Query);
+    }
+
+    [Fact]
+    public async Task ListPermissionGroupsAsync_reads_the_paging_figures_beside_the_array()
+    {
+        using var harness = CloudflareHarness.Create();
+        harness.RespondWithPage(DocumentedRows, page: 2, totalPages: 7, count: 3, totalCount: 20);
+
+        var groups = await harness.Client.User.ListPermissionGroupsAsync();
+
+        Assert.Equal(20, groups.TotalCount);
+        Assert.Equal(7, groups.Info?.TotalPages);
+        Assert.True(groups.HasMore);
+        Assert.Equal(3, groups.NextPage);
+    }
+
+    [Fact]
+    public async Task Permission_groups_capture_fields_the_model_does_not_declare()
+    {
+        using var harness = CloudflareHarness.Create();
+        harness.RespondWithPage(
+            """[{"id":"abc","name":"Workers Scripts Read","deprecated":true}]""",
+            page: 1, totalPages: 1, count: 1, totalCount: 1);
+
+        var group = Assert.Single((await harness.Client.User.ListPermissionGroupsAsync()).Items);
+
+        Assert.Contains("deprecated", group.AdditionalData!.Keys, StringComparer.Ordinal);
+    }
+
+    [Fact]
+    public void A_group_reports_which_resource_it_applies_to()
+    {
+        Assert.True(new CloudflarePermissionGroup
+        {
+            Scopes = new List<string> { CloudflarePermissionScopes.Zone },
+        }.IsZoneScoped);
+        Assert.True(new CloudflarePermissionGroup
+        {
+            Scopes = new List<string> { CloudflarePermissionScopes.User },
+        }.IsUserScoped);
+        // An R2 bucket scope is none of the three resource questions above.
+        var bucket = new CloudflarePermissionGroup
+        {
+            Scopes = new List<string> { CloudflarePermissionScopes.R2Bucket },
+        };
+        Assert.False(bucket.IsAccountScoped);
+        Assert.False(bucket.IsZoneScoped);
+        Assert.False(bucket.IsUserScoped);
+        Assert.False(new CloudflarePermissionGroup().IsAccountScoped);
+        Assert.Equal("Workers Scripts Read", new CloudflarePermissionGroup
+        {
+            Name = "Workers Scripts Read",
+        }.ToString());
+    }
+}
+
+/// <summary>
+/// The account-scoped catalogue: the one an account-owned token can read, and the one a token-creation URL
+/// for such a token has to be built from, because the id each row carries is the key that URL takes.
+/// </summary>
+public class AccountPermissionGroupTests
+{
+    /// <summary>
+    /// Two rows shaped like the live ones. <c>Workers Scripts Write</c> is the group this suite uploads
+    /// with, and <c>Mass URL Redirects Write</c> is one of the groups that has no short key at all, so the
+    /// only way to ask for it in a URL is by this id.
+    /// </summary>
+    private const string AccountRows = """
+        [
+          {"id":"e086da7e2179491d91ee5f35b3ca210a","category":"developer_platform","is_selectable":true,"name":"Workers Scripts Write","scopes":["com.cloudflare.api.account"]},
+          {"id":"abe78e2276664f4db588c1f675a77486","category":"rules_and_configuration","is_selectable":true,"name":"Mass URL Redirects Write","scopes":["com.cloudflare.api.account"]}
+        ]
+        """;
+
+    [Fact]
+    public async Task ListAccountPermissionGroupsAsync_reads_the_account_catalogue()
+    {
+        using var harness = CloudflareHarness.Create();
+        harness.RespondWithPage(AccountRows, page: 1, totalPages: 1, count: 2, totalCount: 415);
+
+        var groups = await harness.Client.User.ListAccountPermissionGroupsAsync();
+
+        Assert.EndsWith(
+            "/accounts/acct-1234/tokens/permission_groups",
+            harness.LastRequest.Path,
+            StringComparison.Ordinal);
+        Assert.Equal(string.Empty, harness.LastRequest.Query);
+        Assert.Equal(2, groups.Count);
+        Assert.Equal(415, groups.TotalCount);
+
+        Assert.Equal("e086da7e2179491d91ee5f35b3ca210a", groups.Items[0].Id);
+        Assert.Equal("Workers Scripts Write", groups.Items[0].Name);
+        Assert.True(groups.Items[0].IsAccountScoped);
+
+        // The rows are the same shape the user-scoped endpoint documents, so the same model reads both.
+        Assert.Equal(CloudflarePermissionCategories.RulesAndConfiguration, groups.Items[1].Category);
+        Assert.Equal("Mass URL Redirects Write (rules_and_configuration)", groups.Items[1].ToString());
+    }
+
+    [Fact]
+    public async Task ListAccountPermissionGroupsAsync_filters_by_name_and_scope()
+    {
+        using var harness = CloudflareHarness.Create();
+        harness.RespondWithPage(AccountRows, page: 1, totalPages: 1, count: 2, totalCount: 2);
+
+        await harness.Client.User.ListAccountPermissionGroupsAsync(
+            name: "Workers",
+            scope: CloudflarePermissionScopes.Account);
+
+        Assert.Equal(
+            "?name=Workers&scope=com.cloudflare.api.account",
+            harness.LastRequest.Query);
+    }
+
+    [Fact]
+    public async Task ListAccountPermissionGroupsAsync_takes_an_explicit_account()
+    {
+        using var harness = CloudflareHarness.Create();
+        harness.RespondWithPage(AccountRows, page: 1, totalPages: 1, count: 2, totalCount: 2);
+
+        await harness.Client.User.ListAccountPermissionGroupsAsync(accountId: "acct-9999");
+
+        Assert.Contains("/accounts/acct-9999/tokens/permission_groups", harness.LastRequest.Path, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task ListAccountPermissionGroupsAsync_needs_an_account_to_ask()
+    {
+        // No account id is configured and none was passed, so there is no catalogue to read: the call is
+        // refused locally rather than sent to a URL with a hole in it.
+        using var harness = CloudflareHarness.Create(options => options.AccountId = null);
+
+        var exception = await Assert.ThrowsAsync<CloudflareConfigurationException>(
+            () => harness.Client.User.ListAccountPermissionGroupsAsync());
+
+        Assert.NotEmpty(exception.Problems);
+        Assert.Equal(0, harness.RequestCount);
+    }
+}
+
+/// <summary>
+/// Fields and scopes the live account catalogue turned up that the published one does not carry: they are
+/// declared here so a run stops reporting them as unmodelled.
+/// </summary>
+public class PermissionGroupLiveShapeTests
+{
+    [Fact]
+    public void A_group_reads_its_description()
+    {
+        // Observed live on 'AI Audit Read': {"description":"Grants access to reading AI Audit"}.
+        var group = JsonSerializer.Deserialize<CloudflarePermissionGroup>(
+            """{"id":"abc","name":"AI Audit Read","category":"analytics_and_logs","description":"Grants access to reading AI Audit"}""",
+            CloudflareJson.Default)!;
+
+        Assert.Equal("Grants access to reading AI Audit", group.Description);
+        // Now that it is declared, it is no longer an uncaptured field.
+        Assert.True(group.AdditionalData is null or { Count: 0 });
+    }
+
+    [Fact]
+    public void A_group_can_be_scoped_to_one_worker_script()
+    {
+        // The 'Individual Workers …' groups grant a single script, which is a fourth kind of resource
+        // question the three Is*Scoped helpers do not answer.
+        var script = new CloudflarePermissionGroup
+        {
+            Scopes = new List<string> { CloudflarePermissionScopes.WorkerScript },
+        };
+
+        Assert.Equal("com.cloudflare.edge.worker.script", CloudflarePermissionScopes.WorkerScript);
+        Assert.False(script.IsAccountScoped);
+        Assert.False(script.IsZoneScoped);
+        Assert.False(script.IsUserScoped);
+    }
+
+    [Fact]
+    public void A_group_can_be_scoped_to_one_flagship_app()
+    {
+        Assert.Equal(
+            "com.cloudflare.api.account.flagship.app",
+            CloudflarePermissionScopes.FlagshipApp);
+        Assert.False(new CloudflarePermissionGroup
+        {
+            Scopes = new List<string> { CloudflarePermissionScopes.FlagshipApp },
+        }.IsAccountScoped);
+    }
+}

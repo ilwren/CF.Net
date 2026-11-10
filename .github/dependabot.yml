@@ -1,0 +1,39 @@
+version: 2
+
+updates:
+  # NuGet covers the library, both test projects and the Avalonia gallery.
+  - package-ecosystem: nuget
+    directory: "/"
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 10
+    labels:
+      - dependencies
+    groups:
+      # The Microsoft.Extensions.* packages move together and must stay on the same minor line,
+      # otherwise NuGet reports a downgrade (NU1605).
+      microsoft-extensions:
+        patterns:
+          - "Microsoft.Extensions.*"
+      avalonia:
+        patterns:
+          - "Avalonia*"
+      xunit:
+        patterns:
+          - "xunit*"
+          - "xunit.runner.*"
+    ignore:
+      # Test SDK 17.x cannot target net10.0; never accept a downgrade back into the 17 line.
+      - dependency-name: "Microsoft.NET.Test.Sdk"
+        update-types: ["version-update:semver-major"]
+
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 5
+    labels:
+      - dependencies
+      - ci

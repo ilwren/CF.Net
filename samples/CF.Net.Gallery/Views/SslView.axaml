@@ -1,0 +1,285 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:vm="using:CFNet.Gallery.ViewModels"
+             x:Class="CFNet.Gallery.Views.SslView"
+             x:DataType="vm:SslViewModel">
+
+  <DockPanel>
+
+    <StackPanel DockPanel.Dock="Top" Orientation="Vertical" Margin="16,14,16,6">
+      <TextBlock Classes="h1" Text="{Binding Title}" />
+      <TextBlock Classes="hint" Text="{Binding Description}" Margin="0,4,0,2" TextWrapping="Wrap" />
+      <TextBlock Text="{Binding Status}" FontSize="12" Opacity="0.8" Margin="0,4,0,0" TextWrapping="Wrap" />
+    </StackPanel>
+
+    <ScrollViewer VerticalScrollBarVisibility="Auto" Padding="16,4,16,16">
+      <StackPanel Orientation="Vertical" MaxWidth="900" HorizontalAlignment="Left">
+
+        <Border Classes="card">
+          <StackPanel Orientation="Vertical" Spacing="10">
+            <TextBlock Classes="h2" Text="Zone used by every call below" />
+            <TextBox Text="{Binding ZoneOverride, Mode=TwoWay}" MinWidth="380" HorizontalAlignment="Left"
+                     PlaceholderText="zone id - blank uses the one from the Credentials page" />
+            <TextBlock Classes="hint" Text="Every SSL endpoint is zone scoped. Leaving this blank passes no zone id at all, and the library falls back to the configured default - which is what the inspector will show being sent." />
+          </StackPanel>
+        </Border>
+
+        <Border Classes="card">
+          <StackPanel Orientation="Vertical" Spacing="10">
+            <TextBlock Classes="h2" Text="Certificate packs  -  GET /zones/{zone_id}/ssl/certificate_packs" />
+            <WrapPanel Orientation="Horizontal">
+              <StackPanel Orientation="Vertical" Spacing="3" Margin="0,0,16,8">
+                <TextBlock Classes="hint" Text="Deploy" />
+                <ComboBox ItemsSource="{Binding Deploys}" SelectedItem="{Binding ListDeploy, Mode=TwoWay}" Width="150" />
+              </StackPanel>
+              <StackPanel Orientation="Vertical" Spacing="3" Margin="0,0,16,8">
+                <TextBlock Classes="hint" Text="Status" />
+                <ComboBox ItemsSource="{Binding Statuses}" SelectedItem="{Binding ListStatus, Mode=TwoWay}" Width="120" />
+              </StackPanel>
+              <StackPanel Orientation="Vertical" Spacing="3" Margin="0,0,16,8">
+                <TextBlock Classes="hint" Text="Per page (5-50)" />
+                <TextBox Text="{Binding ListPerPage, Mode=TwoWay}" Width="120" />
+              </StackPanel>
+              <StackPanel Orientation="Vertical" Spacing="3" Margin="0,0,16,8">
+                <TextBlock Classes="hint" Text="Page" />
+                <TextBox Text="{Binding ListPage, Mode=TwoWay}" Width="100" />
+              </StackPanel>
+            </WrapPanel>
+            <WrapPanel Orientation="Horizontal">
+              <Button Classes="run" Content="List" Command="{Binding ListCommand}" Margin="0,0,8,0" />
+              <Button Content="Walk every page" Command="{Binding ListAllCommand}" />
+            </WrapPanel>
+            <StackPanel Orientation="Horizontal" Spacing="10">
+              <TextBlock Text="Pack UUID" Width="140" VerticalAlignment="Center" />
+              <TextBox Text="{Binding PackId, Mode=TwoWay}" MinWidth="420" PlaceholderText="certificate pack UUID - used by every call below" />
+            </StackPanel>
+            <WrapPanel Orientation="Horizontal">
+              <Button Classes="run" Content="Get" Command="{Binding GetPackCommand}" Margin="0,0,8,0" />
+              <Button Content="Delete" Command="{Binding DeletePackCommand}" />
+            </WrapPanel>
+            <TextBlock Classes="hint" Text="Without status=all only the active packs are listed. Delete is Advanced Certificate Manager packs only, and it is irreversible: the hosts fall back to whatever certificate still covers them." TextWrapping="Wrap" />
+          </StackPanel>
+        </Border>
+
+        <Border Classes="card">
+          <StackPanel Orientation="Vertical" Spacing="10">
+            <TextBlock Classes="h2" Text="Order a pack  -  POST /zones/{zone_id}/ssl/certificate_packs/order" />
+            <StackPanel Orientation="Vertical" Spacing="3">
+              <TextBlock Classes="hint" Text="Hostnames, one per line - the zone apex must be among them" />
+              <TextBox Text="{Binding OrderHosts, Mode=TwoWay}" AcceptsReturn="True" Height="80"
+                       TextWrapping="Wrap" PlaceholderText="example.com&#x0a;*.example.com" />
+            </StackPanel>
+            <WrapPanel Orientation="Horizontal">
+              <StackPanel Orientation="Vertical" Spacing="3" Margin="0,0,16,8">
+                <TextBlock Classes="hint" Text="Validation method" />
+                <ComboBox ItemsSource="{Binding OrderValidationMethods}" SelectedItem="{Binding OrderValidationMethod, Mode=TwoWay}" Width="140" />
+              </StackPanel>
+              <StackPanel Orientation="Vertical" Spacing="3" Margin="0,0,16,8">
+                <TextBlock Classes="hint" Text="Validity days" />
+                <ComboBox ItemsSource="{Binding ValidityDays}" SelectedItem="{Binding OrderValidityDays, Mode=TwoWay}" Width="120" />
+              </StackPanel>
+              <StackPanel Orientation="Vertical" Spacing="3" Margin="0,0,16,8">
+                <TextBlock Classes="hint" Text="Certificate authority" />
+                <ComboBox ItemsSource="{Binding Authorities}" SelectedItem="{Binding OrderAuthority, Mode=TwoWay}" Width="180" />
+              </StackPanel>
+              <StackPanel Orientation="Vertical" Spacing="3" Margin="0,0,16,8">
+                <TextBlock Classes="hint" Text="Cloudflare branding" />
+                <ComboBox ItemsSource="{Binding BrandingChoices}" SelectedItem="{Binding OrderBranding, Mode=TwoWay}" Width="120" />
+              </StackPanel>
+            </WrapPanel>
+            <WrapPanel Orientation="Horizontal">
+              <Button Classes="run" Content="Order" Command="{Binding OrderCommand}" Margin="0,0,8,0" />
+              <Button Content="Read the quota first" Command="{Binding GetQuotaCommand}" />
+            </WrapPanel>
+            <TextBlock Classes="hint" Text="Ordering is a paid Advanced Certificate Manager feature, at most 50 hosts, and the call returning is not the end of it: the pack sits in pending_validation until the challenge is answered. Every field is checked locally first, so a bad combination fails here instead of as a 400. Blank branding leaves the field out of the body." TextWrapping="Wrap" />
+          </StackPanel>
+        </Border>
+
+        <Border Classes="card">
+          <StackPanel Orientation="Vertical" Spacing="10">
+            <TextBlock Classes="h2" Text="Branding and validation restart  -  PATCH /zones/{zone_id}/ssl/certificate_packs/{certificate_pack_id}" />
+            <WrapPanel Orientation="Horizontal">
+              <Button Classes="run" Content="Branding on" Command="{Binding BrandingOnCommand}" Margin="0,0,8,0" />
+              <Button Content="Branding off" Command="{Binding BrandingOffCommand}" Margin="0,0,8,0" />
+              <Button Content="Restart validation (empty body)" Command="{Binding RestartValidationCommand}" />
+            </WrapPanel>
+            <TextBlock Classes="hint" Text="One endpoint, two unrelated operations. Branding off is sent explicitly as false, because omitting the field would leave the setting alone; an empty body means restart validation instead, which only does something for a pack in validation_timed_out - and the challenge still has to be answered afterwards. Watch the request pane: the two calls differ only in the body." TextWrapping="Wrap" />
+          </StackPanel>
+        </Border>
+
+        <Border Classes="card">
+          <StackPanel Orientation="Vertical" Spacing="10">
+            <TextBlock Classes="h2" Text="Validation details  -  GET and PATCH /zones/{zone_id}/ssl/verification" />
+            <WrapPanel Orientation="Horizontal">
+              <CheckBox IsChecked="{Binding VerificationRetry, Mode=TwoWay}" Content="retry=true - re-run the check now" VerticalAlignment="Center" Margin="0,0,16,0" />
+              <Button Classes="run" Content="Read verification details" Command="{Binding GetVerificationCommand}" />
+            </WrapPanel>
+            <WrapPanel Orientation="Horizontal">
+              <StackPanel Orientation="Vertical" Spacing="3" Margin="0,0,16,8">
+                <TextBlock Classes="hint" Text="Switch the pack to" />
+                <ComboBox ItemsSource="{Binding ValidationMethods}" SelectedItem="{Binding NewValidationMethod, Mode=TwoWay}" Width="140" />
+              </StackPanel>
+            </WrapPanel>
+            <WrapPanel Orientation="Horizontal">
+              <Button Classes="run" Content="Update method and validate" Command="{Binding UpdateValidationMethodCommand}" Margin="0,0,8,0" />
+              <Button Content="Revalidate now (empty body)" Command="{Binding RevalidateCommand}" />
+            </WrapPanel>
+            <TextBlock Classes="hint" Text="This is the endpoint that answers 'why has my certificate not been issued': each entry carries verification_info, naming the exact record or URL the authority is waiting for. There are four different ways to try again and they are not interchangeable - retry=true re-checks every certificate in the zone, Revalidate re-checks one, Update method switches the method and validates with it, and Restart validation above works on the pack. cname (DCV delegation) is offered here but not when ordering, because Cloudflare accepts it in one place and not the other." TextWrapping="Wrap" />
+          </StackPanel>
+        </Border>
+
+        <Border Classes="card">
+          <StackPanel Orientation="Vertical" Spacing="10">
+            <TextBlock Classes="h2" Text="Quota, recommendation and analysis" />
+            <WrapPanel Orientation="Horizontal">
+              <Button Classes="run" Content="Read the pack quota" Command="{Binding GetQuotaCommand}" Margin="0,0,8,0" />
+              <Button Content="Read the recommendation (deprecated)" Command="{Binding GetRecommendationCommand}" />
+            </WrapPanel>
+            <TextBlock Classes="hint" Text="The quota reports how many advanced packs are allocated and used, plus how many are left - worth reading before ordering, since ordering past it simply fails. The recommendation endpoint is deprecated and its path is singular; it returns the automatic-mode setting rather than a suggested encryption mode." TextWrapping="Wrap" />
+            <StackPanel Orientation="Vertical" Spacing="3">
+              <TextBlock Classes="hint" Text="Certificate to inspect, in PEM, intermediates included  -  POST /zones/{zone_id}/ssl/analyze" />
+              <TextBox Text="{Binding AnalyzePem, Mode=TwoWay}" AcceptsReturn="True" Height="110"
+                       TextWrapping="Wrap" FontFamily="Consolas,Menlo,monospace" PlaceholderText="-----BEGIN CERTIFICATE-----" />
+            </StackPanel>
+            <WrapPanel Orientation="Horizontal">
+              <StackPanel Orientation="Vertical" Spacing="3" Margin="0,0,16,8">
+                <TextBlock Classes="hint" Text="Bundle method" />
+                <ComboBox ItemsSource="{Binding BundleMethods}" SelectedItem="{Binding AnalyzeBundleMethod, Mode=TwoWay}" Width="160" />
+              </StackPanel>
+            </WrapPanel>
+            <Button Classes="run" Content="Analyze" Command="{Binding AnalyzeCommand}" />
+            <TextBlock Classes="hint" Text="The result pane shows raw JSON here, and that is deliberate: Cloudflare types this result as unknown - the official Go SDK maps it to interface{} - so the library types the request and hands back what came, rather than inventing property names." TextWrapping="Wrap" />
+          </StackPanel>
+        </Border>
+
+        <Border Classes="card">
+          <StackPanel Orientation="Vertical" Spacing="10">
+            <TextBlock Classes="h2" Text="Universal SSL  -  GET and PATCH /zones/{zone_id}/ssl/universal/settings" />
+            <WrapPanel Orientation="Horizontal">
+              <Button Classes="run" Content="Read" Command="{Binding GetUniversalCommand}" Margin="0,0,8,0" />
+              <Button Content="Turn on" Command="{Binding UniversalOnCommand}" Margin="0,0,8,0" />
+              <Button Content="Turn off" Command="{Binding UniversalOffCommand}" />
+            </WrapPanel>
+            <TextBlock Classes="hint" Text="One boolean with a disproportionate blast radius. Turning it off removes the zone's active universal certificates from the edge and stops Cloudflare ordering new ones: unless an advanced pack or an uploaded custom certificate covers the hostname, HTTPS stops working, and HSTS, Always Use HTTPS, Opportunistic Encryption, Onion Routing and any page rule redirecting to HTTPS turn that into a hard failure instead of a fallback to HTTP. Read it before you turn it off." TextWrapping="Wrap" />
+          </StackPanel>
+        </Border>
+
+        <Border Classes="card">
+          <StackPanel Orientation="Vertical" Spacing="10">
+            <TextBlock Classes="h2" Text="Enrolment settings  -  /zones/{zone_id}/settings/auto_origin_tls_kex and ssl_automatic_mode" />
+            <TextBlock Classes="hint" Text="Auto-Origin TLS KEX" />
+            <WrapPanel Orientation="Horizontal">
+              <Button Classes="run" Content="Read" Command="{Binding GetKexCommand}" Margin="0,0,8,0" />
+              <Button Content="Enable" Command="{Binding KexOnCommand}" Margin="0,0,8,0" />
+              <Button Content="Disable" Command="{Binding KexOffCommand}" />
+            </WrapPanel>
+            <TextBlock Classes="hint" Text="Cloudflare files this under SSL but serves it from the zone settings path, and it reports 'enabled' rather than the 'value' nearly every other setting uses. When on, Cloudflare periodically scans the zone's origins and sends the preferred key-exchange algorithm first in the TLS ClientHello, choosing only from what origin_tls_compliance_modes allows. Disable is sent as an explicit false - an empty body would change nothing." TextWrapping="Wrap" />
+            <TextBlock Classes="hint" Text="Automatic SSL/TLS" />
+            <WrapPanel Orientation="Horizontal">
+              <Button Classes="run" Content="Read" Command="{Binding GetAutomaticCommand}" Margin="0,0,8,0" />
+              <StackPanel Orientation="Vertical" Spacing="3" Margin="0,0,8,0">
+                <ComboBox ItemsSource="{Binding AutomaticModes}" SelectedItem="{Binding AutomaticMode, Mode=TwoWay}" Width="120" />
+              </StackPanel>
+              <Button Content="Set" Command="{Binding SetAutomaticCommand}" Margin="0,0,8,0" />
+              <Button Content="Enrol (auto)" Command="{Binding AutomaticAutoCommand}" Margin="0,0,8,0" />
+              <Button Content="Opt out (custom)" Command="{Binding AutomaticCustomCommand}" />
+            </WrapPanel>
+            <TextBlock Classes="hint" Text="auto enrols the zone so Cloudflare manages its encryption mode; custom leaves that to the zone, and opting out does not change the mode the zone is on. Any other value is refused locally, because Cloudflare answers it with error 1008 - 'only auto or custom accepted'. Set uses the value in the picker; the two buttons use the convenience methods, so all three paths are one click apart." TextWrapping="Wrap" />
+          </StackPanel>
+        </Border>
+
+        <Border Classes="card">
+          <StackPanel Orientation="Vertical" Spacing="10">
+            <TextBlock Classes="h2" Text="SSL for SaaS custom hostnames  -  /zones/{zone_id}/custom_hostnames" />
+            <WrapPanel Orientation="Horizontal">
+              <StackPanel Orientation="Vertical" Spacing="3" Margin="0,0,16,8">
+                <TextBlock Classes="hint" Text="Hostname to add" />
+                <TextBox Text="{Binding Hostname, Mode=TwoWay}" Width="260" PlaceholderText="shop.customer.com" />
+              </StackPanel>
+              <StackPanel Orientation="Vertical" Spacing="3" Margin="0,0,16,8">
+                <TextBlock Classes="hint" Text="Validation method" />
+                <ComboBox ItemsSource="{Binding DcvMethods}" SelectedItem="{Binding HostnameDcvMethod, Mode=TwoWay}" Width="120" />
+              </StackPanel>
+              <CheckBox IsChecked="{Binding HostnameWildcard, Mode=TwoWay}" Content="wildcard" VerticalAlignment="Center" Margin="0,0,16,8" />
+              <StackPanel Orientation="Vertical" Spacing="3" Margin="0,0,16,8">
+                <TextBlock Classes="hint" Text="Per page (5-1000)" />
+                <TextBox Text="{Binding HostnamePerPage, Mode=TwoWay}" Width="120" />
+              </StackPanel>
+            </WrapPanel>
+            <WrapPanel Orientation="Horizontal">
+              <StackPanel Orientation="Vertical" Spacing="3" Margin="0,0,16,8">
+                <TextBlock Classes="hint" Text="Hostname contains" />
+                <TextBox Text="{Binding HostnameContains, Mode=TwoWay}" Width="220" />
+              </StackPanel>
+              <StackPanel Orientation="Vertical" Spacing="3" Margin="0,0,16,8">
+                <TextBlock Classes="hint" Text="Status" />
+                <ComboBox ItemsSource="{Binding HostnameStatuses}" SelectedItem="{Binding HostnameStatus, Mode=TwoWay}" Width="200" />
+              </StackPanel>
+            </WrapPanel>
+            <WrapPanel Orientation="Horizontal">
+              <Button Classes="run" Content="List" Command="{Binding ListHostnamesCommand}" Margin="0,0,8,0" />
+              <Button Content="List every page" Command="{Binding ListAllHostnamesCommand}" />
+            </WrapPanel>
+            <WrapPanel Orientation="Horizontal">
+              <StackPanel Orientation="Vertical" Spacing="3" Margin="0,0,16,8">
+                <TextBlock Classes="hint" Text="Custom hostname id" />
+                <TextBox Text="{Binding HostnameId, Mode=TwoWay}" Width="300" PlaceholderText="copy it from a list result" />
+              </StackPanel>
+              <StackPanel Orientation="Vertical" Spacing="3" Margin="0,0,16,8">
+                <TextBlock Classes="hint" Text="Origin to route it to" />
+                <TextBox Text="{Binding HostnameOrigin, Mode=TwoWay}" Width="260" PlaceholderText="origin.example.com" />
+              </StackPanel>
+            </WrapPanel>
+            <WrapPanel Orientation="Horizontal">
+              <Button Classes="run" Content="Get" Command="{Binding GetHostnameCommand}" Margin="0,0,8,0" />
+              <Button Content="Create and ask for a certificate" Command="{Binding CreateHostnameCommand}" Margin="0,0,8,0" />
+              <Button Content="Retry validation" Command="{Binding RetryHostnameValidationCommand}" Margin="0,0,8,0" />
+              <Button Content="Set origin" Command="{Binding SetHostnameOriginCommand}" Margin="0,0,8,0" />
+              <Button Content="Delete" Command="{Binding DeleteHostnameCommand}" />
+            </WrapPanel>
+            <TextBlock Classes="hint" Text="Creating one of these does not give you a working certificate, it gives you a challenge: read the result and it names the TXT record or the HTTP token the customer has to put in place, and ssl.validation_records says exactly what the authority is waiting for. status tracks the hostname while ssl.status tracks the certificate, and they move on their own schedule - ssl.status is the one to poll. Retry validation is the PATCH that re-runs domain control validation, which is what an http hostname needs once its CNAME finally resolves, and there is no rename: a hostname can only be deleted and created again." TextWrapping="Wrap" />
+            <TextBlock Classes="hint" Text="The id filter and the three hostname filters exclude each other, and Cloudflare rejects a request that combines them, so this page only offers the contains one. Deleting removes the hostname and any certificate issued for it, so HTTPS for it stops." TextWrapping="Wrap" />
+          </StackPanel>
+        </Border>
+
+        <Border Classes="card">
+          <StackPanel Orientation="Vertical" Spacing="10">
+            <TextBlock Classes="h2" Text="Origin TLS compliance modes  -  /zones/{zone_id}/settings/origin_tls_compliance_modes" />
+            <WrapPanel Orientation="Horizontal">
+              <StackPanel Orientation="Vertical" Spacing="3" Margin="0,0,16,8">
+                <TextBlock Classes="hint" Text="Modes, comma separated" />
+                <TextBox Text="{Binding ComplianceModes, Mode=TwoWay}" Width="260" PlaceholderText="fips, pqh" />
+              </StackPanel>
+              <Button Classes="run" Content="Get" Command="{Binding GetComplianceModesCommand}" VerticalAlignment="Center" Margin="0,0,8,8" />
+              <Button Content="Replace (PUT)" Command="{Binding ReplaceComplianceModesCommand}" VerticalAlignment="Center" Margin="0,0,8,8" />
+              <Button Content="Change (PATCH)" Command="{Binding ChangeComplianceModesCommand}" VerticalAlignment="Center" Margin="0,0,8,8" />
+              <Button Content="Clear (DELETE)" Command="{Binding ClearComplianceModesCommand}" VerticalAlignment="Center" Margin="0,0,0,8" />
+            </WrapPanel>
+            <TextBlock Classes="hint" Text="These modes bound what Auto-Origin TLS KEX is allowed to choose when it picks a key exchange for the zone origins: fips keeps it to FIPS-approved curves and pqh asks for a post-quantum hybrid one. Listing more than one combines them as the intersection of the algorithms each permits, and Cloudflare rejects a combination whose intersection is empty rather than quietly loosening it." TextWrapping="Wrap" />
+            <TextBlock Classes="hint" Text="Both write verbs are a full replace, not a merge - PATCH here means the same thing PUT does, so dropping one mode means sending the list without it. Emptying the box sends an empty list, which clears the constraint; DELETE clears it too and answers with the id and editability but no value. Cloudflare says future modes may appear and that unknown ones should be treated as opaque strings, so anything typed here is sent as written." TextWrapping="Wrap" />
+          </StackPanel>
+        </Border>
+
+        <Border Classes="card">
+          <StackPanel Orientation="Vertical" Spacing="10">
+            <TextBlock Classes="h2" Text="Fallback origin for custom hostnames  -  /zones/{zone_id}/custom_hostnames/fallback_origin" />
+            <WrapPanel Orientation="Horizontal">
+              <StackPanel Orientation="Vertical" Spacing="3" Margin="0,0,16,8">
+                <TextBlock Classes="hint" Text="Origin hostname" />
+                <TextBox Text="{Binding FallbackOrigin, Mode=TwoWay}" Width="300" PlaceholderText="fallback.example.com" />
+              </StackPanel>
+              <Button Classes="run" Content="Get" Command="{Binding GetFallbackOriginCommand}" VerticalAlignment="Center" Margin="0,0,8,8" />
+              <Button Content="Set (PUT)" Command="{Binding SetFallbackOriginCommand}" VerticalAlignment="Center" Margin="0,0,8,8" />
+              <Button Content="Delete" Command="{Binding DeleteFallbackOriginCommand}" VerticalAlignment="Center" Margin="0,0,0,8" />
+            </WrapPanel>
+            <TextBlock Classes="hint" Text="One origin for the whole zone, used by every custom hostname that does not name a custom_origin_server of its own. The body has a single origin field and the verb is PUT, so there is nothing to merge: setting it replaces whatever was there, and a hostname keeps its own origin when it has one." TextWrapping="Wrap" />
+            <TextBlock Classes="hint" Text="Read it back after setting it. The response carries its own errors list of plain strings - activation problems Cloudflare hit while bringing the origin up - inside an otherwise successful call, so a fallback origin can be on its way to active and broken at the same time. status is one of initializing, pending_deployment, pending_deletion, active, deployment_timed_out or deletion_timed_out. Deleting it leaves hostnames without their own origin nowhere to fall back to until one is set again." TextWrapping="Wrap" />
+          </StackPanel>
+        </Border>
+
+      </StackPanel>
+    </ScrollViewer>
+
+  </DockPanel>
+
+</UserControl>

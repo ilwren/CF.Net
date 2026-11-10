@@ -1,0 +1,150 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:vm="using:CFNet.Gallery.ViewModels"
+             x:Class="CFNet.Gallery.Views.SettingsView"
+             x:DataType="vm:SettingsViewModel">
+
+  <ScrollViewer VerticalScrollBarVisibility="Auto" Padding="16">
+    <StackPanel Orientation="Vertical" Spacing="0" MaxWidth="820" HorizontalAlignment="Left">
+
+      <TextBlock Classes="h1" Text="{Binding Title}" />
+      <TextBlock Classes="hint" Text="{Binding Description}" Margin="0,4,0,14" />
+
+      <!-- credentials -->
+      <Border Classes="card">
+        <StackPanel Orientation="Vertical" Spacing="10">
+
+          <TextBlock Classes="h2" Text="Authentication" />
+
+          <StackPanel Orientation="Horizontal" Spacing="10">
+            <TextBlock Text="Scheme" Width="130" VerticalAlignment="Center" />
+            <ComboBox ItemsSource="{Binding AuthModes}"
+                      SelectedIndex="{Binding SelectedAuthModeIndex, Mode=TwoWay}"
+                      MinWidth="380" />
+          </StackPanel>
+
+          <StackPanel Orientation="Horizontal" Spacing="10">
+            <TextBlock Text="Detected" Width="130" VerticalAlignment="Center" />
+            <TextBlock Text="{Binding AuthModeText}" VerticalAlignment="Center" Opacity="0.85" />
+          </StackPanel>
+
+          <StackPanel Orientation="Horizontal" Spacing="10">
+            <TextBlock Text="API token" Width="130" VerticalAlignment="Center" />
+            <TextBox Text="{Binding ApiToken, Mode=TwoWay}"
+                     PasswordChar="&#x2022;"
+                     RevealPassword="{Binding RevealSecrets, Mode=TwoWay}"
+                     PlaceholderText="CLOUDFLARE_API_TOKEN"
+                     MinWidth="480" />
+          </StackPanel>
+
+          <StackPanel Orientation="Horizontal" Spacing="10">
+            <TextBlock Text="Global API key" Width="130" VerticalAlignment="Center" />
+            <TextBox Text="{Binding GlobalApiKey, Mode=TwoWay}"
+                     PasswordChar="&#x2022;"
+                     RevealPassword="{Binding RevealSecrets, Mode=TwoWay}"
+                     PlaceholderText="CLOUDFLARE_GLOBAL_API_KEY (legacy)"
+                     MinWidth="480" />
+          </StackPanel>
+
+          <StackPanel Orientation="Horizontal" Spacing="10">
+            <TextBlock Text="Account email" Width="130" VerticalAlignment="Center" />
+            <TextBox Text="{Binding ApiEmail, Mode=TwoWay}"
+                     PlaceholderText="CLOUDFLARE_API_EMAIL - required with the global key"
+                     MinWidth="480" />
+          </StackPanel>
+
+          <CheckBox IsChecked="{Binding RevealSecrets, Mode=TwoWay}" Content="Show secrets in clear text" />
+
+          <TextBlock Classes="hint"
+                     Text="The gallery never renders the Authorization, X-Auth-Key or X-Auth-Email headers in the request inspector, and the library sends exactly one scheme per call." />
+
+        </StackPanel>
+      </Border>
+
+      <!-- defaults -->
+      <Border Classes="card">
+        <StackPanel Orientation="Vertical" Spacing="10">
+
+          <TextBlock Classes="h2" Text="Defaults used by every module" />
+
+          <StackPanel Orientation="Horizontal" Spacing="10">
+            <TextBlock Text="Account id" Width="130" VerticalAlignment="Center" />
+            <TextBox Text="{Binding AccountId, Mode=TwoWay}" PlaceholderText="CLOUDFLARE_ACCOUNT_ID" MinWidth="480" />
+          </StackPanel>
+
+          <StackPanel Orientation="Horizontal" Spacing="10">
+            <TextBlock Text="Zone id" Width="130" VerticalAlignment="Center" />
+            <TextBox Text="{Binding ZoneId, Mode=TwoWay}" PlaceholderText="CLOUDFLARE_ZONE_ID" MinWidth="480" />
+          </StackPanel>
+
+          <TextBlock Classes="hint"
+                     Text="Workers, Pages, D1, KV and R2 need an account id. The Domains page needs a zone id. Each module can override both per call." />
+
+        </StackPanel>
+      </Border>
+
+      <!-- transport -->
+      <Border Classes="card">
+        <StackPanel Orientation="Vertical" Spacing="10">
+
+          <TextBlock Classes="h2" Text="Transport" />
+
+          <StackPanel Orientation="Horizontal" Spacing="10">
+            <TextBlock Text="Base address" Width="130" VerticalAlignment="Center" />
+            <TextBox Text="{Binding BaseAddress, Mode=TwoWay}"
+                     PlaceholderText="https://api.cloudflare.com/client/v4/"
+                     MinWidth="480" />
+          </StackPanel>
+
+          <WrapPanel Orientation="Horizontal">
+            <StackPanel Orientation="Vertical" Spacing="3" Margin="0,0,20,0">
+              <TextBlock Classes="hint" Text="Timeout (seconds)" />
+              <TextBox Text="{Binding TimeoutSeconds, Mode=TwoWay}" Width="120" />
+            </StackPanel>
+            <StackPanel Orientation="Vertical" Spacing="3" Margin="0,0,20,0">
+              <TextBlock Classes="hint" Text="Retries" />
+              <TextBox Text="{Binding MaxRetries, Mode=TwoWay}" Width="120" />
+            </StackPanel>
+            <CheckBox IsChecked="{Binding ThrowOnApiError, Mode=TwoWay}" Content="Throw on API error" VerticalAlignment="Bottom" Margin="0,0,0,4" />
+          </WrapPanel>
+
+          <TextBlock Classes="hint"
+                     Text="Retries only cover 408, 429 and 5xx, with exponential backoff, a Retry-After override and jitter - the same policy the unit tests assert." />
+
+        </StackPanel>
+      </Border>
+
+      <!-- persistence -->
+      <Border Classes="card">
+        <StackPanel Orientation="Vertical" Spacing="10">
+
+          <TextBlock Classes="h2" Text="Saving" />
+
+          <CheckBox IsChecked="{Binding RememberOnThisMachine, Mode=TwoWay}" Content="Remember these credentials on this machine" />
+
+          <TextBlock Classes="hint" Text="{Binding StorageHint}" />
+
+          <TextBlock Classes="hint"
+                     Text="The file is plain text and holds a live credential. Leave the box unticked to keep everything in memory for this session only - the fields are then pre-filled from the CLOUDFLARE_* environment variables instead." />
+
+          <TextBlock Classes="hint"
+                     Text="List accounts answers GET /accounts with every account the credentials can see, which is the honest way to find the account id the Workers, Pages, D1, KV and R2 pages need; Get account reads the one already configured, and Read user answers GET /user for the owner of a Global API Key. All three land in the request and response panes like any other call." TextWrapping="Wrap" />
+
+          <WrapPanel Orientation="Horizontal">
+            <Button Classes="run" Content="Apply" Command="{Binding ApplyCommand}" Margin="0,0,8,0" />
+            <Button Content="Check connection" Command="{Binding CheckConnectionCommand}" Margin="0,0,8,0" />
+            <Button Content="List accounts" Command="{Binding ListAccountsCommand}" Margin="0,0,8,0" />
+            <Button Content="Get account" Command="{Binding GetAccountCommand}" Margin="0,0,8,0" />
+            <Button Content="Read user" Command="{Binding ReadUserCommand}" Margin="0,0,8,0" />
+            <Button Content="Save to disk" Command="{Binding SaveCommand}" Margin="0,0,8,0" />
+            <Button Content="Reload" Command="{Binding ReloadCommand}" Margin="0,0,8,0" />
+            <Button Content="Forget" Command="{Binding ClearCommand}" />
+          </WrapPanel>
+
+        </StackPanel>
+      </Border>
+
+    </StackPanel>
+  </ScrollViewer>
+
+</UserControl>

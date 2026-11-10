@@ -336,16 +336,23 @@ jobs:
           # slug could be one radar has retired, which would put a 404 in the matrix that says nothing about
           # reach. The live fact reads it with a slug the list just returned.
           probe radar_bots "$base/radar/bots?limit=1"
-          # Two per group, not one: the first run of these four probes asked for limitPerGroup=1 and every one
-          # of them answered 400 [2001] 'Too small: expected number to be >=2', while limit=1 on the rankings
+          # Two per group, not one: the first run of these probes asked for limitPerGroup=1 and every one of
+          # them answered 400 [2001] 'Too small: expected number to be >=2', while limit=1 on the rankings
           # above reads fine. That is a minimum Cloudflare enforces on this parameter alone, so the library
           # refuses it too rather than sending a request it knows will be turned down.
-          probe radar_bots_summary "$base/radar/bots/summary/BOT_KIND?dateRange=1d&limitPerGroup=2"
+          #
+          # The two summaries then answered a second thing when they were given a two: 400 [2001]
+          # 'limit_per_group is incompatible with BotsGroupingDimensions.BOT_KIND dimension', and the same for
+          # the crawlers' CLIENT_TYPE. So a per-group limit is refused outright for some dimensions and
+          # Cloudflare publishes no list of which, and both summary probes now ask without one - a probe is
+          # about reach, and this parameter is optional. The grouped pair keeps it, because BOT_CATEGORY and
+          # RESPONSE_STATUS_CATEGORY have both been seen accepting two.
+          probe radar_bots_summary "$base/radar/bots/summary/BOT_KIND?dateRange=1d"
           probe radar_bots_timeseries "$base/radar/bots/timeseries?dateRange=1d&aggInterval=1d"
           probe radar_bots_timeseries_groups \
             "$base/radar/bots/timeseries_groups/BOT_CATEGORY?dateRange=1d&aggInterval=1d&limitPerGroup=2"
           probe radar_crawlers_summary \
-            "$base/radar/bots/crawlers/summary/CLIENT_TYPE?dateRange=1d&limitPerGroup=2"
+            "$base/radar/bots/crawlers/summary/CLIENT_TYPE?dateRange=1d"
           probe radar_crawlers_timeseries_groups \
             "$base/radar/bots/crawlers/timeseries_groups/RESPONSE_STATUS_CATEGORY?dateRange=1d&aggInterval=1d&limitPerGroup=2"
           probe radar_verified_bots_top "$base/radar/verified_bots/top/bots?limit=1&dateRange=1d"
@@ -627,25 +634,27 @@ jobs:
               ('radar_bots_summary', 'GET /radar/bots/summary/BOT_KIND', 'Radar - Read',
                'dfe525ec7b07472c827d8d009178b2ac', 'read',
                'one number per value of the dimension in the path, answered as a dictionary under summary_0 '
-               'rather than as a list this library would have to name; probed with two entries per group, '
-               'because Cloudflare answers 400 [2001] Too small to a limitPerGroup of one'),
+               'rather than as a list this library would have to name; probed without a limitPerGroup, '
+               'because BOT_KIND is one of the dimensions Cloudflare refuses that parameter for with 400 '
+               '[2001] and publishes no list of which are which'),
               ('radar_bots_timeseries', 'GET /radar/bots/timeseries', 'Radar - Read',
                'dfe525ec7b07472c827d8d009178b2ac', 'read',
                'asked for an interval of 1d, which the answer reports as ONE_DAY; its groups are named after '
                'whatever was filtered by, so none of them is published and all of them stay readable by name'),
               ('radar_bots_timeseries_groups', 'GET /radar/bots/timeseries_groups/BOT_CATEGORY',
                'Radar - Read', 'dfe525ec7b07472c827d8d009178b2ac', 'read',
-               'the same numbered serie_0 shape the rankings answer, which is why one model serves both; it '
-               'takes the same limitPerGroup whose smallest accepted value is two'),
+               'the same numbered serie_0 shape the rankings answer, which is why one model serves both; '
+               'BOT_CATEGORY takes a limitPerGroup, whose smallest accepted value is two'),
               ('radar_crawlers_summary', 'GET /radar/bots/crawlers/summary/CLIENT_TYPE', 'Radar - Read',
                'dfe525ec7b07472c827d8d009178b2ac', 'read',
-               'the web-crawler half of the same summary shape, filtered by the client type that asked, and '
-               'the same two-per-group minimum as the bots beside it'),
+               'the web-crawler half of the same summary shape, filtered by the client type that asked; also '
+               'probed without a limitPerGroup, which CLIENT_TYPE refuses the way BOT_KIND does'),
               ('radar_crawlers_timeseries_groups',
                'GET /radar/bots/crawlers/timeseries_groups/RESPONSE_STATUS_CATEGORY', 'Radar - Read',
                'dfe525ec7b07472c827d8d009178b2ac', 'read',
                'the one radar endpoint that lets a caller ask for a normalization, and it accepts three of '
-               'the eight it reports; its limitPerGroup has the same minimum of two'),
+               'the eight it reports; RESPONSE_STATUS_CATEGORY takes two per group, the smallest number '
+               'Cloudflare accepts'),
               ('radar_verified_bots_top', 'GET /radar/verified_bots/top/bots', 'Radar - Read',
                'dfe525ec7b07472c827d8d009178b2ac', 'read',
                'the verified bots ranked by the share of traffic they accounted for; the share arrives as a '

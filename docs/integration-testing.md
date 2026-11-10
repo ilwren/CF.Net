@@ -368,12 +368,18 @@ purge is probed with an empty body, so `400 [1012 Request must contain one of "p
 *Cache Purge — Purge* is granted and nothing was purged. Any 2xx counts as readable, which matters because
 `GET …/origin_tls_client_auth/settings` answers **202**, not 200.
 
-The same reading turned one radar refusal into a rule in the library. The four bot probes that take a
+The same reading turned two radar refusals into rules in the library. The four bot probes that take a
 per-group limit first went out asking for `limitPerGroup=1`, and every one of them answered
 `400 [2001] Too small: expected number to be >=2` — which proves those endpoints need no radar permission at
 all, and tells every caller that two is the smallest per-group limit Cloudflare accepts, where `limit=1` on
 the rankings beside them reads fine. `RadarQuery.CheckLimitPerGroup` now refuses a one locally and names the
-`400 [2001]` it would have earned, and the probes ask for two.
+`400 [2001]` it would have earned, and the two grouped probes ask for two.
+
+Asking for two uncovered a second rule on the other two: `bots/summary/BOT_KIND` and
+`bots/crawlers/summary/CLIENT_TYPE` answer `400 [2001] limit_per_group is incompatible with …dimension`, so a
+per-group limit is refused outright for some dimensions and Cloudflare publishes no list of which. Those two
+probes ask without the parameter now — a probe is about reach, and this one is optional — while the live fact
+asks every dimension it can and reports which accepted it, so the map is refreshed rather than hard-coded.
 
 A 5xx is not a verdict about the credentials either, and the matrix makes it earn one: a probe that gets a 5xx
 — or a `curl` that never got an answer at all — waits three seconds, asks once more, and prints both.

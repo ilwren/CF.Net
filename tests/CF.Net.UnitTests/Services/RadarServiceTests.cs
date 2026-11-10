@@ -1525,16 +1525,20 @@ public class RadarServiceTests
                     RadarBotCategory.SearchEngineCrawler,
                 },
                 DateRange = new List<string> { "7d" },
-                LimitPerGroup = 5,
                 Location = new List<string> { "US" },
                 Name = new List<string> { "one" },
             });
 
         Assert.Equal("/client/v4/radar/bots/summary/BOT_KIND", harness.LastRequest.Path);
+
+        // No limitPerGroup, because BOT_KIND is one of the dimensions Cloudflare refuses it for: a live run
+        // sent it with this very dimension and was answered 400 [2001] 'limit_per_group is incompatible with
+        // BotsGroupingDimensions.BOT_KIND dimension'. Left unset, it is left out of the query altogether.
         Assert.Equal(
             "asn=13335&botCategory=AI_CRAWLER&botCategory=SEARCH_ENGINE_CRAWLER&dateRange=7d" +
-            "&limitPerGroup=5&location=US&name=one",
+            "&location=US&name=one",
             harness.LastRequest.Query.TrimStart('?'));
+        Assert.DoesNotContain("limitPerGroup", harness.LastRequest.Query, StringComparison.Ordinal);
 
         // A summary is one number per value of the dimension, and the keys are the dimension's own values, so
         // it is the dictionary Cloudflare publishes rather than a list this library would have to name.
@@ -1625,6 +1629,7 @@ public class RadarServiceTests
                 DateEnd = new List<DateTimeOffset> { new(2026, 11, 9, 0, 0, 0, TimeSpan.Zero) },
                 DateRange = new List<string> { "7d", "7dcontrol" },
                 DateStart = new List<DateTimeOffset> { new(2026, 11, 2, 0, 0, 0, TimeSpan.Zero) },
+                // BOT_CATEGORY is the dimension the reach matrix has seen take a per-group limit.
                 LimitPerGroup = 3,
                 Location = new List<string> { "US", "GB" },
                 Name = new List<string> { "one", "two" },
@@ -1660,7 +1665,6 @@ public class RadarServiceTests
                 ClientType = new List<RadarBotClientType> { RadarBotClientType.AiBot, RadarBotClientType.Human },
                 DateRange = new List<string> { "1d" },
                 Industry = new List<string> { "News" },
-                LimitPerGroup = 4,
                 Name = new List<string> { "one" },
                 ResponseStatus = new List<string> { "200", "404" },
                 ResponseStatusCategory = new List<RadarResponseStatusCategory>
@@ -1672,9 +1676,11 @@ public class RadarServiceTests
             });
 
         Assert.Equal("/client/v4/radar/bots/crawlers/summary/CLIENT_TYPE", harness.LastRequest.Path);
+        // CLIENT_TYPE is the crawler dimension a live run proved refuses limitPerGroup, so this one is asked
+        // without it and the query carries no trace of it.
         Assert.Equal(
             "botOperator=Google&clientType=AI_BOT&clientType=HUMAN&dateRange=1d&industry=News" +
-            "&limitPerGroup=4&name=one&responseStatus=200&responseStatus=404" +
+            "&name=one&responseStatus=200&responseStatus=404" +
             "&responseStatusCategory=SUCCESS&responseStatusCategory=CLIENT_ERROR&vertical=search",
             harness.LastRequest.Query.TrimStart('?'));
 
@@ -1697,14 +1703,18 @@ public class RadarServiceTests
                 AggInterval = RadarAggregationInterval.OneHour,
                 ClientType = new List<RadarBotClientType> { RadarBotClientType.NonAiBot },
                 DateRange = new List<string> { "1d" },
+                LimitPerGroup = 2,
                 Normalization = RadarTimeseriesNormalization.PercentageChange,
             });
 
         Assert.Equal(
             "/client/v4/radar/bots/crawlers/timeseries_groups/RESPONSE_STATUS_CATEGORY",
             harness.LastRequest.Path);
+        // Two per group, the smallest number Cloudflare accepts, on a dimension the reach matrix has seen it
+        // accept: RESPONSE_STATUS_CATEGORY answered 200 to this very query.
         Assert.Equal(
-            "aggInterval=1h&clientType=NON_AI_BOT&dateRange=1d&normalization=PERCENTAGE_CHANGE",
+            "aggInterval=1h&clientType=NON_AI_BOT&dateRange=1d&limitPerGroup=2" +
+            "&normalization=PERCENTAGE_CHANGE",
             harness.LastRequest.Query.TrimStart('?'));
 
         // Cloudflare reports eight normalizations and lets a caller ask for three, which is why the two lists

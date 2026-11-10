@@ -2872,7 +2872,11 @@ public class ReadOnlyIntegrationTests : CloudflareIntegrationTest
                 {
                     Bot = new List<string> { slug },
                     DateRange = new List<string> { "7d" },
-                    LimitPerGroup = 5,
+
+                    // No limitPerGroup: BOT_KIND is one of the dimensions Cloudflare refuses it for, as the
+                    // loop below reports. The first run of this fact sent a five with this dimension and was
+                    // answered 400 [2001] 'limit_per_group is incompatible with BotsGroupingDimensions.BOT_KIND
+                    // dimension' - a refusal about the parameter, not about the credentials.
                 });
 
             if (summary is not null)
@@ -2898,6 +2902,83 @@ public class ReadOnlyIntegrationTests : CloudflareIntegrationTest
         catch (Exception exception)
         {
             Report("GET /radar/bots/summary/BOT_KIND", exception);
+        }
+
+        // Which dimensions take a limitPerGroup is not published, and the two summaries this library wraps
+        // disagree with each other about it, so each run asks and says. Two per group, because a one is
+        // refused for its own reason - 400 [2001] 'Too small' - and that would hide the answer this loop is
+        // after.
+        var tookLimitPerGroup = new List<string>();
+        var refusedLimitPerGroup = new List<string>();
+
+        foreach (var (dimension, spelling) in new[]
+        {
+            (RadarBotDimension.Bot, "BOT"),
+            (RadarBotDimension.BotKind, "BOT_KIND"),
+            (RadarBotDimension.BotOperator, "BOT_OPERATOR"),
+            (RadarBotDimension.BotCategory, "BOT_CATEGORY"),
+        })
+        {
+            try
+            {
+                var answer = await Client.Radar.GetBotSummaryAsync(
+                    dimension,
+                    new RadarBotSummaryParameters
+                    {
+                        DateRange = new List<string> { "7d" },
+                        LimitPerGroup = 2,
+                    });
+
+                tookLimitPerGroup.Add($"{spelling}={answer?.Summary0?.Count ?? 0}");
+            }
+            catch (CloudflareApiException exception) when (exception.HasErrorCode(2001))
+            {
+                refusedLimitPerGroup.Add(spelling);
+            }
+            catch (Exception exception)
+            {
+                Report($"GET /radar/bots/summary/{spelling}", exception);
+            }
+        }
+
+        // The same question of the crawler summaries, whose dimension list is a different enum again - the
+        // refusal names CrawlersGroupingDimensions rather than BotsGroupingDimensions, so the two families
+        // are checked separately rather than assumed to agree.
+        foreach (var (dimension, spelling) in new[]
+        {
+            (RadarWebCrawlerDimension.ClientType, "CLIENT_TYPE"),
+            (RadarWebCrawlerDimension.UserAgent, "USER_AGENT"),
+        })
+        {
+            try
+            {
+                var answer = await Client.Radar.GetWebCrawlerSummaryAsync(
+                    dimension,
+                    new RadarWebCrawlerSummaryParameters
+                    {
+                        DateRange = new List<string> { "1d" },
+                        LimitPerGroup = 2,
+                    });
+
+                tookLimitPerGroup.Add($"crawlers/{spelling}={answer?.Summary0?.Count ?? 0}");
+            }
+            catch (CloudflareApiException exception) when (exception.HasErrorCode(2001))
+            {
+                refusedLimitPerGroup.Add($"crawlers/{spelling}");
+            }
+            catch (Exception exception)
+            {
+                Report($"GET /radar/bots/crawlers/summary/{spelling}", exception);
+            }
+        }
+
+        if (tookLimitPerGroup.Count > 0 || refusedLimitPerGroup.Count > 0)
+        {
+            Warn($"Radar takes limitPerGroup on some dimensions and refuses it on others with 400 [2001]: " +
+                 $"accepted by [{string.Join(", ", tookLimitPerGroup)}], refused by " +
+                 $"[{string.Join(", ", refusedLimitPerGroup)}]. Cloudflare publishes no list of which are " +
+                 "which, so the parameter stays optional here - sent only when a caller sets it - and this " +
+                 "line is the map, refreshed every run.");
         }
 
         try

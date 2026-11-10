@@ -624,6 +624,19 @@ public abstract class RadarBotParameters : ICloudflareQueryParameters
 public sealed class RadarBotSummaryParameters : RadarBotParameters
 {
     /// <summary>How many entries to return per group of the summary.</summary>
+    /// <remarks>
+    /// <para>
+    /// Two is the smallest number Cloudflare accepts: a one is answered <c>400 [2001] Too small</c>, which
+    /// <see cref="RadarQuery.CheckLimitPerGroup"/> refuses locally rather than sending.
+    /// </para>
+    /// <para>
+    /// It is also refused outright for some dimensions, and Cloudflare publishes no list of which: a live run
+    /// sent it with <c>BOT_KIND</c> and with the crawlers' <c>CLIENT_TYPE</c>, and each answered
+    /// <c>400 [2001] limit_per_group is incompatible with ... dimension</c>, while <c>BOT_CATEGORY</c> and
+    /// <c>RESPONSE_STATUS_CATEGORY</c> took it on the grouped endpoints beside them. So it stays optional and
+    /// is sent only when a caller sets it, and the live fact reports which dimensions accepted it each run.
+    /// </para>
+    /// </remarks>
     public int? LimitPerGroup { get; set; }
 
     /// <inheritdoc />
@@ -676,6 +689,19 @@ public sealed class RadarBotTimeseriesGroupsParameters : RadarBotParameters
     public RadarAggregationInterval? AggInterval { get; set; }
 
     /// <summary>How many entries to return per group of the series.</summary>
+    /// <remarks>
+    /// <para>
+    /// Two is the smallest number Cloudflare accepts: a one is answered <c>400 [2001] Too small</c>, which
+    /// <see cref="RadarQuery.CheckLimitPerGroup"/> refuses locally rather than sending.
+    /// </para>
+    /// <para>
+    /// It is also refused outright for some dimensions, and Cloudflare publishes no list of which: a live run
+    /// sent it with <c>BOT_KIND</c> and with the crawlers' <c>CLIENT_TYPE</c>, and each answered
+    /// <c>400 [2001] limit_per_group is incompatible with ... dimension</c>, while <c>BOT_CATEGORY</c> and
+    /// <c>RESPONSE_STATUS_CATEGORY</c> took it on the grouped endpoints beside them. So it stays optional and
+    /// is sent only when a caller sets it, and the live fact reports which dimensions accepted it each run.
+    /// </para>
+    /// </remarks>
     public int? LimitPerGroup { get; set; }
 
     /// <inheritdoc />
@@ -727,6 +753,19 @@ public abstract class RadarWebCrawlerParameters : ICloudflareQueryParameters
     public List<string>? Industry { get; set; }
 
     /// <summary>How many entries to return per group.</summary>
+    /// <remarks>
+    /// <para>
+    /// Two is the smallest number Cloudflare accepts: a one is answered <c>400 [2001] Too small</c>, which
+    /// <see cref="RadarQuery.CheckLimitPerGroup"/> refuses locally rather than sending.
+    /// </para>
+    /// <para>
+    /// It is also refused outright for some dimensions, and Cloudflare publishes no list of which: a live run
+    /// sent it with <c>BOT_KIND</c> and with the crawlers' <c>CLIENT_TYPE</c>, and each answered
+    /// <c>400 [2001] limit_per_group is incompatible with ... dimension</c>, while <c>BOT_CATEGORY</c> and
+    /// <c>RESPONSE_STATUS_CATEGORY</c> took it on the grouped endpoints beside them. So it stays optional and
+    /// is sent only when a caller sets it, and the live fact reports which dimensions accepted it each run.
+    /// </para>
+    /// </remarks>
     public int? LimitPerGroup { get; set; }
 
     /// <summary>Labels for the series in the answer, in the order they were asked for.</summary>

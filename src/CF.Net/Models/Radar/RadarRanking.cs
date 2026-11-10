@@ -98,7 +98,7 @@ public sealed class RadarRankedDomain
 /// <para>
 /// Cloudflare numbers the series by the order the dates and names were asked for, and publishes only
 /// <c>top_0</c>, so only the first is typed. A caller who asks for several gets the rest in
-/// <c>AdditionalData</c> and their labels in <see cref="RadarTopListMeta.AdditionalData"/> - which
+/// <c>AdditionalData</c> and their labels in <c>RadarTopListMeta.AdditionalData</c> - which
 /// <see cref="SeriesNames"/> lists, because a numbered key nobody looks for is a series nobody reads.
 /// </para>
 /// </remarks>

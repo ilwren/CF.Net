@@ -1971,16 +1971,29 @@ read as `RadarTopList<RadarVerifiedBot>` and `RadarTopList<RadarVerifiedBotCateg
 `RadarSummaryMeta`. Both take the same nine parameters, and a verified bot's share of traffic arrives as a
 string and stays one.
 
-**`limitPerGroup` has a minimum of two.** Cloudflare answers `400 [2001] Too small: expected number to be >=2`
-to a per-group limit of one, on all four of these endpoints that take one, while `limit=1` on the rankings
-beside them reads fine. That is a minimum Cloudflare enforces rather than one this library invented, so
-`RadarQuery.CheckLimitPerGroup` refuses it in both the bot and the crawler trees and says why in the message.
-The `limitPerGroup` on `GET /radar/search/global` is deliberately left at its old check for at least one
-entry: nothing has proved that endpoint's minimum is the same.
+**`limitPerGroup` has a minimum of two — and some dimensions refuse it altogether.** Two rules, both
+`400 [2001]`, and neither of them published. A per-group limit of one is answered `Too small: expected number
+to be >=2` by all four of these endpoints that take one, while `limit=1` on the rankings beside them reads
+fine. That is a minimum Cloudflare enforces rather than one this library invented, so
+`RadarQuery.CheckLimitPerGroup` refuses it in both the bot and the crawler trees and names the `400 [2001]` it
+would have earned. The `limitPerGroup` on `GET /radar/search/global` keeps its older check for at least one
+entry, because nothing has proved that endpoint's minimum is the same.
+
+Give those endpoints a *two* and a second rule appears. `GET /radar/bots/summary/BOT_KIND` answers
+`limit_per_group is incompatible with BotsGroupingDimensions.BOT_KIND dimension`, and the crawlers'
+`CLIENT_TYPE` answers the same about `CrawlersGroupingDimensions.CLIENT_TYPE`, while `BOT_CATEGORY` and
+`RESPONSE_STATUS_CATEGORY` take a per-group limit on the grouped endpoints beside them. The pattern looks like
+a dimension whose values are a short closed list — two bot kinds, four client types — having no groups worth
+limiting, but Cloudflare publishes no list of which dimensions accept the parameter, so this library does not
+guess one: `limitPerGroup` stays optional, is sent only when a caller sets it, and the live fact asks every
+dimension it can and reports the split on each run. The two summary probes in CI ask without it, because a
+probe is about reach.
 
 **What the first live run answered.** All nine read `200` with a token holding no radar permission — the same
 overstatement the two radar sections before this one found, where the reference names a *User Details Read*
-group that appears nowhere in Cloudflare's catalogue. `summary_0` really is a dictionary of strings; both
+group that appears nowhere in Cloudflare's catalogue. One call in that run was refused, and it was this
+library's own doing rather than Cloudflare's: it sent `limitPerGroup=5` with `BOT_KIND`, which is the
+incompatibility described above, and the same read answers once the parameter is left out. `summary_0` really is a dictionary of strings; both
 grouped endpoints really do answer the numbered `serie_0` the rankings send, so one model serves both
 families as intended; `GET /radar/bots/timeseries` answered its groups under the names the call had filtered
 by, and `Group(name)` read them; and both verified-bot rankings answered entries, with each share of traffic
@@ -1995,7 +2008,8 @@ beside it is upper case — those three on both reads — plus `documentationUrl
 single one. They are typed now, because the rule this library keeps to is that a field seen filled gets a
 type and a field only ever seen named stays the JSON it arrived as. The four probes that take a per-group
 limit first went out asking for one entry each and were answered `400 [2001]`, which is where the minimum
-above came from; they ask for two now.
+above came from; two of them then answered the incompatibility when they asked for two, and ask without it
+now.
 
 ⛔ **Not wrapped:** `format=CSV` on any of these nine, for the reason every other radar read has — Cloudflare
 replaces the envelope with a CSV body, which surfaces as an empty result rather than as an error. The single

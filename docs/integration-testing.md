@@ -338,8 +338,8 @@ the credentials can actually reach* makes one `curl` call per product area — f
 zones, DNS records, DNSSEC and its ZSK, zone settings, certificate packs, custom hostnames, origin TLS
 client auth, origin CA certificates, cache purge, the account, Workers scripts, domains, routes and static
 assets, Pages, D1, KV, R2, rulesets, filter lists, page rules, firewall filters, IP Access rules, mTLS
-certificates, the Cloudflare IP ranges, Turnstile, load balancing, Workers AI and account tokens — with the
-same
+certificates, the Cloudflare IP ranges, Turnstile, load balancing, Workers AI, account tokens, and radar's
+reference data and rankings — with the same
 credentials, and reports each answer as `label=status[shape]`:
 
 ```
@@ -367,6 +367,14 @@ A probe that answers 4xx for a reason that is *not* a refusal still proves the p
 purge is probed with an empty body, so `400 [1012 Request must contain one of "purge_everything"…]` means
 *Cache Purge — Purge* is granted and nothing was purged. Any 2xx counts as readable, which matters because
 `GET …/origin_tls_client_auth/settings` answers **202**, not 200.
+
+A 5xx is not a verdict about the credentials either, and the matrix makes it earn one: a probe that gets a 5xx
+— or a `curl` that never got an answer at all — waits three seconds, asks once more, and prints both.
+`radar_as_set=200[object, 2 field(s)] (after 503)` is what that looks like, and it is what
+`GET /radar/entities/asns/13335/as_set` does run after run: an expensive AS-SET walk that Cloudflare's edge
+gives up on for the probe, while the library's own call to the same path answers 200 in the same run.
+Reporting only the second answer would hide that, and reporting only the first would send somebody hunting
+for a permission that is there.
 
 Four codes seen live mean *the account is missing something*, not that the token is — and each is reported
 rather than failed, because a credential change would not fix any of them: **1404** (SSL for SaaS is not

@@ -1896,6 +1896,17 @@ filter rather than an answer, and a value this library cannot spell has nothing 
 `RadarRankingParameters.EnsureValid` says so before the request is built. The same check refuses a `limit` that
 asks for fewer than one entry.
 
+**What the first live run answered.** All six read `200` with a token holding no radar permission at all —
+the same overstatement the reference data's published permission list makes, which names a *User Details
+Read* group that appears nowhere in Cloudflare's catalogue. The ranked domains, their categories and the
+ranked services carried no field this library does not model; each answer held one series, so no `top_1` or
+`serie_1` arrived to type; `meta.top_0.date` and its `serviceCategory` came where they are published;
+`pctRankChange` arrived on at least one of the two rankings the run asked for, popular and `TRENDING_RISE`,
+which is the pair the surprise was written to tell apart; and `confidenceInfo.level` read as the `double` it
+is typed as. The reach-matrix probe for `GET /radar/entities/asns/{asn}/as_set` beside them keeps answering
+`503` with a body that is not JSON while the library's own call to the same path reads `200` in the same run,
+which is why a probe asks twice before the matrix believes it.
+
 ⛔ **Not wrapped:** `format=CSV` on any of these six, for the reason the reference-data reads have — Cloudflare
 replaces the envelope with a CSV body, which surfaces as an empty result rather than as an error. The dataset
 download is the one radar call that does take a `format`, because it answers an address to fetch rather than

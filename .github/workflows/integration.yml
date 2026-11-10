@@ -280,6 +280,20 @@ jobs:
               args+=(-H "Content-Type: application/json" --data "$body")
             fi
             code=$(curl "${args[@]}" || echo 000)
+            # A 5xx, or a curl that never got an answer, says Cloudflare's edge gave up rather than what these
+            # credentials can reach - and one endpoint here proves it: GET /radar/entities/asns/13335/as_set
+            # answers 503 with a body that is not JSON to this probe, run after run, while the library's own
+            # call to the same path reads 200 seconds later in the same run. So a probe that gets one asks
+            # once more and both answers are reported: this matrix is about reach, and a first attempt that
+            # failed is part of what the run saw.
+            case "$code" in
+              5?? | 000)
+                first="$code"
+                sleep 3
+                code=$(curl "${args[@]}" || echo 000)
+                echo "$first" > "$RUNNER_TEMP/reach-$label.retried"
+                ;;
+            esac
             echo "$code" > "$RUNNER_TEMP/reach-$label.status"
           }
 
@@ -554,7 +568,10 @@ jobs:
               ('radar_as_set', 'GET /radar/entities/asns/13335/as_set', 'Radar - Read',
                'dfe525ec7b07472c827d8d009178b2ac', 'read',
                "probed against Cloudflare's own ASN, which is the one number that answers the same everywhere; "
-               'this endpoint publishes its fields in snake_case while its neighbours use camelCase'),
+               'this endpoint publishes its fields in snake_case while its neighbours use camelCase. It also '
+               'answers 503 with a body that is not JSON to this probe, run after run, while the library '
+               'reads the same path 200 in the same run - an expensive AS-SET walk that Cloudflare\'s edge '
+               'gives up on, which is why a probe asks twice before it is believed'),
               ('radar_botnet', 'GET /radar/entities/asns/botnet_threat_feed', 'Radar - Read',
                'dfe525ec7b07472c827d8d009178b2ac', 'read',
                'the ranking of ASNs by botnet activity; it answers a meta object beside the list, so the '
@@ -625,6 +642,14 @@ jobs:
               except Exception:
                   return status, None
 
+          def first_attempt(label):
+              # The code a probe got before it asked again, or None when one ask was enough.
+              path = os.path.join(temp, f'reach-{label}.retried')
+              if not os.path.exists(path):
+                  return None
+              with open(path, encoding='utf-8') as handle:
+                  return handle.read().strip()
+
           def shape(payload):
               # A 200 is not the same as an answer: this is what distinguishes "readable" from "readable
               # and empty", which is the difference that a status code alone cannot show.
@@ -678,12 +703,16 @@ jobs:
               if status is None:
                   continue
               form = shape(payload)
-              compact.append(f'{label}={status}[{form}]')
+              again = first_attempt(label)
+              compact.append(f'{label}={status}[{form}]' + (f' (after {again})' if again else ''))
 
               if label in EMPTY_BODY_PROBES and not answered(status) and status not in ('403', '404'):
                   verdict = 'permission present - the empty body was refused, nothing was purged'
               elif answered(status):
                   verdict = f'readable ({form})'
+                  if again:
+                      verdict += (f' - the first attempt answered {again}, so Cloudflare\'s edge gave up once '
+                                  'and the credentials are not what changed')
               elif status == '403':
                   refused = detail(payload) or 'no error detail'
                   if label == 'zone':
@@ -718,6 +747,12 @@ jobs:
                   entitlement.append((endpoint, group, note))
               else:
                   verdict = f'HTTP {status} ' + (detail(payload) or form)
+                  if again:
+                      verdict += f', asked twice - the first attempt answered {again}'
+                  else:
+                      verdict += '. Cloudflare\'s edge gave up rather than refusing: a 5xx is not a verdict ' \
+                          'about these credentials, and the library\'s own call to some of these paths reads ' \
+                          'fine in the same run'
               rows.append((endpoint, group, status, verdict, note))
 
           # A notice that is cut short loses exactly the newest rows - the ones a run was pushed to see -

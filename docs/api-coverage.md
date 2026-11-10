@@ -1989,6 +1989,11 @@ guess one: `limitPerGroup` stays optional, is sent only when a caller sets it, a
 dimension it can and reports the split on each run. The two summary probes in CI ask without it, because a
 probe is about reach.
 
+That map's first answer: `BOT`, `BOT_OPERATOR` and `BOT_CATEGORY` accepted a per-group limit of two, and so
+did the crawlers' `USER_AGENT`; `BOT_KIND` and the crawlers' `CLIENT_TYPE` refused it. Two bot kinds and four
+client types on the refusing side, and the open-ended value sets on the accepting one, which is the closed-list
+pattern above - observed rather than assumed, and re-observed every run.
+
 **What the first live run answered.** All nine read `200` with a token holding no radar permission — the same
 overstatement the two radar sections before this one found, where the reference names a *User Details Read*
 group that appears nowhere in Cloudflare's catalogue. One call in that run was refused, and it was this

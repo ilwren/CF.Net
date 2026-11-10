@@ -379,7 +379,9 @@ Asking for two uncovered a second rule on the other two: `bots/summary/BOT_KIND`
 `bots/crawlers/summary/CLIENT_TYPE` answer `400 [2001] limit_per_group is incompatible with …dimension`, so a
 per-group limit is refused outright for some dimensions and Cloudflare publishes no list of which. Those two
 probes ask without the parameter now — a probe is about reach, and this one is optional — while the live fact
-asks every dimension it can and reports which accepted it, so the map is refreshed rather than hard-coded.
+asks every dimension it can and reports which accepted it, so the map is refreshed rather than hard-coded. Its
+first answer was `BOT`, `BOT_OPERATOR`, `BOT_CATEGORY` and `crawlers/USER_AGENT` accepting a two, with
+`BOT_KIND` and `crawlers/CLIENT_TYPE` refusing it.
 
 A 5xx is not a verdict about the credentials either, and the matrix makes it earn one: a probe that gets a 5xx
 — or a `curl` that never got an answer at all — waits three seconds, asks once more, and prints both.

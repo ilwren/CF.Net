@@ -2793,9 +2793,16 @@ public class ReadOnlyIntegrationTests : CloudflareIntegrationTest
                 surprises.Add($"{what} answered something that did not fit its published shape: " +
                               $"{Truncate(parse.Message, 240)}");
             }
+            else if (exception is CloudflareApiException api)
+            {
+                refused.Add(Refusal(what, api));
+            }
             else
             {
-                refused.Add(Refusal(what, exception));
+                // Not everything that goes wrong on the way to an answer is a Cloudflare error: a transport
+                // that never got one is worth saying too, and in its own words.
+                refused.Add($"{what} failed with {exception.GetType().Name}: " +
+                            $"{Truncate(exception.Message, 240)}");
             }
         }
 

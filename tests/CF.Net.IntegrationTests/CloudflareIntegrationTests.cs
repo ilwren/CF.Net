@@ -2542,6 +2542,231 @@ public class ReadOnlyIntegrationTests : CloudflareIntegrationTest
                  $"{string.Join("; ", surprises)}.");
         }
     }
+
+    [Fact]
+    public async Task Radar_rankings_and_the_internet_services_behind_them_can_be_read()
+    {
+        if (!SkipWithoutCredentials())
+        {
+            return;
+        }
+
+        // Radar's rankings: the domains Cloudflare sees the Internet using, the services behind them, and how
+        // both moved over time. None of these paths carries an account or a zone either, and the permission
+        // Cloudflare publishes for all of them - "User Details Read" - is a group that does not exist, so a
+        // refusal here is reported per call instead of being read as a missing permission.
+        var surprises = new List<string>();
+        var refused = new List<string>();
+
+        try
+        {
+            var top = await Client.Radar.GetTopDomainsAsync(new RadarRankingTopParameters { Limit = 5 });
+            Log($"radar_ranking_top={top?.ToString() ?? "(no result)"} " +
+                $"first=[{string.Join(", ", (top?.Top0 ?? new List<RadarRankedDomain>()).Take(3))}]");
+            ReportUnmodelled(
+                "GET /radar/ranking/top",
+                top?.Top0 ?? new List<RadarRankedDomain>(),
+                item => item.AdditionalData);
+
+            if (top is not null)
+            {
+                // Cloudflare numbers the series and publishes only the first, so a second one arriving means a
+                // shape this library leaves in AdditionalData - and one worth typing next.
+                if (top.SeriesNames.Any())
+                {
+                    surprises.Add($"GET /radar/ranking/top answered {string.Join(", ", top.SeriesNames)} beside " +
+                                  "top_0 on a call that asked for one series, so the series after the first are " +
+                                  "still untyped");
+                }
+
+                if (top.Meta?.Top0?.Date is { Length: > 0 } dated)
+                {
+                    Log($"radar_ranking_top[date]={dated} " +
+                        $"confidence={top.Meta?.ConfidenceInfo?.ToString() ?? "(none)"} " +
+                        $"units=[{string.Join(", ", top.Meta?.Units ?? new List<RadarUnit>())}]");
+                }
+                else
+                {
+                    surprises.Add("GET /radar/ranking/top answered no meta.top_0.date, which is the label that " +
+                                  "says what day the ranking is for");
+                }
+
+                var domains = top.Top0 ?? new List<RadarRankedDomain>();
+                if (domains.Count > 0 && domains.All(domain => domain.PercentRankChange is null))
+                {
+                    // pctRankChange is what a trending ranking is for, so the same list is asked for again as
+                    // one: a field that is published and never answered is worth saying, and so is one that
+                    // arrives only for a ranking type.
+                    var trending = await Client.Radar.GetTopDomainsAsync(new RadarRankingTopParameters
+                    {
+                        Limit = 5,
+                        RankingType = RadarRankingType.TrendingRise,
+                    });
+
+                    var moved = trending?.Top0 ?? new List<RadarRankedDomain>();
+                    Log($"radar_ranking_top[trending]={trending?.ToString() ?? "(no result)"} " +
+                        $"first=[{string.Join(", ", moved.Take(3))}]");
+
+                    if (moved.Count == 0 || moved.All(domain => domain.PercentRankChange is null))
+                    {
+                        surprises.Add($"GET /radar/ranking/top answered no pctRankChange on any of {domains.Count} " +
+                                      $"popular entry(s) or {moved.Count} TRENDING_RISE one(s), which is the " +
+                                      "ranking the field is published for");
+                    }
+                }
+            }
+        }
+        catch (CloudflareApiException exception)
+        {
+            refused.Add(Refusal("top domains", exception));
+        }
+
+        try
+        {
+            var domain = await Client.Radar.GetDomainRankingAsync(
+                "cloudflare.com",
+                new RadarDomainRankingParameters { IncludeTopLocations = true });
+            Log($"radar_ranking_domain[cloudflare.com]={domain?.ToString() ?? "(no result)"}");
+
+            if (domain?.Details0 is { } details)
+            {
+                ReportUnmodelled(
+                    "GET /radar/ranking/domain/{domain}",
+                    details.Categories ?? new List<RadarDomainCategory>(),
+                    item => item.AdditionalData);
+
+                if (details.Rank is null)
+                {
+                    surprises.Add("GET /radar/ranking/domain/cloudflare.com answered details with no rank, " +
+                                  $"although the same answer carried {details.Categories?.Count ?? 0} " +
+                                  $"category(ies) and {details.TopLocations?.Count ?? 0} location(s)");
+                }
+
+                if (details.TopLocations is { Count: > 0 } places)
+                {
+                    Log($"radar_ranking_domain_places=[{string.Join(", ", places.Take(3))}]");
+                }
+                else
+                {
+                    surprises.Add("GET /radar/ranking/domain/cloudflare.com answered no top_locations although " +
+                                  "includeTopLocations=true was sent");
+                }
+            }
+            else if (domain is not null)
+            {
+                surprises.Add("GET /radar/ranking/domain/cloudflare.com answered no details_0 object at all");
+            }
+        }
+        catch (CloudflareApiException exception)
+        {
+            refused.Add(Refusal("domain ranking", exception));
+        }
+
+        try
+        {
+            var series = await Client.Radar.GetTopDomainTimeseriesGroupsAsync(
+                new RadarRankingTimeseriesGroupsParameters
+                {
+                    DateRange = new List<string> { "1d" },
+                    Limit = 5,
+                });
+            Log($"radar_ranking_timeseries={series?.ToString() ?? "(no result)"}");
+
+            if (series?.Serie0 is { } group)
+            {
+                if (group.Count == 0)
+                {
+                    surprises.Add("GET /radar/ranking/timeseries_groups answered a serie_0 with no timestamps, " +
+                                  $"although its meta says {series.Meta?.ToString() ?? "(nothing)"}");
+                }
+
+                if (group.SeriesNames.Any())
+                {
+                    Log($"radar_ranking_timeseries_series=[{string.Join(", ", group.SeriesNames.Take(5))}]");
+                }
+                else
+                {
+                    surprises.Add($"GET /radar/ranking/timeseries_groups answered {group.Count} timestamp(s) and " +
+                                  "no value series beside them, so there is nothing to plot");
+                }
+            }
+            else if (series is not null)
+            {
+                surprises.Add("GET /radar/ranking/timeseries_groups answered no serie_0 object at all");
+            }
+
+            if (series?.SeriesNames.Any() == true)
+            {
+                surprises.Add($"GET /radar/ranking/timeseries_groups answered {string.Join(", ", series.SeriesNames)} " +
+                              "beside serie_0 on a call that asked for one period");
+            }
+        }
+        catch (CloudflareApiException exception)
+        {
+            refused.Add(Refusal("domain ranking timeseries", exception));
+        }
+
+        try
+        {
+            var categories = await Client.Radar.ListInternetServiceCategoriesAsync(
+                new RadarInternetServiceCategoriesParameters { Limit = 10 });
+            var names = categories?.Categories0 ?? new List<RadarInternetServiceCategory>();
+            Log($"radar_internet_service_categories={names.Count} " +
+                $"first=[{string.Join(", ", names.Take(5))}]");
+
+            if (names.Count == 0)
+            {
+                surprises.Add("GET /radar/ranking/internet_services/categories answered no category, and its " +
+                              "names are what the two internet-service rankings are filtered by");
+            }
+
+            var services = await Client.Radar.GetTopInternetServicesAsync(
+                new RadarInternetServiceTopParameters { Limit = 5 });
+            Log($"radar_internet_service_top={services?.ToString() ?? "(no result)"} " +
+                $"first=[{string.Join(", ", (services?.Top0 ?? new List<RadarInternetServiceRank>()).Take(3))}]");
+            ReportUnmodelled(
+                "GET /radar/ranking/internet_services/top",
+                services?.Top0 ?? new List<RadarInternetServiceRank>(),
+                item => item.AdditionalData);
+
+            if (services is not null && services.Meta?.Top0?.ServiceCategory is not { Length: > 0 })
+            {
+                surprises.Add("GET /radar/ranking/internet_services/top answered no meta.top_0.serviceCategory, " +
+                              "which is the label that says what the ranking is of");
+            }
+
+            var serviceSeries = await Client.Radar.GetInternetServiceTimeseriesGroupsAsync(
+                new RadarInternetServiceTimeseriesGroupsParameters
+                {
+                    DateRange = new List<string> { "1d" },
+                    Limit = 5,
+                });
+            Log($"radar_internet_service_timeseries={serviceSeries?.ToString() ?? "(no result)"}");
+
+            if (serviceSeries is not null && serviceSeries.Serie0 is null)
+            {
+                surprises.Add("GET /radar/ranking/internet_services/timeseries_groups answered no serie_0 " +
+                              "object at all");
+            }
+        }
+        catch (CloudflareApiException exception)
+        {
+            refused.Add(Refusal("internet services", exception));
+        }
+
+        foreach (var refusal in refused)
+        {
+            Warn($"A radar ranking endpoint was refused while the ones beside it read fine: {refusal}. The " +
+                 "permission Cloudflare publishes for these paths names a group that does not exist, so this is " +
+                 "about the endpoint rather than the credentials.");
+        }
+
+        if (surprises.Count > 0)
+        {
+            Warn($"Radar's rankings answered something other than what the reference publishes: " +
+                 $"{string.Join("; ", surprises)}.");
+        }
+    }
 }
 /// <summary>
 /// Lifecycle tests that create and then remove a resource. They are self-cleaning, but they do write

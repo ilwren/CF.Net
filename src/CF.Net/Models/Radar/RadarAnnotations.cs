@@ -306,6 +306,14 @@ public sealed class RadarAnnotation
     [JsonPropertyName("geoIds")]
     public List<string>? GeoIds { get; set; }
 
+    /// <summary>
+    /// Whether this records a point in time rather than a period. Cloudflare publishes it on the annotations a
+    /// series answers inside its <c>confidenceInfo</c> and not on the ones <c>GET /radar/annotations</c> lists,
+    /// so it stays nullable - and the two are read as one type, because they are one catalogue.
+    /// </summary>
+    [JsonPropertyName("isInstantaneous")]
+    public bool? IsInstantaneous { get; set; }
+
     /// <summary>A link Cloudflare published beside the annotation, when there is one.</summary>
     [JsonPropertyName("linkedUrl")]
     public string? LinkedUrl { get; set; }

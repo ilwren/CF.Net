@@ -1688,8 +1688,8 @@ Cloudflare knows about how they relate to one another, the geolocation tree, the
 the global search across all of them, the annotations Cloudflare attaches to its own data, and the datasets it
 publishes for download. Radar has 269 published endpoints; these are the ones that answer *reference data*
 rather than measurements, and they are what every other one needs first, because a timeseries query is made
-*by* location code and ASN. The rest of radar — the timeseries, summaries and top-N endpoints for HTTP, DNS,
-BGP, bots, attacks and the AI catalogue — is still to come.
+*by* location code and ASN. The rankings sit in the next section; the rest of radar — the timeseries, summary
+and top-N endpoints for HTTP, DNS, BGP, bots, attacks, email, quality and the AI catalogue — is still to come.
 
 | Method | Endpoint | Notes |
 | --- | --- | --- |
@@ -1819,16 +1819,87 @@ numeric id does not.
 **Radar's reference data needs no permission at all — and Cloudflare's reference names the wrong one.** The
 published permission list for these endpoints asks for **User Details Read**, a group that appears nowhere in
 Cloudflare's catalogue. The catalogue does carry **Radar Read**
-(`dfe525ec7b07472c827d8d009178b2ac`), which the published list does not mention. A live run read all four
-radar endpoints with a token holding neither, `200` on each, so the reference data is public in practice and
-this is the same overstatement the reference makes for URL normalization.
+(`dfe525ec7b07472c827d8d009178b2ac`), which the published list does not mention. Live runs read all nine of
+these endpoints — and the six rankings in the next section, whose published list names the same nonexistent
+group — with a token holding neither, `200` on each, so radar's reference data and rankings are public in
+practice and this is the same overstatement the reference makes for URL normalization.
 
 The reach matrix keeps **Radar - Read** as these rows' group anyway, with the id from the live catalogue, so
 that a refusal in future names a group that exists and a token URL can carry. `Radar Read` is also in
-`WANTED_GROUPS` ahead of need, because the timeseries, summary and ranked endpoints that query *by* this
-reference data are the next work and are the ones that will ask for it. Only a live read of
+`WANTED_GROUPS` ahead of need, because the timeseries and summary endpoints that query *by* this reference
+data are the next work and are the ones that will ask for it. Only a live read of
 `GET /accounts/{account_id}/tokens/permission_groups` finds that id — it is in no published list, which is why
 every integration run prints the groups its catalogue has that the ones already wrapped do not.
+
+---
+
+## Radar ranking
+
+`IRadarService` — `client.Radar`
+
+The rankings behind Radar's own top pages: which domains the Internet used, which services were behind that
+traffic, where one domain sits in the list, and how each of those moved over time. Six endpoints, and they
+have more in common with each other than with the reference data beside them — every one of them answers a
+*numbered series* rather than a list.
+
+| Method | Endpoint | Notes |
+| --- | --- | --- |
+| `GetTopDomainsAsync(RadarRankingTopParameters?)` | `GET /radar/ranking/top` | `{meta: {confidenceInfo, dateRange, lastUpdated, normalization, top_0: {date}, units}, top_0: [{domain, rank, categories: [{id, name, superCategoryId}], pctRankChange?}]}`; filters `date`, `domainCategory`, `limit`, `location`, `name`, `rankingType` |
+| `GetTopDomainTimeseriesGroupsAsync(RadarRankingTimeseriesGroupsParameters?)` | `GET /radar/ranking/timeseries_groups` | `{meta: {aggInterval, confidenceInfo, dateRange, lastUpdated, normalization, units}, serie_0: {timestamps: [...], ...}}`; periods as `dateStart`/`dateEnd` or as `dateRange`, plus `domains`, `domainCategory`, `location`, `name`, `rankingType` — and no `date`, which is why its parameters are not the top list's |
+| `GetDomainRankingAsync(domain, RadarDomainRankingParameters?)` | `GET /radar/ranking/domain/{domain}` | `{details_0: {categories, bucket?, rank?, top_locations?}, meta: {dateRange}}`; `includeTopLocations=true` is what makes `top_locations` arrive, and every field but the categories is optional |
+| `ListInternetServiceCategoriesAsync(RadarInternetServiceCategoriesParameters?)` | `GET /radar/ranking/internet_services/categories` | `{categories_0: [{name}]}` — the names the two service rankings are filtered by |
+| `GetTopInternetServicesAsync(RadarInternetServiceTopParameters?)` | `GET /radar/ranking/internet_services/top` | `{meta: {..., top_0: {date, serviceCategory}, units}, top_0: [{rank, service}]}`; filters `date`, `limit`, `name`, `serviceCategory` |
+| `GetInternetServiceTimeseriesGroupsAsync(RadarInternetServiceTimeseriesGroupsParameters?)` | `GET /radar/ranking/internet_services/timeseries_groups` | the same timeseries shape as the domain ranking, filtered by `serviceCategory` instead of `domainCategory` |
+
+**Cloudflare numbers its series and publishes only the first.** Ask for two dates, or two `name` labels, and
+the answer carries `top_0` and `top_1` — `name` is documented as "array of names used to label the series in
+the response", which is what the numbering is for. Only the `_0` key is in the published schema, so only the
+first series is typed: `RadarRankingTop.Top0`, `RadarTimeseriesGroups.Serie0`, `RadarDomainRanking.Details0`,
+`RadarInternetServiceCategories.Categories0`. The rest arrive in each result's `AdditionalData`, and
+`SeriesNames` lists them, because a numbered key nobody knows to look for is a series nobody reads. Typing
+`top_1` from its neighbour's shape is exactly the guess that broke `GET /radar/entities/asns/{asn}/as_set` —
+see the reference-data section — so the integration run reports whether a second series ever arrives and what
+it holds, and the type follows the answer rather than preceding it.
+
+**The series values are the caller's own names, so they cannot be typed at all.** A timeseries group answers
+`timestamps` beside one array per series, and the array is named after the domain or service it measures —
+`google.com`, `AWS`. Cloudflare publishes the group as `timestamps` plus an open set of keys, and one of those
+arrays answers strings where its neighbour answers numbers, so they are read as the JSON they arrive as with
+`SeriesNames` listing what came. A `List<double>` here would be a guess about somebody else's data.
+
+**The meta is one shape across every radar timeseries endpoint.** `RadarSeriesMeta` — `aggInterval`,
+`confidenceInfo`, `dateRange`, `lastUpdated`, `normalization`, `units` — is what all of them answer, and
+`RadarTopListMeta` is the same without the aggregation interval and with the first series' label, so the
+timeseries endpoints still to come (HTTP, DNS, BGP, bots, attacks) reuse both rather than adding a meta per
+product. Three details in it are worth knowing:
+
+- `aggInterval` and `normalization` are answers, so they stay the strings Cloudflare sends, with
+  `RadarAggregationIntervals` and `RadarNormalizations` holding the published spellings to compare against. An
+  enum would turn a value this library has not met into `Unknown` and drop what Cloudflare said.
+- `confidenceInfo.level` is a `double`. Cloudflare publishes it as a number with no range, and one answer
+  carried a fraction where another carried a whole number: an `int` would read `95` and fail on `0.85`, and a
+  field that fails to read takes the whole meta object with it.
+- `confidenceInfo.annotations` are the same objects `GET /radar/annotations` answers, with fewer of their
+  fields filled in, so they are read as `RadarAnnotation` rather than as a second type that would have to be
+  kept in step with the first. That is where `isInstantaneous` is published, and `RadarAnnotation` reads it
+  now — nullable, because the annotation list does not answer it.
+
+**Dates are three different things here.** `date` is a day, sent as `yyyy-MM-dd`; `dateStart` and `dateEnd` are
+timestamps, sent as `yyyy-MM-ddTHH:mm:ssZ`; and `dateRange` is Cloudflare's own grammar — a count of days or
+weeks, `7d` or `12w`, with `control` appended to ask for the period before it as well. The first two are typed
+as `DateTimeOffset` and formatted on the way out. `dateRange` stays the string a caller writes: the grammar is
+published in prose, and a range this library refused locally but Cloudflare accepted would be a limit of this
+library, not of the API.
+
+`rankingType` is the one enum in this section — `POPULAR`, `TRENDING_RISE`, `TRENDING_STEADY` — because it is a
+filter rather than an answer, and a value this library cannot spell has nothing to send:
+`RadarRankingParameters.EnsureValid` says so before the request is built. The same check refuses a `limit` that
+asks for fewer than one entry.
+
+⛔ **Not wrapped:** `format=CSV` on any of these six, for the reason the reference-data reads have — Cloudflare
+replaces the envelope with a CSV body, which surfaces as an empty result rather than as an error. The dataset
+download is the one radar call that does take a `format`, because it answers an address to fetch rather than
+the file itself.
 
 ---
 

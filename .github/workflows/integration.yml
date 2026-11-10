@@ -290,9 +290,9 @@ jobs:
           probe ips "$base/ips"
           # Radar's reference data: no account and no zone in the path either, but unlike /ips Cloudflare's
           # reference names a permission for these - 'User Details Read', a group nothing else this suite
-          # calls asks for. These four probes are what settles whether a token needs it, and the notice this
-          # step prints lists every live group whose name mentions radar or user details, with the id a token
-          # URL would have to carry.
+          # calls asks for. These probes are what settles whether a token needs it, and the notice this step
+          # prints lists every live group whose name mentions radar or user details, with the id a token URL
+          # would have to carry.
           probe radar_locations "$base/radar/entities/locations?limit=1"
           probe radar_asns "$base/radar/entities/asns?limit=1"
           probe radar_geolocations "$base/radar/geolocations?limit=1"
@@ -304,6 +304,16 @@ jobs:
           # Cloudflare's own, so both have something to answer about whatever account this runs against.
           probe radar_as_set "$base/radar/entities/asns/13335/as_set"
           probe radar_botnet "$base/radar/entities/asns/botnet_threat_feed?limit=1"
+          # Radar's rankings: the domains Cloudflare sees the Internet using, the services behind them, and
+          # how both moved. The timeseries ones take Cloudflare's own dateRange grammar - a count of days or
+          # weeks, not a timestamp - and the domain one takes a domain in the path, so cloudflare.com is the
+          # one that answers the same whatever account this runs against.
+          probe radar_ranking_top "$base/radar/ranking/top?limit=1"
+          probe radar_ranking_timeseries "$base/radar/ranking/timeseries_groups?dateRange=1d&limit=1"
+          probe radar_ranking_domain "$base/radar/ranking/domain/cloudflare.com"
+          probe radar_is_categories "$base/radar/ranking/internet_services/categories?limit=1"
+          probe radar_is_top "$base/radar/ranking/internet_services/top?limit=1"
+          probe radar_is_timeseries "$base/radar/ranking/internet_services/timeseries_groups?dateRange=1d&limit=1"
 
           if [ -n "${CLOUDFLARE_ZONE_ID:-}" ]; then
             zone="$base/zones/${CLOUDFLARE_ZONE_ID}"
@@ -549,6 +559,28 @@ jobs:
                'dfe525ec7b07472c827d8d009178b2ac', 'read',
                'the ranking of ASNs by botnet activity; it answers a meta object beside the list, so the '
                'total it carries is the only total radar offers anywhere'),
+              ('radar_ranking_top', 'GET /radar/ranking/top', 'Radar - Read',
+               'dfe525ec7b07472c827d8d009178b2ac', 'read',
+               'the domains Cloudflare ranks; it answers one series per date or name asked for and publishes '
+               'only the first, so one top_0 in a 200 is the whole published shape'),
+              ('radar_ranking_timeseries', 'GET /radar/ranking/timeseries_groups', 'Radar - Read',
+               'dfe525ec7b07472c827d8d009178b2ac', 'read',
+               "probed with Cloudflare's own dateRange grammar, a count of days or weeks rather than a "
+               'timestamp; a period with nothing in it would still be a 200'),
+              ('radar_ranking_domain', 'GET /radar/ranking/domain/cloudflare.com', 'Radar - Read',
+               'dfe525ec7b07472c827d8d009178b2ac', 'read',
+               "probed against Cloudflare's own domain, which is ranked whatever the account; a domain "
+               'outside the buckets answers 200 with no rank in it'),
+              ('radar_is_categories', 'GET /radar/ranking/internet_services/categories', 'Radar - Read',
+               'dfe525ec7b07472c827d8d009178b2ac', 'read',
+               'the category names the two internet-service rankings are filtered by'),
+              ('radar_is_top', 'GET /radar/ranking/internet_services/top', 'Radar - Read',
+               'dfe525ec7b07472c827d8d009178b2ac', 'read',
+               'the services behind the traffic rather than the domains in it, labelled with the category '
+               'each series is for'),
+              ('radar_is_timeseries', 'GET /radar/ranking/internet_services/timeseries_groups',
+               'Radar - Read', 'dfe525ec7b07472c827d8d009178b2ac', 'read',
+               'the same timeseries shape as the domain ranking, which is why one model serves both'),
               ('workers_routes', 'GET /zones/{zone_id}/workers/routes', 'Workers Routes - Read',
                '2072033d694d415a936eaeb94e6405b8', 'read',
                'a zone with no routes answers 200 and an empty list; this one is zone-scoped, so it needs '

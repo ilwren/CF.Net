@@ -7,10 +7,11 @@ using CFNet.Serialization;
 namespace CFNet.Services;
 
 /// <summary>
-/// Cloudflare Radar's reference data: the locations, autonomous systems and geolocations the rest of the radar
-/// API is queried by, the entity behind an IP address, the global search that finds any of them, the annotations
-/// Cloudflare attaches to its own data, the datasets it publishes, and what it knows about how autonomous
-/// systems relate to one another.
+/// Cloudflare Radar's reference data and rankings: the locations, autonomous systems and geolocations the rest
+/// of the radar API is queried by, the entity behind an IP address, the global search that finds any of them,
+/// the annotations Cloudflare attaches to its own data, the datasets it publishes, what it knows about how
+/// autonomous systems relate to one another, and how it ranks the domains and internet services behind the
+/// traffic it sees.
 /// </summary>
 /// <remarks>
 /// Scope. None of these paths carries an account or a zone - they sit at the API root beside <c>/ips</c>, and
@@ -264,6 +265,76 @@ public interface IRadarService
     Task<RadarBotnetThreatFeed?> ListBotnetThreatFeedAsync(
         RadarBotnetThreatFeedParameters? parameters = null,
         CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Reads Cloudflare's ranking of the most-used domains: the popular ones, or the ones trending.
+    /// </summary>
+    /// <remarks>
+    /// The answer is one series per date or label asked for, and Cloudflare numbers them - <c>top_0</c>, then
+    /// <c>top_1</c> - while publishing only the first. The first is typed; the rest arrive in the result's
+    /// <c>AdditionalData</c>, which <see cref="RadarRankingTop.SeriesNames"/> lists.
+    /// </remarks>
+    /// <param name="parameters">Filters and ranking type, or <see langword="null"/> for Cloudflare's defaults.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>The ranking, with what it covers.</returns>
+    Task<RadarRankingTop?> GetTopDomainsAsync(
+        RadarRankingTopParameters? parameters = null,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Reads how the domain ranking moved over time, as one group of series per period asked for.
+    /// </summary>
+    /// <param name="parameters">Periods and filters, or <see langword="null"/> for Cloudflare's defaults.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>The series, with how they were aggregated and scaled.</returns>
+    Task<RadarTimeseriesGroups?> GetTopDomainTimeseriesGroupsAsync(
+        RadarRankingTimeseriesGroupsParameters? parameters = null,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Reads where one domain sits in Cloudflare's ranking, with the categories it is in and - when asked for -
+    /// the places it is most used.
+    /// </summary>
+    /// <param name="domain">The domain to ask about, such as <c>cloudflare.com</c>.</param>
+    /// <param name="parameters">Dates and filters, or <see langword="null"/> for Cloudflare's defaults.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>What Cloudflare knows about the domain's rank.</returns>
+    Task<RadarDomainRanking?> GetDomainRankingAsync(
+        string domain,
+        RadarDomainRankingParameters? parameters = null,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Lists the internet-service categories Cloudflare ranks by, which is what the two service rankings are
+    /// filtered with.
+    /// </summary>
+    /// <param name="parameters">Dates and paging, or <see langword="null"/> for every category.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>The categories.</returns>
+    Task<RadarInternetServiceCategories?> ListInternetServiceCategoriesAsync(
+        RadarInternetServiceCategoriesParameters? parameters = null,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Reads Cloudflare's ranking of internet services - the services behind the traffic, rather than the
+    /// domains in it.
+    /// </summary>
+    /// <param name="parameters">Filters, or <see langword="null"/> for Cloudflare's defaults.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>The ranking, with the category and date each series is for.</returns>
+    Task<RadarInternetServiceTop?> GetTopInternetServicesAsync(
+        RadarInternetServiceTopParameters? parameters = null,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Reads how the internet-service ranking moved over time.
+    /// </summary>
+    /// <param name="parameters">Periods and filters, or <see langword="null"/> for Cloudflare's defaults.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>The series, with how they were aggregated and scaled.</returns>
+    Task<RadarTimeseriesGroups?> GetInternetServiceTimeseriesGroupsAsync(
+        RadarInternetServiceTimeseriesGroupsParameters? parameters = null,
+        CancellationToken cancellationToken = default);
 }
 
 /// <inheritdoc cref="IRadarService" />
@@ -273,6 +344,8 @@ public sealed class RadarService : CloudflareService, IRadarService
     private const string Geolocations = "radar/geolocations";
     private const string Annotations = "radar/annotations";
     private const string Datasets = "radar/datasets";
+    private const string Ranking = "radar/ranking";
+    private const string InternetServices = "radar/ranking/internet_services";
     private const int DefaultPageSize = 100;
     private const int MaxPages = 10_000;
 
@@ -616,6 +689,93 @@ public sealed class RadarService : CloudflareService, IRadarService
         request.OperationName = "List Radar Botnet Threat Feed";
 
         var response = await Transport.SendAsync<RadarBotnetThreatFeed>(request, cancellationToken).ConfigureAwait(false);
+        return response.Result;
+    }
+
+    /// <inheritdoc />
+    public async Task<RadarRankingTop?> GetTopDomainsAsync(
+        RadarRankingTopParameters? parameters = null,
+        CancellationToken cancellationToken = default)
+    {
+        parameters?.EnsureValid();
+
+        var request = Apply(CloudflareRequest.Get($"{Ranking}/top"), parameters);
+        request.OperationName = "Get Radar Top Domains";
+
+        var response = await Transport.SendAsync<RadarRankingTop>(request, cancellationToken).ConfigureAwait(false);
+        return response.Result;
+    }
+
+    /// <inheritdoc />
+    public async Task<RadarTimeseriesGroups?> GetTopDomainTimeseriesGroupsAsync(
+        RadarRankingTimeseriesGroupsParameters? parameters = null,
+        CancellationToken cancellationToken = default)
+    {
+        parameters?.EnsureValid();
+
+        var request = Apply(CloudflareRequest.Get($"{Ranking}/timeseries_groups"), parameters);
+        request.OperationName = "Get Radar Top Domain Timeseries Groups";
+
+        var response = await Transport.SendAsync<RadarTimeseriesGroups>(request, cancellationToken).ConfigureAwait(false);
+        return response.Result;
+    }
+
+    /// <inheritdoc />
+    public async Task<RadarDomainRanking?> GetDomainRankingAsync(
+        string domain,
+        RadarDomainRankingParameters? parameters = null,
+        CancellationToken cancellationToken = default)
+    {
+        parameters?.EnsureValid();
+
+        var request = Apply(
+            CloudflareRequest.Get($"{Ranking}/domain/{CloudflareUrl.EncodeSegment(Require(domain, nameof(domain)))}"),
+            parameters);
+        request.OperationName = "Get Radar Domain Ranking";
+
+        var response = await Transport.SendAsync<RadarDomainRanking>(request, cancellationToken).ConfigureAwait(false);
+        return response.Result;
+    }
+
+    /// <inheritdoc />
+    public async Task<RadarInternetServiceCategories?> ListInternetServiceCategoriesAsync(
+        RadarInternetServiceCategoriesParameters? parameters = null,
+        CancellationToken cancellationToken = default)
+    {
+        parameters?.EnsureValid();
+
+        var request = Apply(CloudflareRequest.Get($"{InternetServices}/categories"), parameters);
+        request.OperationName = "List Radar Internet Service Categories";
+
+        var response = await Transport.SendAsync<RadarInternetServiceCategories>(request, cancellationToken).ConfigureAwait(false);
+        return response.Result;
+    }
+
+    /// <inheritdoc />
+    public async Task<RadarInternetServiceTop?> GetTopInternetServicesAsync(
+        RadarInternetServiceTopParameters? parameters = null,
+        CancellationToken cancellationToken = default)
+    {
+        parameters?.EnsureValid();
+
+        var request = Apply(CloudflareRequest.Get($"{InternetServices}/top"), parameters);
+        request.OperationName = "Get Radar Top Internet Services";
+
+        var response = await Transport.SendAsync<RadarInternetServiceTop>(request, cancellationToken).ConfigureAwait(false);
+        return response.Result;
+    }
+
+    /// <inheritdoc />
+    public async Task<RadarTimeseriesGroups?> GetInternetServiceTimeseriesGroupsAsync(
+        RadarInternetServiceTimeseriesGroupsParameters? parameters = null,
+        CancellationToken cancellationToken = default)
+    {
+        parameters?.EnsureValid();
+
+        var request = Apply(CloudflareRequest.Get($"{InternetServices}/timeseries_groups"), parameters);
+        request.OperationName = "Get Radar Internet Service Timeseries Groups";
+
+        var response = await Transport.SendAsync<RadarTimeseriesGroups>(request, cancellationToken).ConfigureAwait(false);
         return response.Result;
     }
 }

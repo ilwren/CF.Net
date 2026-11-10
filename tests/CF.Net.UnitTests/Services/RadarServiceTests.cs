@@ -1033,6 +1033,296 @@ public class RadarServiceTests
     }
 
     [Fact]
+    public async Task GetTopDomainsAsync_sends_the_filters_in_the_order_radar_publishes_them()
+    {
+        using var harness = CloudflareHarness.Create();
+        harness.Respond(
+            """{"success":true,"errors":[],"messages":[],"result":{"meta":{"confidenceInfo":null,"dateRange":[{"startTime":"2026-11-02T00:00:00Z","endTime":"2026-11-09T00:00:00Z"}],"lastUpdated":"2026-11-09T05:00:00Z","normalization":"PERCENTAGE","top_0":{"date":"2026-11-02"},"units":[{"name":"rank","value":"position"}]},"top_0":[{"domain":"google.com","rank":1,"categories":[{"id":18,"name":"Technology","superCategoryId":3}],"pctRankChange":0.5},{"domain":"cloudflare.com","rank":4211,"categories":[]}],"top_1":[{"domain":"example.com","rank":7,"categories":[]}]}}""");
+
+        var top = await harness.Client.Radar.GetTopDomainsAsync(new RadarRankingTopParameters
+        {
+            Date = new List<DateTimeOffset> { new(2026, 11, 2, 0, 0, 0, TimeSpan.Zero) },
+            DomainCategory = new List<string> { "18" },
+            Limit = 2,
+            Location = new List<string> { "US", "GB" },
+            Name = new List<string> { "first", "second" },
+            RankingType = RadarRankingType.TrendingRise,
+        });
+
+        var request = harness.LastRequest;
+        Assert.Equal(HttpMethod.Get, request.Method);
+        Assert.Equal("/client/v4/radar/ranking/top", request.Path);
+        Assert.Equal(
+            "date=2026-11-02&domainCategory=18&limit=2&location=US&location=GB&name=first&name=second" +
+            "&rankingType=TRENDING_RISE",
+            request.Query.TrimStart('?'));
+
+        // The first series is typed. The second arrives where Cloudflare puts anything this library has no
+        // published shape for, and SeriesNames is what tells a caller to look for it.
+        Assert.Equal(2, top!.Top0!.Count);
+        Assert.Equal("google.com", top.Top0[0].Domain);
+        Assert.Equal(1L, top.Top0[0].Rank);
+        Assert.Equal(0.5, top.Top0[0].PercentRankChange);
+        Assert.Equal("1 google.com (+0.5%)", top.Top0[0].ToString());
+
+        var category = Assert.Single(top.Top0[0].Categories!);
+        Assert.Equal(18L, category.Id);
+        Assert.Equal("Technology", category.Name);
+        Assert.Equal(3L, category.SuperCategoryId);
+        Assert.Equal("18 Technology", category.ToString());
+        Assert.Equal("4211 cloudflare.com", top.Top0[1].ToString());
+        Assert.Equal(new[] { "top_1" }, top.SeriesNames);
+        Assert.Equal(
+            "2 domain(s), 2026-11-02 over 2026-11-02T00:00:00Z to 2026-11-09T00:00:00Z, " +
+            "updated 2026-11-09T05:00:00Z, and top_1",
+            top.ToString());
+
+        // The top lists publish confidenceInfo as nullable, and this one answered it as null.
+        Assert.Null(top.Meta!.ConfidenceInfo);
+        Assert.Equal("2026-11-02", top.Meta.Top0!.Date);
+        Assert.Null(top.Meta.Top0.ServiceCategory);
+        Assert.Equal("PERCENTAGE", top.Meta.Normalization);
+        Assert.Equal(RadarNormalizations.Percentage, top.Meta.Normalization);
+        Assert.Equal("rank=position", Assert.Single(top.Meta.Units!).ToString());
+        Assert.Equal(
+            "2026-11-02T00:00:00Z to 2026-11-09T00:00:00Z",
+            Assert.Single(top.Meta.DateRange!).ToString());
+        Assert.Equal(
+            "2026-11-02 over 2026-11-02T00:00:00Z to 2026-11-09T00:00:00Z, updated 2026-11-09T05:00:00Z",
+            top.Meta.ToString());
+    }
+
+    [Fact]
+    public async Task GetTopDomainsAsync_refuses_a_limit_that_asks_for_nothing_and_a_ranking_it_cannot_spell()
+    {
+        using var harness = CloudflareHarness.Create();
+
+        var error = await Assert.ThrowsAsync<CloudflareConfigurationException>(() =>
+            harness.Client.Radar.GetTopDomainsAsync(new RadarRankingTopParameters
+            {
+                Limit = 0,
+                RankingType = RadarRankingType.Unknown,
+            }));
+
+        Assert.Equal(2, error.Problems.Count);
+        Assert.Contains("at least one entry", error.Problems[0], StringComparison.Ordinal);
+        Assert.Contains("not a radar ranking type", error.Problems[1], StringComparison.Ordinal);
+        Assert.Equal(0, harness.RequestCount);
+    }
+
+    [Fact]
+    public async Task GetTopDomainTimeseriesGroupsAsync_leaves_the_series_named_as_the_caller_named_them()
+    {
+        using var harness = CloudflareHarness.Create();
+        harness.Respond(
+            """{"success":true,"errors":[],"messages":[],"result":{"meta":{"aggInterval":"ONE_DAY","confidenceInfo":{"annotations":[{"dataSource":"HTTP","description":"Something moved","endDate":"2026-11-03","eventType":"TRAFFIC_ANOMALY","isInstantaneous":false,"linkedUrl":"https://radar.cloudflare.com/","startDate":"2026-11-02","tags":["dns"]}],"level":0.85},"dateRange":[{"startTime":"2026-11-02T00:00:00Z","endTime":"2026-11-09T00:00:00Z"}],"lastUpdated":"2026-11-09T05:00:00Z","normalization":"PERCENTAGE","units":[{"name":"rank","value":"position"}]},"serie_0":{"timestamps":["2026-11-02T00:00:00Z","2026-11-03T00:00:00Z"],"google.com":[1,2],"cloudflare.com":["a","b"]},"serie_1":{"timestamps":["2026-11-04T00:00:00Z"],"google.com":[3]}}}""");
+
+        var groups = await harness.Client.Radar.GetTopDomainTimeseriesGroupsAsync(
+            new RadarRankingTimeseriesGroupsParameters
+            {
+                DateStart = new List<DateTimeOffset> { new(2026, 11, 2, 0, 0, 0, TimeSpan.Zero) },
+                DateEnd = new List<DateTimeOffset> { new(2026, 11, 9, 0, 0, 0, TimeSpan.Zero) },
+                DateRange = new List<string> { "7d", "7dcontrol" },
+                Domains = new List<string> { "google.com", "cloudflare.com" },
+                Limit = 10,
+                Location = new List<string> { "US" },
+                Name = new List<string> { "one" },
+                RankingType = RadarRankingType.Popular,
+            });
+
+        Assert.Equal(HttpMethod.Get, harness.LastRequest.Method);
+        Assert.Equal("/client/v4/radar/ranking/timeseries_groups", harness.LastRequest.Path);
+        Assert.Equal(
+            "dateStart=2026-11-02T00%3A00%3A00Z&dateEnd=2026-11-09T00%3A00%3A00Z&dateRange=7d" +
+            "&dateRange=7dcontrol&domains=google.com&domains=cloudflare.com&limit=10&location=US&name=one" +
+            "&rankingType=POPULAR",
+            harness.LastRequest.Query.TrimStart('?'));
+
+        // The value series are the caller's own names, so they cannot be typed - and one of them answers
+        // strings, which is why they are left as the JSON they arrived as.
+        var serie = groups!.Serie0!;
+        Assert.Equal(2, serie.Count);
+        Assert.Equal(new[] { "2026-11-02T00:00:00Z", "2026-11-03T00:00:00Z" }, serie.Timestamps!);
+        Assert.Equal(new[] { "google.com", "cloudflare.com" }, serie.SeriesNames);
+        Assert.Equal("2 timestamp(s), 2 series: google.com, cloudflare.com", serie.ToString());
+        Assert.Equal(1, serie.AdditionalData!["google.com"][0].GetInt32());
+        Assert.Equal("a", serie.AdditionalData["cloudflare.com"][0].GetString());
+
+        // A second group is not published, so it is not typed - but it is not lost either.
+        Assert.Equal(new[] { "serie_1" }, groups.SeriesNames);
+
+        Assert.Equal("ONE_DAY", groups.Meta!.AggInterval);
+        Assert.Equal(RadarAggregationIntervals.OneDay, groups.Meta.AggInterval);
+        Assert.Equal(0.85, groups.Meta.ConfidenceInfo!.Level);
+        Assert.Equal("level 0.85, 1 annotation(s)", groups.Meta.ConfidenceInfo.ToString());
+
+        // The annotations a confidence report carries are the ones the annotation list answers, with fewer of
+        // their fields filled in, so they are read as the same type - isInstantaneous included.
+        var annotation = Assert.Single(groups.Meta.ConfidenceInfo.Annotations!);
+        Assert.False(annotation.IsInstantaneous);
+        Assert.Equal("HTTP", annotation.DataSource);
+        Assert.Equal("TRAFFIC_ANOMALY", annotation.EventType);
+        Assert.Equal(new[] { "dns" }, annotation.Tags!);
+        Assert.True(annotation.AdditionalData is not { Count: > 0 });
+
+        Assert.Equal(
+            "ONE_DAY PERCENTAGE over 2026-11-02T00:00:00Z to 2026-11-09T00:00:00Z " +
+            "(level 0.85, 1 annotation(s))",
+            groups.Meta.ToString());
+        Assert.Equal(
+            "2 timestamp(s), 2 series: google.com, cloudflare.com, ONE_DAY PERCENTAGE over " +
+            "2026-11-02T00:00:00Z to 2026-11-09T00:00:00Z (level 0.85, 1 annotation(s))",
+            groups.ToString());
+    }
+
+    [Fact]
+    public async Task GetDomainRankingAsync_puts_the_domain_in_the_path_and_asks_for_the_places_when_told_to()
+    {
+        using var harness = CloudflareHarness.Create();
+        harness.Respond(
+            """{"success":true,"errors":[],"messages":[],"result":{"details_0":{"categories":[{"id":18,"name":"Technology","superCategoryId":3}],"bucket":"top_1000000","rank":4211,"top_locations":[{"locationCode":"US","locationName":"United States","rank":1}]},"meta":{"dateRange":[{"startTime":"2026-11-02","endTime":"2026-11-09"}]}}}""");
+
+        var ranking = await harness.Client.Radar.GetDomainRankingAsync(
+            "cloudflare.com",
+            new RadarDomainRankingParameters
+            {
+                Date = new List<DateTimeOffset> { new(2026, 11, 2, 0, 0, 0, TimeSpan.Zero) },
+                IncludeTopLocations = true,
+                Limit = 1,
+                Name = new List<string> { "one" },
+                RankingType = RadarRankingType.Popular,
+            });
+
+        Assert.Equal(HttpMethod.Get, harness.LastRequest.Method);
+        Assert.Equal("/client/v4/radar/ranking/domain/cloudflare.com", harness.LastRequest.Path);
+        Assert.Equal(
+            "date=2026-11-02&includeTopLocations=true&limit=1&name=one&rankingType=POPULAR",
+            harness.LastRequest.Query.TrimStart('?'));
+
+        // Every field but the categories is optional, and a domain outside the ranked buckets answers no rank.
+        Assert.Equal(4211L, ranking!.Details0!.Rank);
+        Assert.Equal("top_1000000", ranking.Details0.Bucket);
+        Assert.Equal("rank 4211 in top_1000000, 18 Technology", ranking.Details0.ToString());
+
+        var place = Assert.Single(ranking.Details0.TopLocations!);
+        Assert.Equal("US", place.LocationCode);
+        Assert.Equal("United States", place.LocationName);
+        Assert.Equal(1L, place.Rank);
+        Assert.Equal("1 US", place.ToString());
+
+        Assert.Equal("2026-11-02 to 2026-11-09", Assert.Single(ranking.Meta!.DateRange!).ToString());
+        Assert.Equal(
+            "rank 4211 in top_1000000, 18 Technology, 2026-11-02 to 2026-11-09",
+            ranking.ToString());
+    }
+
+    [Fact]
+    public async Task GetDomainRankingAsync_needs_a_domain_to_ask_about()
+    {
+        using var harness = CloudflareHarness.Create();
+
+        var error = await Assert.ThrowsAsync<CloudflareConfigurationException>(() =>
+            harness.Client.Radar.GetDomainRankingAsync(" "));
+
+        Assert.Contains("'domain' must not be null or empty", error.Message, StringComparison.Ordinal);
+        Assert.Equal(0, harness.RequestCount);
+    }
+
+    [Fact]
+    public async Task ListInternetServiceCategoriesAsync_reads_the_names_a_service_ranking_is_filtered_by()
+    {
+        using var harness = CloudflareHarness.Create();
+        harness.Respond(
+            """{"success":true,"errors":[],"messages":[],"result":{"categories_0":[{"name":"Cloud Computing"},{"name":"Search Engines"}],"categories_1":[{"name":"Streaming"}]}}""");
+
+        var categories = await harness.Client.Radar.ListInternetServiceCategoriesAsync(
+            new RadarInternetServiceCategoriesParameters { Limit = 2 });
+
+        Assert.Equal(HttpMethod.Get, harness.LastRequest.Method);
+        Assert.Equal("/client/v4/radar/ranking/internet_services/categories", harness.LastRequest.Path);
+        Assert.Equal("limit=2", harness.LastRequest.Query.TrimStart('?'));
+        Assert.Equal(
+            new[] { "Cloud Computing", "Search Engines" },
+            categories!.Categories0!.Select(category => category.Name!));
+        Assert.Equal("2 category(ies)", categories.ToString());
+        Assert.True(categories.AdditionalData!.ContainsKey("categories_1"));
+    }
+
+    [Fact]
+    public async Task GetTopInternetServicesAsync_names_the_category_each_series_is_for()
+    {
+        using var harness = CloudflareHarness.Create();
+        harness.Respond(
+            """{"success":true,"errors":[],"messages":[],"result":{"meta":{"confidenceInfo":null,"dateRange":[{"startTime":"2026-11-02","endTime":"2026-11-09"}],"lastUpdated":"2026-11-09T05:00:00Z","normalization":"PERCENTAGE","top_0":{"date":"2026-11-02","serviceCategory":"Cloud Computing"},"units":[{"name":"rank","value":"position"}]},"top_0":[{"rank":1,"service":"AWS"},{"rank":2,"service":"Google Cloud"}]}}""");
+
+        var top = await harness.Client.Radar.GetTopInternetServicesAsync(new RadarInternetServiceTopParameters
+        {
+            Date = new List<DateTimeOffset> { new(2026, 11, 2, 0, 0, 0, TimeSpan.Zero) },
+            Limit = 2,
+            ServiceCategory = new List<string> { "Cloud Computing" },
+        });
+
+        Assert.Equal(HttpMethod.Get, harness.LastRequest.Method);
+        Assert.Equal("/client/v4/radar/ranking/internet_services/top", harness.LastRequest.Path);
+        Assert.Equal(
+            "date=2026-11-02&limit=2&serviceCategory=Cloud%20Computing",
+            harness.LastRequest.Query.TrimStart('?'));
+
+        Assert.Equal(2, top!.Top0!.Count);
+        Assert.Equal(1L, top.Top0[0].Rank);
+        Assert.Equal("AWS", top.Top0[0].Service);
+        Assert.Equal("1 AWS", top.Top0[0].ToString());
+        Assert.Equal("2026-11-02 (Cloud Computing)", top.Meta!.Top0!.ToString());
+        Assert.Empty(top.SeriesNames);
+        Assert.Equal(
+            "2 service(s), 2026-11-02 (Cloud Computing) over 2026-11-02 to 2026-11-09, " +
+            "updated 2026-11-09T05:00:00Z",
+            top.ToString());
+    }
+
+    [Fact]
+    public async Task GetInternetServiceTimeseriesGroupsAsync_reads_a_level_that_arrives_as_a_whole_number()
+    {
+        using var harness = CloudflareHarness.Create();
+        harness.Respond(
+            """{"success":true,"errors":[],"messages":[],"result":{"meta":{"aggInterval":"ONE_HOUR","confidenceInfo":{"annotations":[],"level":95},"dateRange":[],"lastUpdated":"2026-11-09T05:00:00Z","normalization":"RAW_VALUES","units":[]},"serie_0":{"timestamps":["2026-11-09T00:00:00Z"],"AWS":[12]}}}""");
+
+        var groups = await harness.Client.Radar.GetInternetServiceTimeseriesGroupsAsync(
+            new RadarInternetServiceTimeseriesGroupsParameters
+            {
+                DateRange = new List<string> { "1d" },
+                Name = new List<string> { "one", "two" },
+                ServiceCategory = new List<string> { "Cloud Computing" },
+            });
+
+        Assert.Equal(
+            "/client/v4/radar/ranking/internet_services/timeseries_groups",
+            harness.LastRequest.Path);
+        Assert.Equal(
+            "dateRange=1d&name=one&name=two&serviceCategory=Cloud%20Computing",
+            harness.LastRequest.Query.TrimStart('?'));
+
+        // Cloudflare publishes level as a number with no range: one endpoint answered a fraction and this one
+        // a whole number, so it is a double - an int would read 95 and fail on 0.85.
+        Assert.Equal("ONE_HOUR", groups!.Meta!.AggInterval);
+        Assert.Equal(RadarNormalizations.RawValues, groups.Meta.Normalization);
+        Assert.Equal(95d, groups.Meta.ConfidenceInfo!.Level);
+        Assert.Equal("level 95", groups.Meta.ConfidenceInfo.ToString());
+        Assert.Empty(groups.Meta.ConfidenceInfo.Annotations!);
+        Assert.Empty(groups.Meta.DateRange!);
+        Assert.Equal(12, groups.Serie0!.AdditionalData!["AWS"][0].GetInt32());
+        Assert.Equal("ONE_HOUR RAW_VALUES (level 95)", groups.Meta.ToString());
+    }
+
+    [Fact]
+    public void Every_ranking_type_is_spelled_as_radar_publishes_it()
+    {
+        Assert.Equal(
+            new[] { "POPULAR", "TRENDING_RISE", "TRENDING_STEADY" },
+            CloudflareEnumConverter<RadarRankingType>.KnownValues);
+    }
+
+    [Fact]
     public void Every_annotation_filter_is_spelled_as_radar_publishes_it()
     {
         Assert.Equal(

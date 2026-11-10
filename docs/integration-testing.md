@@ -334,12 +334,12 @@ permissions but no zone resource returns `10007 Route not found` for a zone you 
 in the dashboard, which reads like a bug in the client and is not.
 
 This is common enough that the workflow checks for it before running anything. The step named *Check what
-the credentials can actually reach* makes one `curl` call per product area — fifty-five of them, covering
+the credentials can actually reach* makes one `curl` call per product area — sixty-three of them, covering
 zones, DNS records, DNSSEC and its ZSK, zone settings, certificate packs, custom hostnames, origin TLS
 client auth, origin CA certificates, cache purge, the account, Workers scripts, domains, routes and static
 assets, Pages, D1, KV, R2, rulesets, filter lists, page rules, firewall filters, IP Access rules, mTLS
 certificates, the Cloudflare IP ranges, Turnstile, load balancing, Workers AI, account tokens, and radar's
-reference data and rankings — with the same
+reference data, rankings and bot traffic — with the same
 credentials, and reports each answer as `label=status[shape]`:
 
 ```

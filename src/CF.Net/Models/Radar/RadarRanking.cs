@@ -200,33 +200,32 @@ public abstract class RadarRankingParameters : ICloudflareQueryParameters
     /// <param name="query">The query string to add to.</param>
     /// <param name="dates">The dates to send.</param>
     protected static void ApplyDates(QueryStringBuilder query, List<DateTimeOffset>? dates) =>
-        query.AddMany(
-            "date",
-            dates?.Select(date => date.UtcDateTime.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture)));
+        RadarQuery.Days(query, "date", dates);
 
-    /// <summary>Sends <c>dateStart</c> and <c>dateEnd</c>, once per timestamp, as Cloudflare's own format.</summary>
+    /// <summary>
+    /// Sends the three period filters - <c>dateEnd</c>, <c>dateRange</c> and <c>dateStart</c>, in the order
+    /// Cloudflare publishes them, which is alphabetical and not the order they read in.
+    /// </summary>
+    /// <remarks>
+    /// The ranges are Cloudflare's own grammar - a count of days or weeks, with <c>control</c> appended to ask
+    /// for the period before it as well - and are left as the strings a caller writes rather than parsed here:
+    /// the grammar is published in prose, and a range this library refused locally but Cloudflare accepted
+    /// would be a limit of this library, not of the API.
+    /// </remarks>
     /// <param name="query">The query string to add to.</param>
     /// <param name="starts">The starts of the periods to send.</param>
     /// <param name="ends">The ends of the periods to send.</param>
-    protected static void ApplyDateBounds(
+    /// <param name="ranges">The periods to send, in Cloudflare's shorthand.</param>
+    protected static void ApplyDateFilters(
         QueryStringBuilder query,
         List<DateTimeOffset>? starts,
-        List<DateTimeOffset>? ends)
+        List<DateTimeOffset>? ends,
+        List<string>? ranges)
     {
-        query.AddMany("dateStart", starts?.Select(start => CloudflareUrl.Format(start)));
-        query.AddMany("dateEnd", ends?.Select(end => CloudflareUrl.Format(end)));
+        RadarQuery.Timestamps(query, "dateEnd", ends);
+        RadarQuery.Ranges(query, "dateRange", ranges);
+        RadarQuery.Timestamps(query, "dateStart", starts);
     }
-
-    /// <summary>
-    /// Sends <c>dateRange</c>, once per range. The values are Cloudflare's own grammar - a count of days or
-    /// weeks, with <c>control</c> appended to ask for the period before it as well - and are left as the strings
-    /// a caller writes rather than parsed here: the grammar is published in prose, and a range this library
-    /// refuses locally but Cloudflare accepts would be a limit of this library, not of the API.
-    /// </summary>
-    /// <param name="query">The query string to add to.</param>
-    /// <param name="ranges">The ranges to send.</param>
-    protected static void ApplyDateRanges(QueryStringBuilder query, List<string>? ranges) =>
-        query.AddMany("dateRange", ranges);
 
     /// <summary>Sends <c>rankingType</c>, when one was asked for.</summary>
     /// <param name="query">The query string to add to.</param>
@@ -323,8 +322,7 @@ public sealed class RadarRankingTimeseriesGroupsParameters : RadarRankingParamet
     /// <inheritdoc />
     public override void Apply(QueryStringBuilder query)
     {
-        ApplyDateBounds(query, DateStart, DateEnd);
-        ApplyDateRanges(query, DateRange);
+        ApplyDateFilters(query, DateStart, DateEnd, DateRange);
         query.AddMany("domainCategory", DomainCategory);
         query.AddMany("domains", Domains);
         ApplyLimit(query);
@@ -602,8 +600,7 @@ public sealed class RadarInternetServiceTimeseriesGroupsParameters : RadarRankin
     /// <inheritdoc />
     public override void Apply(QueryStringBuilder query)
     {
-        ApplyDateBounds(query, DateStart, DateEnd);
-        ApplyDateRanges(query, DateRange);
+        ApplyDateFilters(query, DateStart, DateEnd, DateRange);
         ApplyLimit(query);
         ApplyNames(query);
         query.AddMany("serviceCategory", ServiceCategory);

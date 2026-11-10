@@ -1133,9 +1133,9 @@ public class RadarServiceTests
         Assert.Equal(HttpMethod.Get, harness.LastRequest.Method);
         Assert.Equal("/client/v4/radar/ranking/timeseries_groups", harness.LastRequest.Path);
         Assert.Equal(
-            "dateStart=2026-11-02T00%3A00%3A00Z&dateEnd=2026-11-09T00%3A00%3A00Z&dateRange=7d" +
-            "&dateRange=7dcontrol&domains=google.com&domains=cloudflare.com&limit=10&location=US&name=one" +
-            "&rankingType=POPULAR",
+            "dateEnd=2026-11-09T00%3A00%3A00Z&dateRange=7d&dateRange=7dcontrol" +
+            "&dateStart=2026-11-02T00%3A00%3A00Z&domains=google.com&domains=cloudflare.com&limit=10" +
+            "&location=US&name=one&rankingType=POPULAR",
             harness.LastRequest.Query.TrimStart('?'));
 
         // The value series are the caller's own names, so they cannot be typed - and one of them answers
@@ -1372,5 +1372,462 @@ public class RadarServiceTests
         Assert.Equal(
             new[] { "ASC", "DESC" },
             CloudflareEnumConverter<RadarSortOrder>.KnownValues);
+    }
+
+    [Fact]
+    public async Task ListBotsAsync_sends_its_filters_singly_and_pages_with_offset()
+    {
+        using var harness = CloudflareHarness.Create();
+        harness.Respond(
+            """{"success":true,"errors":[],"messages":[],"result":{"bots":[{"category":"SEARCH_ENGINE_CRAWLER","description":"Google's search crawler","kind":"BOT","name":"Googlebot","operator":"Google","slug":"googlebot","userAgentPatterns":["Googlebot/*"]},{"category":"AI_CRAWLER","description":"Fetches pages for training","kind":"BOT","name":"GPTBot","operator":"OpenAI","slug":"gptbot","userAgentPatterns":["GPTBot/*"]}]}}""");
+
+        var bots = await harness.Client.Radar.ListBotsAsync(new RadarBotListParameters
+        {
+            BotCategory = RadarBotCategory.AiCrawler,
+            BotOperator = "Google",
+            BotVerificationStatus = RadarBotVerificationStatus.Verified,
+            Kind = RadarBotKind.Bot,
+            Limit = 2,
+            Offset = 4,
+        });
+
+        Assert.Equal(HttpMethod.Get, harness.LastRequest.Method);
+        Assert.Equal("/client/v4/radar/bots", harness.LastRequest.Path);
+
+        // The list takes its filters singly and calls the kind filter kind, where the summaries beside it take
+        // lists of them and call it botKind. Both are Cloudflare's own spellings for the same idea.
+        Assert.Equal(
+            "botCategory=AI_CRAWLER&botOperator=Google&botVerificationStatus=VERIFIED&kind=BOT&limit=2&offset=4",
+            harness.LastRequest.Query.TrimStart('?'));
+
+        Assert.Equal(2, bots.Count);
+        var first = bots.Items[0];
+        Assert.Equal("Googlebot", first.Name);
+        Assert.Equal("googlebot", first.Slug);
+        Assert.Equal("SEARCH_ENGINE_CRAWLER", first.Category);
+        Assert.Equal("BOT", first.Kind);
+        Assert.Equal("Google", first.Operator);
+        Assert.Equal(new[] { "Googlebot/*" }, first.UserAgentPatterns!);
+        Assert.Equal("Googlebot (BOT) by Google", first.ToString());
+        Assert.True(first.AdditionalData is not { Count: > 0 });
+
+        // Three fields only the single-bot read answers, so a list entry carries none of them.
+        Assert.Null(first.OperatorUrl);
+        Assert.Null(first.UserAgents);
+        Assert.Null(first.SignatureAgentUrl);
+    }
+
+    [Fact]
+    public async Task ListBotsAsync_refuses_a_category_it_cannot_spell()
+    {
+        using var harness = CloudflareHarness.Create();
+
+        var error = await Assert.ThrowsAsync<CloudflareConfigurationException>(() =>
+            harness.Client.Radar.ListBotsAsync(new RadarBotListParameters
+            {
+                BotCategory = RadarBotCategory.Unknown,
+            }));
+
+        Assert.Contains("not a bot category", error.Message, StringComparison.Ordinal);
+        Assert.Equal(0, harness.RequestCount);
+    }
+
+    [Fact]
+    public async Task ListAllBotsAsync_walks_by_offset_and_stops_on_a_short_page()
+    {
+        using var harness = CloudflareHarness.Create();
+        harness.Respond(
+            """{"success":true,"errors":[],"messages":[],"result":{"bots":[{"slug":"googlebot"},{"slug":"bingbot"}]}}""");
+        harness.Respond(
+            """{"success":true,"errors":[],"messages":[],"result":{"bots":[{"slug":"gptbot"}]}}""");
+
+        var seen = new List<string?>();
+        await foreach (var bot in harness.Client.Radar.ListAllBotsAsync(pageSize: 2))
+        {
+            seen.Add(bot.Slug);
+        }
+
+        Assert.Equal(new[] { "googlebot", "bingbot", "gptbot" }, seen);
+        Assert.Equal(2, harness.RequestCount);
+        Assert.Equal("limit=2&offset=2", harness.LastRequest.Query.TrimStart('?'));
+    }
+
+    [Fact]
+    public async Task GetBotAsync_reads_the_three_fields_only_the_single_read_answers()
+    {
+        using var harness = CloudflareHarness.Create();
+        harness.Respond(
+            """{"success":true,"errors":[],"messages":[],"result":{"bot":{"category":"AI_CRAWLER","description":"Fetches pages for training","kind":"BOT","name":"GPTBot","operator":"OpenAI","operatorUrl":"https://openai.com/gptbot","slug":"gptbot","userAgentPatterns":["GPTBot/*"],"userAgents":["GPTBot/1.0"],"signatureAgentUrl":null}}}""");
+
+        var bot = await harness.Client.Radar.GetBotAsync("gptbot");
+
+        Assert.Equal("/client/v4/radar/bots/gptbot", harness.LastRequest.Path);
+        Assert.Equal("", harness.LastRequest.Query);
+        Assert.Equal("GPTBot", bot!.Name);
+        Assert.Equal("https://openai.com/gptbot", bot.OperatorUrl);
+        Assert.Equal(new[] { "GPTBot/1.0" }, bot.UserAgents!);
+
+        // Published as nullable, and answered as null here: not every bot signs its requests.
+        Assert.Null(bot.SignatureAgentUrl);
+        Assert.True(bot.AdditionalData is not { Count: > 0 });
+    }
+
+    [Fact]
+    public async Task GetBotAsync_reports_a_slug_radar_does_not_have_as_null()
+    {
+        using var harness = CloudflareHarness.Create();
+        harness.Respond(
+            """{"success":false,"errors":[{"code":12004,"message":"Bot not found"}],"messages":[],"result":null}""",
+            HttpStatusCode.NotFound);
+
+        var bot = await harness.Client.Radar.GetBotAsync("no-such-bot");
+
+        // A slug nobody has is an answer, not a failure: the caller asked whether radar knows the bot.
+        Assert.Null(bot);
+        Assert.Equal(1, harness.RequestCount);
+    }
+
+    [Fact]
+    public async Task GetBotSummaryAsync_puts_the_dimension_in_the_path_and_reads_the_dictionary()
+    {
+        using var harness = CloudflareHarness.Create();
+        harness.Respond(
+            """{"success":true,"errors":[],"messages":[],"result":{"meta":{"confidenceInfo":{"annotations":[],"level":0.9},"dateRange":[{"startTime":"2026-11-02T00:00:00Z","endTime":"2026-11-09T00:00:00Z"}],"lastUpdated":"2026-11-09T05:00:00Z","normalization":"PERCENTAGE","units":[{"name":"bot_kind","value":"percentage"}]},"summary_0":{"BOT":"63.65","AGENT":"1.20"}}}""");
+
+        var summary = await harness.Client.Radar.GetBotSummaryAsync(
+            RadarBotDimension.BotKind,
+            new RadarBotSummaryParameters
+            {
+                Asn = new List<string> { "13335" },
+                BotCategory = new List<RadarBotCategory>
+                {
+                    RadarBotCategory.AiCrawler,
+                    RadarBotCategory.SearchEngineCrawler,
+                },
+                DateRange = new List<string> { "7d" },
+                LimitPerGroup = 5,
+                Location = new List<string> { "US" },
+                Name = new List<string> { "one" },
+            });
+
+        Assert.Equal("/client/v4/radar/bots/summary/BOT_KIND", harness.LastRequest.Path);
+        Assert.Equal(
+            "asn=13335&botCategory=AI_CRAWLER&botCategory=SEARCH_ENGINE_CRAWLER&dateRange=7d" +
+            "&limitPerGroup=5&location=US&name=one",
+            harness.LastRequest.Query.TrimStart('?'));
+
+        // A summary is one number per value of the dimension, and the keys are the dimension's own values, so
+        // it is the dictionary Cloudflare publishes rather than a list this library would have to name.
+        Assert.Equal(2, summary!.Summary0!.Count);
+        Assert.Equal("63.65", summary.Summary0["BOT"]);
+        Assert.Equal("1.20", summary.Summary0["AGENT"]);
+        Assert.Empty(summary.SeriesNames);
+        Assert.Equal(0.9, summary.Meta!.ConfidenceInfo!.Level);
+        Assert.Equal(RadarNormalizations.Percentage, summary.Meta.Normalization);
+        Assert.Equal(
+            "over 2026-11-02T00:00:00Z to 2026-11-09T00:00:00Z, updated 2026-11-09T05:00:00Z",
+            summary.Meta.ToString());
+        Assert.Equal(
+            "2 value(s), over 2026-11-02T00:00:00Z to 2026-11-09T00:00:00Z, updated 2026-11-09T05:00:00Z",
+            summary.ToString());
+    }
+
+    [Fact]
+    public async Task GetBotSummaryAsync_refuses_a_dimension_it_cannot_put_in_a_path()
+    {
+        using var harness = CloudflareHarness.Create();
+
+        var error = await Assert.ThrowsAsync<CloudflareConfigurationException>(() =>
+            harness.Client.Radar.GetBotSummaryAsync(RadarBotDimension.Unknown));
+
+        Assert.Contains("not a radar bot dimension", error.Message, StringComparison.Ordinal);
+        Assert.Contains("no path to put it in", error.Message, StringComparison.Ordinal);
+        Assert.Equal(0, harness.RequestCount);
+    }
+
+    [Fact]
+    public async Task GetBotTimeseriesAsync_reads_the_groups_by_the_names_cloudflare_gave_them()
+    {
+        using var harness = CloudflareHarness.Create();
+        harness.Respond(
+            """{"success":true,"errors":[],"messages":[],"result":{"meta":{"aggInterval":"ONE_DAY","confidenceInfo":null,"dateRange":[],"lastUpdated":"2026-11-09T05:00:00Z","normalization":"RAW_VALUES","units":[{"name":"requests","value":"count"}]},"googlebot":{"timestamps":["2026-11-08T00:00:00Z","2026-11-09T00:00:00Z"],"requests":[100,120]},"gptbot":{"timestamps":["2026-11-08T00:00:00Z"],"requests":[7]}}}""");
+
+        var series = await harness.Client.Radar.GetBotTimeseriesAsync(new RadarBotTimeseriesParameters
+        {
+            AggInterval = RadarAggregationInterval.OneDay,
+            Bot = new List<string> { "googlebot", "gptbot" },
+            DateRange = new List<string> { "7d" },
+        });
+
+        Assert.Equal("/client/v4/radar/bots/timeseries", harness.LastRequest.Path);
+
+        // Asked for as 1d, answered as ONE_DAY: one idea, two spellings, one on each side of the call.
+        Assert.Equal(
+            "aggInterval=1d&bot=googlebot&bot=gptbot&dateRange=7d",
+            harness.LastRequest.Query.TrimStart('?'));
+        Assert.Equal("ONE_DAY", series!.Meta!.AggInterval);
+        Assert.Equal(RadarAggregationIntervals.OneDay, series.Meta.AggInterval);
+
+        // The groups are named after what was filtered by, so none of them is published and all of them are
+        // read by name.
+        Assert.Equal(new[] { "googlebot", "gptbot" }, series.GroupNames);
+        Assert.Equal(2, series.Group("googlebot")!.Count);
+        Assert.Equal(120, series.Group("googlebot")!.AdditionalData!["requests"][1].GetInt32());
+        Assert.Equal(7, series.Group("gptbot")!.AdditionalData!["requests"][0].GetInt32());
+        Assert.Null(series.Group("no-such-bot"));
+        // A series' meta says its interval, its normalization, its period and its confidence, and nothing
+        // else - the update time is on it but not in what it prints, which is the shape the rankings set.
+        Assert.Equal("2 group(s): googlebot, gptbot, ONE_DAY RAW_VALUES", series.ToString());
+    }
+
+    [Fact]
+    public async Task GetBotTimeseriesGroupsAsync_sends_every_filter_in_the_order_cloudflare_publishes_them()
+    {
+        using var harness = CloudflareHarness.Create();
+        harness.Respond(
+            """{"success":true,"errors":[],"messages":[],"result":{"meta":{"aggInterval":"ONE_DAY","confidenceInfo":null,"dateRange":[],"lastUpdated":"2026-11-09T05:00:00Z","normalization":"PERCENTAGE","units":[]},"serie_0":{"timestamps":["2026-11-08T00:00:00Z"],"AI_CRAWLER":[12],"SEARCH_ENGINE_CRAWLER":[88]}}}""");
+
+        var groups = await harness.Client.Radar.GetBotTimeseriesGroupsAsync(
+            RadarBotDimension.BotCategory,
+            new RadarBotTimeseriesGroupsParameters
+            {
+                AggInterval = RadarAggregationInterval.OneDay,
+                Asn = new List<string> { "13335" },
+                Bot = new List<string> { "googlebot" },
+                BotCategory = new List<RadarBotCategory> { RadarBotCategory.AiCrawler },
+                BotKind = new List<RadarBotKind> { RadarBotKind.Bot },
+                BotOperator = new List<string> { "Google" },
+                BotVerificationStatus = new List<RadarBotVerificationStatus>
+                {
+                    RadarBotVerificationStatus.Verified,
+                },
+                Continent = new List<string> { "EU" },
+                DateEnd = new List<DateTimeOffset> { new(2026, 11, 9, 0, 0, 0, TimeSpan.Zero) },
+                DateRange = new List<string> { "7d", "7dcontrol" },
+                DateStart = new List<DateTimeOffset> { new(2026, 11, 2, 0, 0, 0, TimeSpan.Zero) },
+                LimitPerGroup = 3,
+                Location = new List<string> { "US", "GB" },
+                Name = new List<string> { "one", "two" },
+            });
+
+        Assert.Equal("/client/v4/radar/bots/timeseries_groups/BOT_CATEGORY", harness.LastRequest.Path);
+        Assert.Equal(
+            "aggInterval=1d&asn=13335&bot=googlebot&botCategory=AI_CRAWLER&botKind=BOT&botOperator=Google" +
+            "&botVerificationStatus=VERIFIED&continent=EU&dateEnd=2026-11-09T00%3A00%3A00Z&dateRange=7d" +
+            "&dateRange=7dcontrol&dateStart=2026-11-02T00%3A00%3A00Z&limitPerGroup=3&location=US" +
+            "&location=GB&name=one&name=two",
+            harness.LastRequest.Query.TrimStart('?'));
+
+        // The same timeseries_groups shape the rankings answer, so the same type reads it: the value series
+        // are named after the categories this call asked about, and stay the JSON they arrived as.
+        Assert.Equal(new[] { "AI_CRAWLER", "SEARCH_ENGINE_CRAWLER" }, groups!.Serie0!.SeriesNames);
+        Assert.Equal(88, groups.Serie0.AdditionalData!["SEARCH_ENGINE_CRAWLER"][0].GetInt32());
+        Assert.Equal("1 timestamp(s), 2 series: AI_CRAWLER, SEARCH_ENGINE_CRAWLER", groups.Serie0.ToString());
+    }
+
+    [Fact]
+    public async Task GetWebCrawlerSummaryAsync_reads_the_client_types_a_crawler_answered_for()
+    {
+        using var harness = CloudflareHarness.Create();
+        harness.Respond(
+            """{"success":true,"errors":[],"messages":[],"result":{"meta":{"confidenceInfo":null,"dateRange":[{"startTime":"2026-11-08","endTime":"2026-11-09"}],"lastUpdated":"2026-11-09T05:00:00Z","normalization":"PERCENTAGE","units":[{"name":"client_type","value":"percentage"}]},"summary_0":{"AI_BOT":"11.4","HUMAN":"80.0","NON_AI_BOT":"8.6"}}}""");
+
+        var summary = await harness.Client.Radar.GetWebCrawlerSummaryAsync(
+            RadarWebCrawlerDimension.ClientType,
+            new RadarWebCrawlerSummaryParameters
+            {
+                BotOperator = new List<string> { "Google" },
+                ClientType = new List<RadarBotClientType> { RadarBotClientType.AiBot, RadarBotClientType.Human },
+                DateRange = new List<string> { "1d" },
+                Industry = new List<string> { "News" },
+                LimitPerGroup = 4,
+                Name = new List<string> { "one" },
+                ResponseStatus = new List<string> { "200", "404" },
+                ResponseStatusCategory = new List<RadarResponseStatusCategory>
+                {
+                    RadarResponseStatusCategory.Success,
+                    RadarResponseStatusCategory.ClientError,
+                },
+                Vertical = new List<string> { "search" },
+            });
+
+        Assert.Equal("/client/v4/radar/bots/crawlers/summary/CLIENT_TYPE", harness.LastRequest.Path);
+        Assert.Equal(
+            "botOperator=Google&clientType=AI_BOT&clientType=HUMAN&dateRange=1d&industry=News" +
+            "&limitPerGroup=4&name=one&responseStatus=200&responseStatus=404" +
+            "&responseStatusCategory=SUCCESS&responseStatusCategory=CLIENT_ERROR&vertical=search",
+            harness.LastRequest.Query.TrimStart('?'));
+
+        Assert.Equal(3, summary!.Summary0!.Count);
+        Assert.Equal("11.4", summary.Summary0["AI_BOT"]);
+        Assert.Equal("3 value(s), over 2026-11-08 to 2026-11-09, updated 2026-11-09T05:00:00Z", summary.ToString());
+    }
+
+    [Fact]
+    public async Task GetWebCrawlerTimeseriesGroupsAsync_asks_for_one_of_the_three_normalizations()
+    {
+        using var harness = CloudflareHarness.Create();
+        harness.Respond(
+            """{"success":true,"errors":[],"messages":[],"result":{"meta":{"aggInterval":"ONE_HOUR","confidenceInfo":null,"dateRange":[],"lastUpdated":"2026-11-09T05:00:00Z","normalization":"PERCENTAGE_CHANGE","units":[]},"serie_0":{"timestamps":["2026-11-09T00:00:00Z"],"SUCCESS":[1.5]}}}""");
+
+        var groups = await harness.Client.Radar.GetWebCrawlerTimeseriesGroupsAsync(
+            RadarWebCrawlerDimension.ResponseStatusCategory,
+            new RadarWebCrawlerTimeseriesGroupsParameters
+            {
+                AggInterval = RadarAggregationInterval.OneHour,
+                ClientType = new List<RadarBotClientType> { RadarBotClientType.NonAiBot },
+                DateRange = new List<string> { "1d" },
+                Normalization = RadarTimeseriesNormalization.PercentageChange,
+            });
+
+        Assert.Equal(
+            "/client/v4/radar/bots/crawlers/timeseries_groups/RESPONSE_STATUS_CATEGORY",
+            harness.LastRequest.Path);
+        Assert.Equal(
+            "aggInterval=1h&clientType=NON_AI_BOT&dateRange=1d&normalization=PERCENTAGE_CHANGE",
+            harness.LastRequest.Query.TrimStart('?'));
+
+        // Cloudflare reports eight normalizations and lets a caller ask for three, which is why the two lists
+        // are kept apart rather than merged into one enum.
+        Assert.Equal("PERCENTAGE_CHANGE", groups!.Meta!.Normalization);
+        Assert.Equal(1.5, groups.Serie0!.AdditionalData!["SUCCESS"][0].GetDouble());
+    }
+
+    [Fact]
+    public async Task GetTopVerifiedBotsAsync_reads_the_share_of_traffic_each_one_accounted_for()
+    {
+        using var harness = CloudflareHarness.Create();
+        harness.Respond(
+            """{"success":true,"errors":[],"messages":[],"result":{"meta":{"confidenceInfo":null,"dateRange":[{"startTime":"2026-11-02","endTime":"2026-11-09"}],"lastUpdated":"2026-11-09T05:00:00Z","normalization":"PERCENTAGE","units":[{"name":"bot_name","value":"percentage"}]},"top_0":[{"botCategory":"SEARCH_ENGINE_CRAWLER","botName":"Googlebot","botOwner":"Google","value":"45.02"},{"botCategory":"AI_CRAWLER","botName":"GPTBot","botOwner":"OpenAI","value":"2.10"}]}}""");
+
+        var top = await harness.Client.Radar.GetTopVerifiedBotsAsync(new RadarVerifiedBotTopParameters
+        {
+            Asn = new List<string> { "13335" },
+            Continent = new List<string> { "EU" },
+            DateRange = new List<string> { "7d" },
+            Limit = 2,
+            Location = new List<string> { "US" },
+            Name = new List<string> { "one" },
+        });
+
+        Assert.Equal("/client/v4/radar/verified_bots/top/bots", harness.LastRequest.Path);
+        Assert.Equal(
+            "asn=13335&continent=EU&dateRange=7d&limit=2&location=US&name=one",
+            harness.LastRequest.Query.TrimStart('?'));
+
+        Assert.Equal(2, top!.Top0!.Count);
+        Assert.Equal("Googlebot", top.Top0[0].BotName);
+        Assert.Equal("Google", top.Top0[0].BotOwner);
+        Assert.Equal("SEARCH_ENGINE_CRAWLER", top.Top0[0].BotCategory);
+
+        // Published as a string and left as one: it is a share of traffic that Cloudflare spells however it
+        // likes, and a number insisted on would fail the whole ranking over one entry.
+        Assert.Equal("45.02", top.Top0[0].Value);
+        Assert.Equal("Googlebot 45.02 by Google", top.Top0[0].ToString());
+        Assert.Empty(top.SeriesNames);
+        Assert.Equal(
+            "2 entry(ies) [Googlebot 45.02 by Google, GPTBot 2.10 by OpenAI], " +
+            "over 2026-11-02 to 2026-11-09, updated 2026-11-09T05:00:00Z",
+            top.ToString());
+    }
+
+    [Fact]
+    public async Task GetTopVerifiedBotCategoriesAsync_reads_the_categories_beside_the_bots()
+    {
+        using var harness = CloudflareHarness.Create();
+        harness.Respond(
+            """{"success":true,"errors":[],"messages":[],"result":{"meta":{"confidenceInfo":null,"dateRange":[],"lastUpdated":"2026-11-09T05:00:00Z","normalization":"PERCENTAGE","units":[]},"top_0":[{"botCategory":"SEARCH_ENGINE_CRAWLER","value":"60.10"},{"botCategory":"AI_CRAWLER","value":"11.40"}]}}""");
+
+        var top = await harness.Client.Radar.GetTopVerifiedBotCategoriesAsync(
+            new RadarVerifiedBotTopParameters { Limit = 2 });
+
+        Assert.Equal("/client/v4/radar/verified_bots/top/categories", harness.LastRequest.Path);
+        Assert.Equal("limit=2", harness.LastRequest.Query.TrimStart('?'));
+        Assert.Equal("SEARCH_ENGINE_CRAWLER 60.10", top!.Top0![0].ToString());
+
+        // The meta carries no dateRange on this answer, so all it has to say is when Cloudflare updated it -
+        // which is what a summary's meta prints when there is nothing else in it.
+        Assert.Equal("updated 2026-11-09T05:00:00Z", top.Meta!.ToString());
+        Assert.Equal("2 entry(ies) [SEARCH_ENGINE_CRAWLER 60.10, AI_CRAWLER 11.40], updated 2026-11-09T05:00:00Z", top.ToString());
+    }
+
+    [Fact]
+    public async Task Radar_bot_filters_refuse_a_value_they_cannot_spell()
+    {
+        using var harness = CloudflareHarness.Create();
+
+        var error = await Assert.ThrowsAsync<CloudflareConfigurationException>(() =>
+            harness.Client.Radar.GetBotSummaryAsync(
+                RadarBotDimension.Bot,
+                new RadarBotSummaryParameters
+                {
+                    BotCategory = new List<RadarBotCategory> { RadarBotCategory.Unknown },
+                    LimitPerGroup = 0,
+                }));
+
+        Assert.Equal(2, error.Problems.Count);
+        Assert.Contains("not a bot category", error.Problems[0], StringComparison.Ordinal);
+        Assert.Contains("at least one entry", error.Problems[1], StringComparison.Ordinal);
+        Assert.Equal(0, harness.RequestCount);
+
+        var crawler = await Assert.ThrowsAsync<CloudflareConfigurationException>(() =>
+            harness.Client.Radar.GetWebCrawlerSummaryAsync(
+                RadarWebCrawlerDimension.UserAgent,
+                new RadarWebCrawlerSummaryParameters
+                {
+                    ClientType = new List<RadarBotClientType> { RadarBotClientType.Unknown },
+                }));
+
+        Assert.Contains("not a client type", Assert.Single(crawler.Problems), StringComparison.Ordinal);
+        Assert.Equal(0, harness.RequestCount);
+    }
+
+    [Fact]
+    public void Every_bot_filter_is_spelled_as_radar_publishes_it()
+    {
+        Assert.Equal(
+            new[] { "BOT", "BOT_KIND", "BOT_OPERATOR", "BOT_CATEGORY" },
+            CloudflareEnumConverter<RadarBotDimension>.KnownValues);
+
+        Assert.Equal(
+            new[]
+            {
+                "CLIENT_TYPE", "USER_AGENT", "REFERER", "CRAWL_REFER_RATIO", "VERTICAL", "INDUSTRY",
+                "RESPONSE_STATUS", "RESPONSE_STATUS_CATEGORY",
+            },
+            CloudflareEnumConverter<RadarWebCrawlerDimension>.KnownValues);
+
+        Assert.Equal(new[] { "AGENT", "BOT" }, CloudflareEnumConverter<RadarBotKind>.KnownValues);
+
+        Assert.Equal(
+            new[]
+            {
+                "SEARCH_ENGINE_CRAWLER", "SEARCH_ENGINE_OPTIMIZATION", "MONITORING_AND_ANALYTICS",
+                "ADVERTISING_AND_MARKETING", "SOCIAL_MEDIA_MARKETING", "PAGE_PREVIEW", "ACADEMIC_RESEARCH",
+                "SECURITY", "ACCESSIBILITY", "WEBHOOKS", "FEED_FETCHER", "AI_CRAWLER", "AGGREGATOR",
+                "AI_ASSISTANT", "AI_SEARCH", "ARCHIVER",
+            },
+            CloudflareEnumConverter<RadarBotCategory>.KnownValues);
+
+        Assert.Equal(
+            new[] { "VERIFIED" },
+            CloudflareEnumConverter<RadarBotVerificationStatus>.KnownValues);
+
+        Assert.Equal(
+            new[] { "HUMAN", "NON_AI_BOT", "AI_BOT", "MIXED_PURPOSE" },
+            CloudflareEnumConverter<RadarBotClientType>.KnownValues);
+
+        Assert.Equal(
+            new[] { "INFORMATIONAL", "SUCCESS", "REDIRECTION", "CLIENT_ERROR", "SERVER_ERROR" },
+            CloudflareEnumConverter<RadarResponseStatusCategory>.KnownValues);
+
+        // The two spellings of one idea: a request asks for 1d and an answer reports ONE_DAY.
+        Assert.Equal(
+            new[] { "15m", "1h", "1d", "1w" },
+            CloudflareEnumConverter<RadarAggregationInterval>.KnownValues);
+
+        Assert.Equal(
+            new[] { "PERCENTAGE", "MIN0_MAX", "PERCENTAGE_CHANGE" },
+            CloudflareEnumConverter<RadarTimeseriesNormalization>.KnownValues);
     }
 }

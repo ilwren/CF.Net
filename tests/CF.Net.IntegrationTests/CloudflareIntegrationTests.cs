@@ -2767,6 +2767,304 @@ public class ReadOnlyIntegrationTests : CloudflareIntegrationTest
                  $"{string.Join("; ", surprises)}.");
         }
     }
+
+    [Fact]
+    public async Task Radar_bot_traffic_and_the_verified_bots_behind_it_can_be_read()
+    {
+        if (!SkipWithoutCredentials())
+        {
+            return;
+        }
+
+        // Radar's bot traffic: the part of what Cloudflare sees that is not a person. Nine reads, none of
+        // them carrying an account or a zone, and the permission Cloudflare publishes for the paths beside
+        // them names a group that does not exist - so every call is reported on its own and a refusal here is
+        // not read as a missing credential.
+        var surprises = new List<string>();
+        var refused = new List<string>();
+
+        // An answer that did not fit the type this library declared is not a refusal: it is the published
+        // shape being wrong about what Cloudflare sends, which is the thing a live run exists to find. The
+        // parser's diagnosis names the field it choked on, and no value from the body ends up in it.
+        void Report(string what, Exception exception)
+        {
+            if (exception.InnerException is JsonException parse)
+            {
+                surprises.Add($"{what} answered something that did not fit its published shape: " +
+                              $"{Truncate(parse.Message, 240)}");
+            }
+            else
+            {
+                refused.Add(Refusal(what, exception));
+            }
+        }
+
+        // The bot every read below is about. Replaced by the first slug the list answers, so this run asks
+        // about a bot Cloudflare actually has rather than one this file guessed at.
+        var slug = "googlebot";
+
+        try
+        {
+            var bots = await Client.Radar.ListBotsAsync(new RadarBotListParameters { Limit = 5 });
+            Log($"radar_bots={bots.Count} first=[{string.Join(", ", bots.Items.Take(3))}]");
+            ReportUnmodelled("GET /radar/bots", bots.Items, bot => bot.AdditionalData);
+
+            if (bots.Count > 0)
+            {
+                slug = bots.Items[0].Slug ?? slug;
+
+                // One type serves both reads, because radar publishes the single read as the list entry plus
+                // three fields. Whether those three really stay off the list is what the two calls settle.
+                if (bots.Items.Any(bot => bot.OperatorUrl is { Length: > 0 } || bot.UserAgents is { Count: > 0 }))
+                {
+                    surprises.Add("GET /radar/bots answered operatorUrl or userAgents on the list, which the " +
+                                  "reference publishes only on the read of a single bot");
+                }
+            }
+            else
+            {
+                surprises.Add("GET /radar/bots answered an empty list, so every bot read after it fell back " +
+                              "to a slug this run did not choose");
+            }
+        }
+        catch (Exception exception)
+        {
+            Report("GET /radar/bots", exception);
+        }
+
+        try
+        {
+            var bot = await Client.Radar.GetBotAsync(slug);
+            Log($"radar_bot[{slug}]={bot?.ToString() ?? "(no result)"} " +
+                $"operatorUrl={(bot?.OperatorUrl is { Length: > 0 } ? "yes" : "no")} " +
+                $"userAgents={bot?.UserAgents?.Count ?? 0} " +
+                $"signatureAgentUrl={(bot?.SignatureAgentUrl is { Length: > 0 } ? "yes" : "no")} " +
+                $"patterns={bot?.UserAgentPatterns?.Count ?? 0}");
+
+            if (bot is not null)
+            {
+                ReportUnmodelled($"GET /radar/bots/{slug}", new List<RadarBot> { bot }, item => item.AdditionalData);
+
+                if (bot.OperatorUrl is not { Length: > 0 } && bot.UserAgents is not { Count: > 0 })
+                {
+                    surprises.Add($"GET /radar/bots/{slug} answered neither operatorUrl nor userAgents, the two " +
+                                  "fields that are published only on this read");
+                }
+            }
+        }
+        catch (Exception exception)
+        {
+            Report($"GET /radar/bots/{slug}", exception);
+        }
+
+        try
+        {
+            var summary = await Client.Radar.GetBotSummaryAsync(
+                RadarBotDimension.BotKind,
+                new RadarBotSummaryParameters
+                {
+                    Bot = new List<string> { slug },
+                    DateRange = new List<string> { "7d" },
+                    LimitPerGroup = 5,
+                });
+
+            if (summary is not null)
+            {
+                // A summary is one number per value of the dimension, so it is read as the dictionary it is
+                // and printed as one - its keys are the dimension's own spellings, not this library's.
+                Log($"radar_bots_summary={summary} " +
+                    $"keys=[{string.Join(", ", (summary.Summary0 ?? new Dictionary<string, string>()).Keys)}] " +
+                    $"normalization={summary.Meta?.Normalization ?? "(none)"} " +
+                    $"confidence={summary.Meta?.ConfidenceInfo?.ToString() ?? "(none)"}");
+
+                if (summary.Summary0 is not { Count: > 0 })
+                {
+                    surprises.Add("GET /radar/bots/summary/BOT_KIND answered an empty summary_0 for a bot the " +
+                                  "list above had just returned");
+                }
+            }
+            else
+            {
+                surprises.Add("GET /radar/bots/summary/BOT_KIND answered no result at all");
+            }
+        }
+        catch (Exception exception)
+        {
+            Report("GET /radar/bots/summary/BOT_KIND", exception);
+        }
+
+        try
+        {
+            var timeseries = await Client.Radar.GetBotTimeseriesAsync(new RadarBotTimeseriesParameters
+            {
+                AggInterval = RadarAggregationInterval.OneDay,
+                Bot = new List<string> { slug },
+                DateRange = new List<string> { "7d" },
+            });
+            Log($"radar_bots_timeseries={timeseries?.ToString() ?? "(no result)"}");
+
+            if (timeseries is not null)
+            {
+                // The groups on this one are named after whatever was filtered by, so none of them is
+                // published: the honest test is that the name this call asked about came back.
+                if (timeseries.GroupNames.Any())
+                {
+                    var first = timeseries.GroupNames.First();
+                    var group = timeseries.Group(first);
+                    Log($"radar_bots_timeseries[{first}] aggInterval={timeseries.Meta?.AggInterval ?? "(none)"} " +
+                        $"timestamps={group?.Timestamps?.Count ?? 0} series={group?.SeriesNames.Count() ?? 0}");
+                }
+                else
+                {
+                    surprises.Add("GET /radar/bots/timeseries answered no named group at all, so the shape " +
+                                  "this library reads it by is still unverified");
+                }
+            }
+        }
+        catch (Exception exception)
+        {
+            Report("GET /radar/bots/timeseries", exception);
+        }
+
+        try
+        {
+            var groups = await Client.Radar.GetBotTimeseriesGroupsAsync(
+                RadarBotDimension.BotCategory,
+                new RadarBotTimeseriesGroupsParameters
+                {
+                    AggInterval = RadarAggregationInterval.OneDay,
+                    DateRange = new List<string> { "7d" },
+                    LimitPerGroup = 5,
+                });
+            Log($"radar_bots_timeseries_groups={groups?.ToString() ?? "(no result)"}");
+
+            if (groups?.Serie0 is { } serie)
+            {
+                // The same numbered shape the rankings answer, so the same type reads it - and this call is
+                // the check that the two families really do agree.
+                Log($"radar_bots_timeseries_groups[serie_0] timestamps={serie.Timestamps?.Count ?? 0} " +
+                    $"series=[{string.Join(", ", serie.SeriesNames.Take(4))}]");
+            }
+            else if (groups is not null)
+            {
+                surprises.Add("GET /radar/bots/timeseries_groups/BOT_CATEGORY answered no serie_0, so it is " +
+                              "not the numbered shape the rankings send");
+            }
+        }
+        catch (Exception exception)
+        {
+            Report("GET /radar/bots/timeseries_groups/BOT_CATEGORY", exception);
+        }
+
+        try
+        {
+            var crawlers = await Client.Radar.GetWebCrawlerSummaryAsync(
+                RadarWebCrawlerDimension.ClientType,
+                new RadarWebCrawlerSummaryParameters { DateRange = new List<string> { "1d" } });
+            Log($"radar_crawlers_summary={crawlers?.ToString() ?? "(no result)"} " +
+                $"keys=[{string.Join(", ", (crawlers?.Summary0 ?? new Dictionary<string, string>()).Keys)}]");
+
+            if (crawlers?.Summary0 is not { Count: > 0 })
+            {
+                surprises.Add("GET /radar/bots/crawlers/summary/CLIENT_TYPE answered no client types, so its " +
+                              "eight dimensions are all still unverified");
+            }
+        }
+        catch (Exception exception)
+        {
+            Report("GET /radar/bots/crawlers/summary/CLIENT_TYPE", exception);
+        }
+
+        try
+        {
+            var crawlerGroups = await Client.Radar.GetWebCrawlerTimeseriesGroupsAsync(
+                RadarWebCrawlerDimension.ResponseStatusCategory,
+                new RadarWebCrawlerTimeseriesGroupsParameters
+                {
+                    AggInterval = RadarAggregationInterval.OneHour,
+                    DateRange = new List<string> { "1d" },
+                });
+            Log($"radar_crawlers_timeseries_groups={crawlerGroups?.ToString() ?? "(no result)"}");
+
+            if (crawlerGroups?.Serie0 is { } serie)
+            {
+                Log($"radar_crawlers_timeseries_groups[serie_0] timestamps={serie.Timestamps?.Count ?? 0} " +
+                    $"series=[{string.Join(", ", serie.SeriesNames.Take(6))}]");
+            }
+            else if (crawlerGroups is not null)
+            {
+                surprises.Add("GET /radar/bots/crawlers/timeseries_groups/RESPONSE_STATUS_CATEGORY answered " +
+                              "no serie_0");
+            }
+        }
+        catch (Exception exception)
+        {
+            Report("GET /radar/bots/crawlers/timeseries_groups/RESPONSE_STATUS_CATEGORY", exception);
+        }
+
+        try
+        {
+            var verified = await Client.Radar.GetTopVerifiedBotsAsync(
+                new RadarVerifiedBotTopParameters { Limit = 5, DateRange = new List<string> { "7d" } });
+            Log($"radar_verified_bots={verified?.ToString() ?? "(no result)"}");
+
+            if (verified is not null)
+            {
+                ReportUnmodelled(
+                    "GET /radar/verified_bots/top/bots",
+                    verified.Top0 ?? new List<RadarVerifiedBot>(),
+                    item => item.AdditionalData);
+
+                if (verified.Top0 is not { Count: > 0 })
+                {
+                    surprises.Add("GET /radar/verified_bots/top/bots answered an empty top_0, so the share of " +
+                                  "traffic each verified bot accounted for is still unread");
+                }
+            }
+        }
+        catch (Exception exception)
+        {
+            Report("GET /radar/verified_bots/top/bots", exception);
+        }
+
+        try
+        {
+            var categories = await Client.Radar.GetTopVerifiedBotCategoriesAsync(
+                new RadarVerifiedBotTopParameters { Limit = 5, DateRange = new List<string> { "7d" } });
+            Log($"radar_verified_bot_categories={categories?.ToString() ?? "(no result)"}");
+
+            if (categories is not null)
+            {
+                ReportUnmodelled(
+                    "GET /radar/verified_bots/top/categories",
+                    categories.Top0 ?? new List<RadarVerifiedBotCategory>(),
+                    item => item.AdditionalData);
+
+                if (categories.Top0 is not { Count: > 0 })
+                {
+                    surprises.Add("GET /radar/verified_bots/top/categories answered an empty top_0 while the " +
+                                  "bot ranking beside it did not");
+                }
+            }
+        }
+        catch (Exception exception)
+        {
+            Report("GET /radar/verified_bots/top/categories", exception);
+        }
+
+        foreach (var refusal in refused)
+        {
+            Warn($"A radar bot endpoint was refused while the ones beside it read fine: {refusal}. The " +
+                 "permission Cloudflare publishes for the paths beside these names a group that does not " +
+                 "exist, so this is about the endpoint rather than the credentials.");
+        }
+
+        if (surprises.Count > 0)
+        {
+            Warn($"Radar's bot traffic answered something other than what the reference publishes: " +
+                 $"{string.Join("; ", surprises)}.");
+        }
+    }
 }
 /// <summary>
 /// Lifecycle tests that create and then remove a resource. They are self-cleaning, but they do write

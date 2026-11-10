@@ -328,6 +328,24 @@ jobs:
           probe radar_is_categories "$base/radar/ranking/internet_services/categories?limit=1"
           probe radar_is_top "$base/radar/ranking/internet_services/top?limit=1"
           probe radar_is_timeseries "$base/radar/ranking/internet_services/timeseries_groups?dateRange=1d&limit=1"
+          # Radar's bot traffic: what Cloudflare sees that is not a person. The summaries and the grouped
+          # timeseries both take a dimension in the path - the value the answer is broken down by - so each
+          # probe names one, and the crawler pair is probed once for each of the two shapes it shares with
+          # the bots beside it. The read of a single bot, GET /radar/bots/{bot_slug}, is deliberately not
+          # probed: a probe needs a URL that answers the same whatever account this runs against, and any
+          # slug could be one radar has retired, which would put a 404 in the matrix that says nothing about
+          # reach. The live fact reads it with a slug the list just returned.
+          probe radar_bots "$base/radar/bots?limit=1"
+          probe radar_bots_summary "$base/radar/bots/summary/BOT_KIND?dateRange=1d&limitPerGroup=1"
+          probe radar_bots_timeseries "$base/radar/bots/timeseries?dateRange=1d&aggInterval=1d"
+          probe radar_bots_timeseries_groups \
+            "$base/radar/bots/timeseries_groups/BOT_CATEGORY?dateRange=1d&aggInterval=1d&limitPerGroup=1"
+          probe radar_crawlers_summary \
+            "$base/radar/bots/crawlers/summary/CLIENT_TYPE?dateRange=1d&limitPerGroup=1"
+          probe radar_crawlers_timeseries_groups \
+            "$base/radar/bots/crawlers/timeseries_groups/RESPONSE_STATUS_CATEGORY?dateRange=1d&aggInterval=1d&limitPerGroup=1"
+          probe radar_verified_bots_top "$base/radar/verified_bots/top/bots?limit=1&dateRange=1d"
+          probe radar_verified_bot_categories "$base/radar/verified_bots/top/categories?limit=1&dateRange=1d"
 
           if [ -n "${CLOUDFLARE_ZONE_ID:-}" ]; then
             zone="$base/zones/${CLOUDFLARE_ZONE_ID}"
@@ -598,6 +616,36 @@ jobs:
               ('radar_is_timeseries', 'GET /radar/ranking/internet_services/timeseries_groups',
                'Radar - Read', 'dfe525ec7b07472c827d8d009178b2ac', 'read',
                'the same timeseries shape as the domain ranking, which is why one model serves both'),
+              ('radar_bots', 'GET /radar/bots', 'Radar - Read',
+               'dfe525ec7b07472c827d8d009178b2ac', 'read',
+               "Cloudflare's catalogue of the bots it knows; it pages with offset and limit and answers no "
+               'result_info, so a short list is the end of it rather than a refusal'),
+              ('radar_bots_summary', 'GET /radar/bots/summary/BOT_KIND', 'Radar - Read',
+               'dfe525ec7b07472c827d8d009178b2ac', 'read',
+               'one number per value of the dimension in the path, answered as a dictionary under summary_0 '
+               'rather than as a list this library would have to name'),
+              ('radar_bots_timeseries', 'GET /radar/bots/timeseries', 'Radar - Read',
+               'dfe525ec7b07472c827d8d009178b2ac', 'read',
+               'asked for an interval of 1d, which the answer reports as ONE_DAY; its groups are named after '
+               'whatever was filtered by, so none of them is published and all of them stay readable by name'),
+              ('radar_bots_timeseries_groups', 'GET /radar/bots/timeseries_groups/BOT_CATEGORY',
+               'Radar - Read', 'dfe525ec7b07472c827d8d009178b2ac', 'read',
+               'the same numbered serie_0 shape the rankings answer, which is why one model serves both'),
+              ('radar_crawlers_summary', 'GET /radar/bots/crawlers/summary/CLIENT_TYPE', 'Radar - Read',
+               'dfe525ec7b07472c827d8d009178b2ac', 'read',
+               'the web-crawler half of the same summary shape, filtered by the client type that asked'),
+              ('radar_crawlers_timeseries_groups',
+               'GET /radar/bots/crawlers/timeseries_groups/RESPONSE_STATUS_CATEGORY', 'Radar - Read',
+               'dfe525ec7b07472c827d8d009178b2ac', 'read',
+               'the one radar endpoint that lets a caller ask for a normalization, and it accepts three of '
+               'the eight it reports'),
+              ('radar_verified_bots_top', 'GET /radar/verified_bots/top/bots', 'Radar - Read',
+               'dfe525ec7b07472c827d8d009178b2ac', 'read',
+               'the verified bots ranked by the share of traffic they accounted for; the share arrives as a '
+               'string and stays one'),
+              ('radar_verified_bot_categories', 'GET /radar/verified_bots/top/categories', 'Radar - Read',
+               'dfe525ec7b07472c827d8d009178b2ac', 'read',
+               'the same ranking rolled up by category, and the same nine parameters as the one beside it'),
               ('workers_routes', 'GET /zones/{zone_id}/workers/routes', 'Workers Routes - Read',
                '2072033d694d415a936eaeb94e6405b8', 'read',
                'a zone with no routes answers 200 and an empty list; this one is zone-scoped, so it needs '

@@ -10,8 +10,8 @@ namespace CFNet.Services;
 /// Cloudflare Radar's reference data and rankings: the locations, autonomous systems and geolocations the rest
 /// of the radar API is queried by, the entity behind an IP address, the global search that finds any of them,
 /// the annotations Cloudflare attaches to its own data, the datasets it publishes, what it knows about how
-/// autonomous systems relate to one another, and how it ranks the domains and internet services behind the
-/// traffic it sees.
+/// autonomous systems relate to one another, how it ranks the domains and internet services behind the traffic
+/// it sees, and what it measures about the bots in that traffic.
 /// </summary>
 /// <remarks>
 /// Scope. None of these paths carries an account or a zone - they sit at the API root beside <c>/ips</c>, and
@@ -335,6 +335,122 @@ public interface IRadarService
     Task<RadarTimeseriesGroups?> GetInternetServiceTimeseriesGroupsAsync(
         RadarInternetServiceTimeseriesGroupsParameters? parameters = null,
         CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Lists one page of the bots Cloudflare knows by name, with the operator, category and user-agent patterns
+    /// it identifies each of them by.
+    /// </summary>
+    /// <param name="parameters">Filters and paging, or <see langword="null"/> for every bot.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>The bots on that page.</returns>
+    Task<CloudflarePage<RadarBot>> ListBotsAsync(
+        RadarBotListParameters? parameters = null,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Walks every bot Cloudflare knows, moving along by <c>offset</c>.
+    /// </summary>
+    /// <param name="pageSize">How many bots to ask for per page; 100 when <see langword="null"/>.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>An async sequence of every bot.</returns>
+    IAsyncEnumerable<RadarBot> ListAllBotsAsync(
+        int? pageSize = null,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Reads one bot by the slug the list answers, with the three fields only this read carries: where its
+    /// operator is, the user agents themselves, and the agent that signs its requests when Cloudflare has one.
+    /// </summary>
+    /// <param name="botSlug">The bot's slug, such as <c>googlebot</c>.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>The bot, or <see langword="null"/> when Cloudflare has no such bot.</returns>
+    Task<RadarBot?> GetBotAsync(string botSlug, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Reads how the traffic of the bots Cloudflare knows divides over one dimension - per bot, per kind, per
+    /// operator or per category.
+    /// </summary>
+    /// <param name="dimension">What to divide the traffic by. It is part of the path.</param>
+    /// <param name="parameters">Filters and periods, or <see langword="null"/> for Cloudflare's defaults.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>One entry per value of the dimension.</returns>
+    Task<RadarSummary?> GetBotSummaryAsync(
+        RadarBotDimension dimension,
+        RadarBotSummaryParameters? parameters = null,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Reads how bot traffic moved over time, as one group per thing the filters named.
+    /// </summary>
+    /// <remarks>
+    /// This is the timeseries with no dimension in its path, and Cloudflare publishes its result as
+    /// <c>meta</c> plus an open set of groups named after whatever was filtered by - so the groups are read by
+    /// name rather than by position, and <see cref="RadarNamedTimeseries.GroupNames"/> lists what arrived.
+    /// </remarks>
+    /// <param name="parameters">Filters and periods, or <see langword="null"/> for Cloudflare's defaults.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>The groups, by name.</returns>
+    Task<RadarNamedTimeseries?> GetBotTimeseriesAsync(
+        RadarBotTimeseriesParameters? parameters = null,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Reads how bot traffic moved over time, divided over one dimension.
+    /// </summary>
+    /// <param name="dimension">What to divide the traffic by. It is part of the path.</param>
+    /// <param name="parameters">Filters and periods, or <see langword="null"/> for Cloudflare's defaults.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>The series, with how they were aggregated and scaled.</returns>
+    Task<RadarTimeseriesGroups?> GetBotTimeseriesGroupsAsync(
+        RadarBotDimension dimension,
+        RadarBotTimeseriesGroupsParameters? parameters = null,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Reads how the traffic of crawlers that identify themselves divides over one dimension - by client type,
+    /// user agent, referer, vertical, industry or how the origin answered.
+    /// </summary>
+    /// <param name="dimension">What to divide the traffic by. It is part of the path.</param>
+    /// <param name="parameters">Filters and periods, or <see langword="null"/> for Cloudflare's defaults.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>One entry per value of the dimension.</returns>
+    Task<RadarSummary?> GetWebCrawlerSummaryAsync(
+        RadarWebCrawlerDimension dimension,
+        RadarWebCrawlerSummaryParameters? parameters = null,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Reads how the traffic of crawlers that identify themselves moved over time, divided over one dimension.
+    /// </summary>
+    /// <param name="dimension">What to divide the traffic by. It is part of the path.</param>
+    /// <param name="parameters">Filters, periods and scaling, or <see langword="null"/> for Cloudflare's
+    /// defaults.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>The series, with how they were aggregated and scaled.</returns>
+    Task<RadarTimeseriesGroups?> GetWebCrawlerTimeseriesGroupsAsync(
+        RadarWebCrawlerDimension dimension,
+        RadarWebCrawlerTimeseriesGroupsParameters? parameters = null,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Reads the verified bots Cloudflare saw most of, with the share of traffic each one accounted for.
+    /// </summary>
+    /// <param name="parameters">Filters and periods, or <see langword="null"/> for Cloudflare's defaults.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>The ranking.</returns>
+    Task<RadarTopList<RadarVerifiedBot>?> GetTopVerifiedBotsAsync(
+        RadarVerifiedBotTopParameters? parameters = null,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Reads the verified-bot categories Cloudflare saw most of, with the share of traffic each accounted for.
+    /// </summary>
+    /// <param name="parameters">Filters and periods, or <see langword="null"/> for Cloudflare's defaults.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>The ranking.</returns>
+    Task<RadarTopList<RadarVerifiedBotCategory>?> GetTopVerifiedBotCategoriesAsync(
+        RadarVerifiedBotTopParameters? parameters = null,
+        CancellationToken cancellationToken = default);
 }
 
 /// <inheritdoc cref="IRadarService" />
@@ -345,6 +461,8 @@ public sealed class RadarService : CloudflareService, IRadarService
     private const string Annotations = "radar/annotations";
     private const string Datasets = "radar/datasets";
     private const string Ranking = "radar/ranking";
+    private const string Bots = "radar/bots";
+    private const string VerifiedBots = "radar/verified_bots";
     private const string InternetServices = "radar/ranking/internet_services";
     private const int DefaultPageSize = 100;
     private const int MaxPages = 10_000;
@@ -777,5 +895,193 @@ public sealed class RadarService : CloudflareService, IRadarService
 
         var response = await Transport.SendAsync<RadarTimeseriesGroups>(request, cancellationToken).ConfigureAwait(false);
         return response.Result;
+    }
+
+    /// <inheritdoc />
+    public async Task<CloudflarePage<RadarBot>> ListBotsAsync(
+        RadarBotListParameters? parameters = null,
+        CancellationToken cancellationToken = default)
+    {
+        var request = Apply(CloudflareRequest.Get(Bots), parameters);
+        request.OperationName = "List Radar Bots";
+
+        var response = await Transport.SendAsync<RadarBotListResult>(request, cancellationToken).ConfigureAwait(false);
+
+        return new CloudflarePage<RadarBot>(
+            response.Result?.Bots ?? new List<RadarBot>(),
+            response.ResultInfo);
+    }
+
+    /// <inheritdoc />
+    public async IAsyncEnumerable<RadarBot> ListAllBotsAsync(
+        int? pageSize = null,
+        [EnumeratorCancellation] CancellationToken cancellationToken = default)
+    {
+        var size = pageSize ?? DefaultPageSize;
+        var offset = 0;
+        var guard = 0;
+
+        while (guard++ < MaxPages)
+        {
+            var page = await ListBotsAsync(
+                new RadarBotListParameters { Limit = size, Offset = offset },
+                cancellationToken).ConfigureAwait(false);
+
+            foreach (var bot in page.Items)
+            {
+                yield return bot;
+            }
+
+            // Radar answers no total and no cursor, so the page's own length is the only signal there is.
+            if (page.Count != size)
+            {
+                yield break;
+            }
+
+            offset += size;
+        }
+    }
+
+    /// <inheritdoc />
+    public async Task<RadarBot?> GetBotAsync(string botSlug, CancellationToken cancellationToken = default)
+    {
+        var request = CloudflareRequest.Get($"{Bots}/{CloudflareUrl.EncodeSegment(Require(botSlug, nameof(botSlug)))}")
+            .Tolerate(System.Net.HttpStatusCode.NotFound);
+        request.OperationName = "Get Radar Bot";
+
+        var response = await Transport.SendAsync<RadarBotResult>(request, cancellationToken).ConfigureAwait(false);
+        return response.Result?.Bot;
+    }
+
+    /// <inheritdoc />
+    public async Task<RadarSummary?> GetBotSummaryAsync(
+        RadarBotDimension dimension,
+        RadarBotSummaryParameters? parameters = null,
+        CancellationToken cancellationToken = default)
+    {
+        parameters?.EnsureValid();
+
+        var request = Apply(CloudflareRequest.Get($"{Bots}/summary/{Spell(dimension)}"), parameters);
+        request.OperationName = "Get Radar Bot Summary";
+
+        var response = await Transport.SendAsync<RadarSummary>(request, cancellationToken).ConfigureAwait(false);
+        return response.Result;
+    }
+
+    /// <inheritdoc />
+    public async Task<RadarNamedTimeseries?> GetBotTimeseriesAsync(
+        RadarBotTimeseriesParameters? parameters = null,
+        CancellationToken cancellationToken = default)
+    {
+        parameters?.EnsureValid();
+
+        var request = Apply(CloudflareRequest.Get($"{Bots}/timeseries"), parameters);
+        request.OperationName = "Get Radar Bot Timeseries";
+
+        var response = await Transport.SendAsync<RadarNamedTimeseries>(request, cancellationToken).ConfigureAwait(false);
+        return response.Result;
+    }
+
+    /// <inheritdoc />
+    public async Task<RadarTimeseriesGroups?> GetBotTimeseriesGroupsAsync(
+        RadarBotDimension dimension,
+        RadarBotTimeseriesGroupsParameters? parameters = null,
+        CancellationToken cancellationToken = default)
+    {
+        parameters?.EnsureValid();
+
+        var request = Apply(
+            CloudflareRequest.Get($"{Bots}/timeseries_groups/{Spell(dimension)}"),
+            parameters);
+        request.OperationName = "Get Radar Bot Timeseries Groups";
+
+        var response = await Transport.SendAsync<RadarTimeseriesGroups>(request, cancellationToken).ConfigureAwait(false);
+        return response.Result;
+    }
+
+    /// <inheritdoc />
+    public async Task<RadarSummary?> GetWebCrawlerSummaryAsync(
+        RadarWebCrawlerDimension dimension,
+        RadarWebCrawlerSummaryParameters? parameters = null,
+        CancellationToken cancellationToken = default)
+    {
+        parameters?.EnsureValid();
+
+        var request = Apply(CloudflareRequest.Get($"{Bots}/crawlers/summary/{Spell(dimension)}"), parameters);
+        request.OperationName = "Get Radar Web Crawler Summary";
+
+        var response = await Transport.SendAsync<RadarSummary>(request, cancellationToken).ConfigureAwait(false);
+        return response.Result;
+    }
+
+    /// <inheritdoc />
+    public async Task<RadarTimeseriesGroups?> GetWebCrawlerTimeseriesGroupsAsync(
+        RadarWebCrawlerDimension dimension,
+        RadarWebCrawlerTimeseriesGroupsParameters? parameters = null,
+        CancellationToken cancellationToken = default)
+    {
+        parameters?.EnsureValid();
+
+        var request = Apply(
+            CloudflareRequest.Get($"{Bots}/crawlers/timeseries_groups/{Spell(dimension)}"),
+            parameters);
+        request.OperationName = "Get Radar Web Crawler Timeseries Groups";
+
+        var response = await Transport.SendAsync<RadarTimeseriesGroups>(request, cancellationToken).ConfigureAwait(false);
+        return response.Result;
+    }
+
+    /// <inheritdoc />
+    public async Task<RadarTopList<RadarVerifiedBot>?> GetTopVerifiedBotsAsync(
+        RadarVerifiedBotTopParameters? parameters = null,
+        CancellationToken cancellationToken = default)
+    {
+        parameters?.EnsureValid();
+
+        var request = Apply(CloudflareRequest.Get($"{VerifiedBots}/top/bots"), parameters);
+        request.OperationName = "Get Radar Top Verified Bots";
+
+        var response = await Transport.SendAsync<RadarTopList<RadarVerifiedBot>>(request, cancellationToken).ConfigureAwait(false);
+        return response.Result;
+    }
+
+    /// <inheritdoc />
+    public async Task<RadarTopList<RadarVerifiedBotCategory>?> GetTopVerifiedBotCategoriesAsync(
+        RadarVerifiedBotTopParameters? parameters = null,
+        CancellationToken cancellationToken = default)
+    {
+        parameters?.EnsureValid();
+
+        var request = Apply(CloudflareRequest.Get($"{VerifiedBots}/top/categories"), parameters);
+        request.OperationName = "Get Radar Top Verified Bot Categories";
+
+        var response = await Transport.SendAsync<RadarTopList<RadarVerifiedBotCategory>>(request, cancellationToken).ConfigureAwait(false);
+        return response.Result;
+    }
+
+    // A dimension is part of the path, so one this library cannot spell has nowhere to be put - which is worth
+    // saying as a configuration problem rather than leaving the converter's own exception to explain it.
+    private static string Spell(RadarBotDimension dimension)
+    {
+        if (!CloudflareEnumConverter<RadarBotDimension>.TryToWire(dimension, out var wire))
+        {
+            throw new CloudflareConfigurationException(
+                $"'{dimension}' is not a radar bot dimension this version of the library knows about, so there " +
+                "is no path to put it in.");
+        }
+
+        return wire;
+    }
+
+    private static string Spell(RadarWebCrawlerDimension dimension)
+    {
+        if (!CloudflareEnumConverter<RadarWebCrawlerDimension>.TryToWire(dimension, out var wire))
+        {
+            throw new CloudflareConfigurationException(
+                $"'{dimension}' is not a radar web-crawler dimension this version of the library knows about, " +
+                "so there is no path to put it in.");
+        }
+
+        return wire;
     }
 }

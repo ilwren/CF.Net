@@ -1914,6 +1914,71 @@ the file itself.
 
 ---
 
+## Radar bot traffic
+
+| Endpoint | Method |
+| --- | --- |
+| `GET /radar/bots` | `ListBotsAsync`, `ListAllBotsAsync` |
+| `GET /radar/bots/{bot_slug}` | `GetBotAsync` |
+| `GET /radar/bots/summary/{dimension}` | `GetBotSummaryAsync` |
+| `GET /radar/bots/timeseries` | `GetBotTimeseriesAsync` |
+| `GET /radar/bots/timeseries_groups/{dimension}` | `GetBotTimeseriesGroupsAsync` |
+| `GET /radar/bots/crawlers/summary/{dimension}` | `GetWebCrawlerSummaryAsync` |
+| `GET /radar/bots/crawlers/timeseries_groups/{dimension}` | `GetWebCrawlerTimeseriesGroupsAsync` |
+| `GET /radar/verified_bots/top/bots` | `GetTopVerifiedBotsAsync` |
+| `GET /radar/verified_bots/top/categories` | `GetTopVerifiedBotCategoriesAsync` |
+
+Nine paths, and between them the three shapes radar's measurement endpoints use. Nothing here is scoped to an
+account or a zone either, so none of these calls needs one.
+
+**A dimension in the path.** Four of the nine take the thing the answer is broken down by as a path segment
+rather than as a filter: `BOT`, `BOT_KIND`, `BOT_OPERATOR` and `BOT_CATEGORY` for the bots, and `CLIENT_TYPE`,
+`USER_AGENT`, `REFERER`, `CRAWL_REFER_RATIO`, `VERTICAL`, `INDUSTRY`, `RESPONSE_STATUS` and
+`RESPONSE_STATUS_CATEGORY` for the crawlers. Both are enums
+(`RadarBotDimension`, `RadarWebCrawlerDimension`), because a dimension that cannot be spelled has no path to
+be put in, and the service says so before building the request.
+
+**A summary is a dictionary.** `summary_0` holds one number per value of the dimension asked about, keyed by
+that value — `{"BOT": "63.65", "AGENT": "1.20"}` for `BOT_KIND`. Cloudflare publishes it as a map of strings
+and it is read as one (`RadarSummary.Summary0`), because naming those keys in a class would mean this library
+inventing a field per bot kind, per operator and per category. The numbers stay strings: they are shares whose
+precision Cloudflare decides.
+
+**Named groups on the timeseries.** `GET /radar/bots/timeseries` answers no `serie_0` at all. Its groups are
+named after whatever the call filtered by — ask about `googlebot` and `gptbot` and the result carries a
+`googlebot` group and a `gptbot` group — so none of them is published and `RadarNamedTimeseries` reads them by
+name: `GroupNames` lists what arrived and `Group(name)` returns it, with the values inside still the JSON they
+came as. The grouped endpoint beside it (`timeseries_groups/{dimension}`) *does* answer the numbered
+`serie_0`, and that is the same `RadarTimeseriesGroups` the rankings use, so one model serves both families.
+
+**Two spellings of one idea.** An aggregation interval is asked for as `15m`, `1h`, `1d` or `1w`
+(`RadarAggregationInterval`) and reported back as `FIFTEEN_MINUTES`, `ONE_HOUR`, `ONE_DAY` or `ONE_WEEK`, so
+the filter is an enum and the answer is a string with `RadarAggregationIntervals` holding the spellings. The
+same is true of normalization, in the other direction: Cloudflare *reports* eight of them
+(`RadarNormalizations`) and *accepts* three on the crawler timeseries (`PERCENTAGE`, `MIN0_MAX`,
+`PERCENTAGE_CHANGE`), which is why `RadarTimeseriesNormalization` is not the same list.
+
+**Singular where the summary is plural.** `GET /radar/bots` filters by `botCategory`, `botOperator`,
+`botVerificationStatus` and `kind` — one value each, and note `kind`, not `botKind` — while the summaries
+beside it take lists of all four under their longer names. Both are Cloudflare's own spellings for the same
+idea, so `RadarBotListParameters` and `RadarBotParameters` are separate types rather than one with optional
+plurals. `RadarBot` is one class serving the list and the single read, because the reference publishes the
+single read as the list entry plus `operatorUrl`, `userAgents` and `signatureAgentUrl`.
+
+**Verified bots are the ranking shape.** Both `/radar/verified_bots/top/*` endpoints answer `top_0` as a list
+of entries beside a meta object, with no `meta.top_0` label of the kind the domain rankings carry, so they are
+read as `RadarTopList<RadarVerifiedBot>` and `RadarTopList<RadarVerifiedBotCategory>` over the shared
+`RadarSummaryMeta`. Both take the same nine parameters, and a verified bot's share of traffic arrives as a
+string and stays one.
+
+⛔ **Not wrapped:** `format=CSV` on any of these nine, for the reason every other radar read has — Cloudflare
+replaces the envelope with a CSV body, which surfaces as an empty result rather than as an error. The single
+bot read is wrapped but deliberately left out of the CI reach matrix: a probe needs a URL that answers the
+same whatever account it runs against, and any slug could be one radar has retired, which would put a `404` in
+the matrix that says nothing about reach. The live fact reads it with a slug the list beside it returned.
+
+---
+
 ## Cross-cutting behaviour
 
 | Concern | Where |

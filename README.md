@@ -116,7 +116,7 @@ Console.WriteLine($"{zones.Count} of {zones.TotalCount} zones");
 | `client.DurableObjects` | `IDurableObjectsService` | Durable Object namespaces an account owns, and the objects inside one — both read-only |
 | `client.UrlNormalization` | `IUrlNormalizationService` | a zone's URL normalization: read it, set both of its fields, or delete it to fall back to the default |
 | `client.OriginPostQuantumEncryption` | `IOriginPostQuantumEncryptionService` | origin post-quantum encryption — published under the zone's `cache` path, and documented by Cloudflare as a no-op |
-| `client.Radar` | `IRadarService` | Radar's reference data and rankings: locations, autonomous systems and their AS-SETs, relationships and botnet ranking, the geolocation tree, the entity behind an IP, global search, annotations, datasets, the top domain and internet-service rankings and how they moved |
+| `client.Radar` | `IRadarService` | Radar's reference data and rankings: locations, autonomous systems and their AS-SETs, relationships and botnet ranking, the geolocation tree, the entity behind an IP, global search, annotations, datasets, the top domain and internet-service rankings and how they moved, the catalogue of bots and what each one did, and the verified bots behind the traffic |
 
 ---
 
